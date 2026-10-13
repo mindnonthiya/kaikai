@@ -31,7 +31,7 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
 
 /** PostgREST / Postgres codes for "table or column does not exist" — the database is missing a migration. */
 export const SCHEMA_OUTDATED_CODES = new Set(["PGRST204", "PGRST205", "42P01", "42703"]);
-export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน (เช่น 202610140001_packaging_delivery.sql) ใน SQL Editor";
+export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน (เช่น 202610150001_costing_v2.sql) ใน SQL Editor";
 
 /** Converts a Postgres/PostgREST error into a Thai message. */
 export function dbError(error: { code?: string; message: string }, context?: { unique?: string; foreignKey?: string }): never {
@@ -76,6 +76,15 @@ export function quantity(form: FormData, name: string, label: string, options: {
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) throw new InputError(`${label}ต้องเป็นตัวเลขมากกว่า 0`);
   if (!/^\d+(\.\d{1,4})?$/.test(raw)) throw new InputError(`${label}มีทศนิยมได้ไม่เกิน 4 ตำแหน่ง`);
+  return value;
+}
+
+/** Stepper / table cell amount: empty = 0, otherwise a number ≥ 0 with at most 4 decimals. */
+export function amountOrZero(form: FormData, name: string, label: string) {
+  const raw = String(form.get(name) ?? "").trim().replace(/,/g, "");
+  if (!raw) return 0;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || !/^\d+(\.\d{1,4})?$/.test(raw)) throw new InputError(`${label}ต้องเป็นตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 4 ตำแหน่ง`);
   return value;
 }
 

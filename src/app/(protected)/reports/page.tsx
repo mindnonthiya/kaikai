@@ -3,7 +3,8 @@ import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
 import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchSales } from "@/lib/data/queries";
+import { fetchExpenses, fetchIngredientPurchases, fetchSales } from "@/lib/data/queries";
+import { UTILITY_CATEGORIES } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, parseRange, previousRange, resolveRange } from "@/lib/time";
 
@@ -13,7 +14,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const key = parseRange((await searchParams).range, [...RANGES], "month");
   const range = resolveRange(key);
   const prev = previousRange(range);
-  const [sales, expenses] = await Promise.all([fetchSales(prev.start, range.end), fetchExpenses(prev.start, range.end)]);
+  const [sales, expenses, purchases] = await Promise.all([fetchSales(prev.start, range.end), fetchExpenses(prev.start, range.end), fetchIngredientPurchases(range.start, range.end)]);
   const curSales = filterSales(sales, range.start, range.end);
   const curExpenses = filterExpenses(expenses, range.start, range.end);
   const current = summarize(curSales, curExpenses);
@@ -22,6 +23,15 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const daily = dailySeries(curSales, curExpenses, range.start, days).reverse();
   const menus = menuRanking(curSales);
   const categories = expensesByCategory(curExpenses);
+
+  // Estimated ingredient cost (inside each sale) vs what was actually bought in the period.
+  const actualPerUnit = purchases.filter((p) => p.costing === "per_unit").reduce((sum, p) => sum + p.price, 0);
+  const actualPooled = purchases.filter((p) => p.costing === "pooled").reduce((sum, p) => sum + p.price, 0);
+  const actualFood = actualPerUnit + actualPooled;
+  const foodGap = current.foodCost - actualFood;
+  const netFromPurchases = current.netProfit + foodGap;
+  const perBox = (value: number) => (current.boxes ? formatBaht(Math.round(value / current.boxes)) : "—");
+  const missingUtilities = UTILITY_CATEGORIES.filter((c) => !curExpenses.some((e) => e.category.trim() === c));
 
   return <>
     <PageTitle eyebrow="ผลประกอบการ" title="รายงาน" description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ" action={<a className="primary-button" href={`/api/reports/export?range=${key}`}><Download size={17} /> ส่งออก CSV</a>} />
@@ -43,6 +53,20 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <StatCard label="กำไรจากการส่ง" value={formatBaht(current.deliveryIncome - current.fuelExpenses)} detail="ค่าส่ง − ค่าน้ำมัน" />
       <StatCard label="ต้นทุนบรรจุภัณฑ์" value={formatBaht(current.packagingCost)} detail={current.boxes ? `เฉลี่ย ${formatBaht(Math.round(current.packagingCost / current.boxes))}/กล่อง` : "รวมอยู่ในต้นทุนสินค้าแล้ว"} />
     </div>
+    <div className="stat-grid mini-stats">
+      <StatCard label="ค่าใช้จ่ายดำเนินงาน/กล่อง" value={perBox(current.operatingExpenses)} detail={`รวม ${formatBaht(current.operatingExpenses)} ÷ ${current.boxes.toLocaleString("th-TH")} กล่อง`} />
+      <StatCard label="กำไรสุทธิ/กล่อง" value={perBox(current.netProfit)} detail="หลังหักค่าใช้จ่ายดำเนินงาน" />
+      <StatCard label="ต้นทุนวัตถุดิบ (ประมาณ)" value={formatBaht(current.foodCost)} detail="คำนวณจากสูตร + % ตอนขาย" />
+      <StatCard label="ซื้อวัตถุดิบจริง" value={formatBaht(actualFood)} detail={actualFood ? `ไก่ ${formatBaht(actualPerUnit)} · อื่น ๆ ${formatBaht(actualPooled)}` : "ยังไม่มีการซื้อในช่วงนี้"} />
+    </div>
+
+    <section className="panel spaced">
+      <div className="panel-head"><div><h2>กำไรสุทธิจากยอดซื้อจริง</h2><p>ใช้ยอดซื้อวัตถุดิบในช่วงนี้แทนต้นทุนประมาณ — ดูเทียบกันทั้งเดือนจะแม่นกว่ารายวัน (ซื้อมาตุนได้)</p></div></div>
+      <div className="summary-row"><span>กำไรสุทธิ (ต้นทุนประมาณ)</span><strong>{formatBaht(current.netProfit)}</strong></div>
+      <div className="summary-row"><span>{foodGap >= 0 ? "ซื้อจริงน้อยกว่าประมาณ" : "ซื้อจริงมากกว่าประมาณ"}</span><strong>{foodGap >= 0 ? "+" : "−"}{formatBaht(Math.abs(foodGap))}</strong></div>
+      <div className="summary-total"><span>กำไรสุทธิจากยอดซื้อจริง</span><strong>{formatBaht(netFromPurchases)}</strong></div>
+      {missingUtilities.length > 0 && <p className="muted-note">⚠️ ช่วงนี้ยังไม่มี {missingUtilities.join(" / ")} — บิลมาแล้วลงในหน้าค่าใช้จ่าย กำไรสุทธิจะลดลงตามจริง</p>}
+    </section>
 
     <section className="panel table-panel spaced">
       <div className="table-title"><h2>กำไรแยกตามเมนู</h2><span>ใช้ราคาและต้นทุน ณ เวลาที่ขาย</span></div>
