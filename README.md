@@ -84,14 +84,26 @@ Schema, function, trigger, index, RLS และ Storage policy อยู่ใ�
 
 ## Auth
 
-Production ใช้ Email/Password และปิด public signup ใน `supabase/config.toml` สำหรับ local ส่วน Production ต้องปิดใน Supabase Dashboard → Authentication → Providers ด้วย บัญชีเจ้าของร้านสร้างหรือ invite จาก Dashboard เท่านั้น
+ใช้ Email/Password และ**เปิดให้สมัครเองได้** ที่ `/signup` — แต่ละบัญชีคือร้านของตัวเอง ข้อมูลแยกกันด้วย RLS (ร้านอื่นมองไม่เห็น)
 
-ตั้งค่า Auth URL:
+| หน้า | หน้าที่ |
+|---|---|
+| `/signup` | สมัคร (ชื่อร้าน, ชื่อผู้ใช้, อีเมล, รหัสผ่าน) — trigger `handle_new_user` สร้างแถวใน `profiles` ให้อัตโนมัติ |
+| `/login` | เข้าสู่ระบบ รองรับ `?next=` กลับไปหน้าเดิม |
+| `/forgot-password` → `/reset-password` | ส่งลิงก์รีเซ็ตทางอีเมล แล้วตั้งรหัสใหม่ |
+| `/auth/callback` | ปลายทางของลิงก์ในอีเมล (ยืนยันอีเมล / รีเซ็ตรหัสผ่าน) |
+| `/settings` | แก้ชื่อร้าน ชื่อผู้ใช้ และเปลี่ยนรหัสผ่าน |
 
-- Site URL: URL ของ Vercel Production
-- Redirect URLs: local URL, Vercel Preview pattern ที่อนุญาต และ Production URL
+ตั้งค่าใน Supabase Dashboard → **Authentication → URL Configuration**:
 
-Next.js middleware refresh cookie session และส่งผู้ที่ยังไม่ login ไป `/login` เมื่อมี environment variables ครบ การซ่อนหน้าจอไม่ใช่การป้องกันหลัก—RLS เป็นด่านสุดท้ายเสมอ
+- **Site URL:** URL ของ Vercel Production เช่น `https://kaikai.vercel.app`
+- **Redirect URLs:** `http://localhost:3001/**`, `https://kaikai.vercel.app/**` และ pattern ของ Vercel Preview เช่น `https://kaikai-*-<team>.vercel.app/**`
+
+**Confirm email** (Authentication → Sign In / Providers → Email) เปิดอยู่เป็นค่าเริ่มต้น ผู้สมัครต้องกดลิงก์ในอีเมลก่อนเข้าระบบ อีเมลจากระบบของ Supabase เองส่งได้จำนวนจำกัดต่อชั่วโมง ถ้าใช้งานจริงควรตั้ง **Custom SMTP** หรือปิด Confirm email ถ้ายอมรับได้
+
+ถ้าต้องการกลับไปใช้แบบเจ้าของร้านคนเดียว ให้ปิด **Allow new users to sign up** แล้วสร้างบัญชีจาก Authentication → Users แทน
+
+Next.js middleware refresh cookie session, ส่งผู้ที่ยังไม่ login ไป `/login` และตอบ `401` สำหรับ `/api/*` เมื่อมี environment variables ครบ การซ่อนหน้าจอไม่ใช่การป้องกันหลัก—RLS เป็นด่านสุดท้ายเสมอ
 
 ## OCR
 
@@ -126,7 +138,7 @@ Local → feature branch → GitHub → Vercel Preview → Pull Request → main
 1. สร้าง GitHub repository และ push feature branch (งานนี้ไม่ push ให้อัตโนมัติ)
 2. Import repository ใน Vercel และตั้ง `main` เป็น Production branch
 3. เพิ่ม `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SITE_URL` แยกใน Preview/Production
-4. Preview ต้องใช้ staging Supabase project แยก หากยังไม่มี staging ให้ไม่ใส่ env เพื่อเปิด read-only demo mode ห้ามชี้ Preview ไป Production
+4. Preview ต้องใช้ staging Supabase project แยก หากยังไม่มี staging ให้ไม่ใส่ env (เว็บจะแสดงว่ายังไม่เชื่อมฐานข้อมูล) ห้ามชี้ Preview ไป Production
 5. เชื่อม Supabase GitHub Integration ตั้ง directory เป็น `supabase` และเปิด deploy to production เฉพาะ `main`
 6. ถ้าไม่ใช้ Integration ให้เพิ่ม workflow `supabase db push` และเก็บ `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_ID`, database password ใน GitHub Actions Secrets เท่านั้น ห้ามเขียนลง workflow
 7. ทุก PR ต้องผ่าน typecheck, lint, unit tests, build, migration reset และ RLS tests ก่อน merge
@@ -151,11 +163,29 @@ psql "$DATABASE_URL" -f backup-data.sql
 
 ไฟล์ใน Private Storage ต้องสำรองแยกจาก database เพราะ database เก็บเพียง storage path
 
+## บรรจุภัณฑ์ ค่าส่ง และของเพิ่ม
+
+ต้องรัน migration `supabase/migrations/202610140001_packaging_delivery.sql` (ใน SQL Editor หรือ `npx supabase db push`) ถ้ายังไม่รัน หน้าเว็บจะแจ้งว่า "ฐานข้อมูลยังไม่ได้อัปเดต"
+
+ลำดับตั้งค่าร้านครั้งแรก:
+
+1. **ตั้งค่า → การขาย** ใส่ค่าส่งเริ่มต้น เช่น 15 บาท
+2. **วัตถุดิบ → บรรจุภัณฑ์** เพิ่มของที่ซื้อเป็นแพ็ก โดยกรอกราคาทั้งแพ็กและจำนวนในแพ็ก ระบบจะหารเป็นราคาต่อชิ้นให้ เช่น กล่อง+ฝา 65 บาท/25 ชุด = 2.60
+   - "คิดต่อออเดอร์" (กล่อง ช้อน ถ้วยน้ำจิ้ม): ผูกกับสูตรเมนู แล้วนับเป็นต้นทุนตอนขาย
+   - "ไม่คิดต่อออเดอร์" (ถุงใหญ่ ถุงใส่ข้าว): ตอนบันทึกการซื้อ ระบบลงเป็นค่าใช้จ่ายหมวด "บรรจุภัณฑ์" ให้เอง
+   - ซื้อครั้งถัดไปให้ใช้ "บันทึกการซื้อ" ราคาต่อชิ้นจะเป็นค่าเฉลี่ยถ่วงน้ำหนักจากทุกครั้งที่ซื้อ และต้นทุนเมนูจะคำนวณใหม่ให้อัตโนมัติ
+3. **เมนู** สร้างเมนูหลัก และสร้างของเพิ่ม (ไก่เพิ่ม ข้าวเปล่า) ในหมวด `เพิ่มเติม` ของเพิ่มจะไม่ถูกนับเป็นจำนวนกล่อง
+   - "ต้นทุนอาหาร" กรอกประมาณได้ หรือใส่วัตถุดิบในสูตรแทน
+   - ใส่บรรจุภัณฑ์ต่อจานใน "สูตรต้นทุน"
+4. **เพิ่มยอดขาย** ระบบนับบรรจุภัณฑ์จากสูตรให้ (กด +/− แก้ได้ เช่น ให้ช้อนเพิ่ม) และให้เลือก "รับเอง" หรือ "ส่ง"
+
+ค่าส่งที่เก็บจากลูกค้าเป็นรายได้ของร้าน ส่วนค่าน้ำมันให้ลงในหน้าค่าใช้จ่าย หมวด `ค่าน้ำมัน` รายงานจะแสดงกำไรจากการส่ง (ค่าส่ง − ค่าน้ำมัน)
+
 ## สิ่งที่ MVP ทำแล้ว / ยังไม่ทำ
 
-ทำแล้ว: responsive dashboard, sales composer พร้อมคำนวณสด, ประวัติการขาย, เมนู, วัตถุดิบ, ค่าใช้จ่าย, CSV, money utilities, Auth clients/middleware, full schema, RLS, Private Storage policies, atomic sale RPC, seed และ test foundation
+ทำแล้ว: responsive dashboard, sales composer พร้อมคำนวณสด, ประวัติการขาย, เมนู, วัตถุดิบ, บรรจุภัณฑ์แบบซื้อเป็นแพ็ก, ค่าส่ง, ของเพิ่ม, ค่าใช้จ่าย, CSV, money utilities, Auth clients/middleware, full schema, RLS, Private Storage policies, atomic sale RPC, seed และ test foundation
 
-ยังไม่ทำ: OCR จริง, inventory depletion, roles พนักงาน, bank verification, tax/accounting integration, printable PDF และการเชื่อม Production จริง
+ยังไม่ทำ: OCR จริง, inventory depletion, roles พนักงาน, bank verification, tax/accounting integration และ printable PDF
 
 ## Checklist ก่อนเรียก Production-ready
 

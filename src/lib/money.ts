@@ -20,11 +20,13 @@ export function satang(value: number): Satang {
 
 export function formatBaht(value: number, showSymbol = true) {
   assertSafeInteger(value, "จำนวนเงิน");
+  const abs = Math.abs(value);
   const formatted = new Intl.NumberFormat("th-TH", {
-    minimumFractionDigits: value % 100 === 0 ? 0 : 2,
+    minimumFractionDigits: abs % 100 === 0 ? 0 : 2,
     maximumFractionDigits: 2,
-  }).format(value / 100);
-  return showSymbol ? `฿${formatted}` : formatted;
+  }).format(abs / 100);
+  const sign = value < 0 ? "-" : "";
+  return showSymbol ? `${sign}฿${formatted}` : `${sign}${formatted}`;
 }
 
 export function calculateLine(unitPrice: number, unitCost: number, quantity: number) {
@@ -40,18 +42,21 @@ export function calculateSale(input: {
   discount?: number;
   deliveryCharged?: number;
   paymentFee?: number;
+  /** Order-level packaging cost, added to cost of goods sold. */
+  packagingCost?: number;
 }) {
   if (!input.items.length) throw new Error("ต้องมีสินค้าอย่างน้อยหนึ่งรายการ");
   const lines = input.items.map((item) => calculateLine(item.unitPrice, item.unitCost, item.quantity));
   const discount = input.discount ?? 0;
   const deliveryCharged = input.deliveryCharged ?? 0;
   const paymentFee = input.paymentFee ?? 0;
-  [discount, deliveryCharged, paymentFee].forEach((value) => {
+  const packagingCost = input.packagingCost ?? 0;
+  [discount, deliveryCharged, paymentFee, packagingCost].forEach((value) => {
     assertSafeInteger(value, "ส่วนปรับยอด");
     if (value < 0) throw new Error("ส่วนปรับยอดห้ามติดลบ");
   });
   const productRevenue = lines.reduce((sum, line) => sum + line.revenue, 0);
-  const cogs = lines.reduce((sum, line) => sum + line.cost, 0);
+  const cogs = lines.reduce((sum, line) => sum + line.cost, 0) + packagingCost;
   const netRevenue = productRevenue - discount + deliveryCharged - paymentFee;
   if (netRevenue < 0) throw new Error("รายได้สุทธิต้องไม่ติดลบ");
   const grossProfit = netRevenue - cogs;
@@ -87,4 +92,23 @@ export function calculateNetProfit(grossProfit: number, operatingExpenses: numbe
   assertSafeInteger(operatingExpenses, "ค่าใช้จ่าย");
   if (operatingExpenses < 0) throw new Error("ค่าใช้จ่ายห้ามติดลบ");
   return satang(grossProfit - operatingExpenses);
+}
+
+/** Per-unit cost that may be a fraction of a satang, e.g. 9.4 satang/gram → "฿0.094". */
+export function formatUnitCost(satangPerUnit: number) {
+  if (!Number.isFinite(satangPerUnit)) return "—";
+  return `฿${new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(satangPerUnit / 100)}`;
+}
+
+/** Satang → plain baht string for form defaults and CSV, e.g. 6025 → "60.25". */
+export function satangToBahtInput(value: number) {
+  assertSafeInteger(value, "จำนวนเงิน");
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+}
+
+/** Like bahtToSatang but returns null instead of throwing (for live form previews). */
+export function tryBahtToSatang(value: string): Satang | null {
+  try { return bahtToSatang(value || "0"); } catch { return null; }
 }

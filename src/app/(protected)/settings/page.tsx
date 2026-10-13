@@ -1,6 +1,47 @@
 import { ShieldCheck } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
-import { hasSupabaseEnv } from "@/lib/env";
+import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
+import { changePassword, saveProfile, saveSaleSettings } from "@/app/actions/settings";
+import { fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
+import { hasSupabaseEnv } from "@/lib/env";
+import { satangToBahtInput } from "@/lib/money";
 
-export default function SettingsPage() { return <><PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" /><div className="settings-grid"><section className="panel settings-card"><h2>ข้อมูลร้าน</h2><label>ชื่อร้าน<input defaultValue="kaikai ข้าวไก่ต้มน้ำปลา" /></label><label>เขตเวลา<input value="Asia/Bangkok" readOnly /></label><button className="primary-button">บันทึกการเปลี่ยนแปลง</button></section><section className="panel settings-card"><h2>สถานะระบบ</h2><div className="connection-row"><span><i className={hasSupabaseEnv ? "ok" : "warn"} />Supabase</span><strong>{hasSupabaseEnv ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</strong></div><div className="connection-row"><span><i className="warn" />OCR provider</span><strong>ยังไม่เปิดใช้</strong></div><p className="privacy-note"><ShieldCheck size={17} />ข้อมูลถูกจำกัดด้วย Row Level Security และสลิปเก็บใน Private Storage เมื่อเชื่อม Supabase</p></section><section className="panel settings-card"><h2>บัญชี</h2><p>การสร้างบัญชีและเปลี่ยนรหัสผ่านจัดการผ่าน Supabase Auth</p><LogoutButton /></section></div></>; }
+export default async function SettingsPage() {
+  const [profile, saleSettings] = await Promise.all([fetchProfile(), fetchSaleSettings()]);
+  return <>
+    <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
+    <div className="settings-grid">
+      <section className="panel settings-card">
+        <h2>ข้อมูลร้าน</h2>
+        <ActionForm action={saveProfile} submitLabel="บันทึกการเปลี่ยนแปลง" className="settings-form" resetOnSuccess={false}>
+          <label>ชื่อร้าน<input id="settings-shop" name="shop_name" defaultValue={profile.shopName} maxLength={80} required /></label>
+          <label>ชื่อของคุณ<input id="settings-name" name="display_name" defaultValue={profile.displayName} maxLength={80} required /></label>
+          <label>เขตเวลา<input value="Asia/Bangkok (UTC+7)" readOnly /></label>
+        </ActionForm>
+      </section>
+      <section className="panel settings-card">
+        <h2>การขาย</h2>
+        <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
+          <label>ค่าส่งเริ่มต้น (บาท)<input id="settings-delivery-fee" name="default_delivery_fee" inputMode="decimal" defaultValue={satangToBahtInput(saleSettings.defaultDeliveryFee)} required /></label>
+          <p className="field-hint">ใส่ให้อัตโนมัติเมื่อเลือก “ส่ง” ตอนเพิ่มยอดขาย แก้ได้ทุกออเดอร์</p>
+        </ActionForm>
+      </section>
+      <section className="panel settings-card">
+        <h2>บัญชี</h2>
+        <div className="connection-row"><span>อีเมล</span><strong>{profile.email ?? "—"}</strong></div>
+        <ActionForm action={changePassword} submitLabel="เปลี่ยนรหัสผ่าน" className="settings-form">
+          <label>รหัสผ่านใหม่<input id="settings-password" type="password" name="password" autoComplete="new-password" minLength={8} required /></label>
+          <label>ยืนยันรหัสผ่านใหม่<input id="settings-confirm" type="password" name="confirm" autoComplete="new-password" minLength={8} required /></label>
+        </ActionForm>
+        <LogoutButton />
+      </section>
+      <section className="panel settings-card">
+        <h2>สถานะระบบ</h2>
+        <div className="connection-row"><span><i className={hasSupabaseEnv ? "ok" : "warn"} />Supabase</span><strong>{hasSupabaseEnv ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</strong></div>
+        <div className="connection-row"><span><i className="warn" />OCR อ่านสลิป</span><strong>ยังไม่เปิดใช้</strong></div>
+        <p className="privacy-note"><ShieldCheck size={17} />ข้อมูลของแต่ละบัญชีแยกกันด้วย Row Level Security และสลิปเก็บใน Private Storage</p>
+      </section>
+    </div>
+  </>;
+}
