@@ -12,7 +12,7 @@ import { formatBaht } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month"] as const;
-const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "วัตถุดิบ", "บรรจุภัณฑ์", "ค่าไฟ", "ค่าน้ำ", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
+const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
 
 export default async function ExpensesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string }> }) {
   const params = await searchParams;
@@ -44,7 +44,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <label>วันที่จ่าย<input type="date" name="spent_at" defaultValue={today} max={today} /></label>
         <label>วิธีชำระ<select name="payment_method" defaultValue="cash"><option value="cash">เงินสด</option><option value="transfer">เงินโอน</option><option value="other">อื่น ๆ</option></select></label>
         <label>ผู้รับเงิน (ไม่บังคับ)<input name="payee" maxLength={120} placeholder="เช่น ปั๊ม ปตท." /></label>
-        <p className="field-hint wide">ซื้อกล่อง ช้อน ถ้วย ถุง ให้บันทึกที่หน้า <Link href="/ingredients" className="text-link">วัตถุดิบและบรรจุภัณฑ์</Link> แทน ระบบจะคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>
+        <p className="field-hint wide">ค่าไฟ / ค่าแก๊ส ลงที่นี่ตอนบิลมา (หมวด “ค่าไฟ” “ค่าแก๊ส”) · ซื้อไก่ ข้าว ผัก เครื่องปรุง กล่อง ช้อน ถุง ให้บันทึกที่หน้า <Link href="/ingredients" className="text-link">วัตถุดิบและบรรจุภัณฑ์</Link> แทน ระบบคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>
       </ActionForm>
       <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
     </details>

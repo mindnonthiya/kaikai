@@ -14,7 +14,7 @@ type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
 export type MenuOption = {
   id: string; name: string; price: number; emoji: string; category: string; isAddon: boolean;
-  /** Cost per dish without packaging. */
+  /** Cost per dish without packaging, including the pooled-ingredient %. */
   foodCost: number;
   /** Default packaging per dish (from the menu's recipe). */
   packaging: Array<{ packagingId: string; quantity: number }>;
@@ -38,7 +38,7 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number }) {
+export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }: { menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number }) {
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
   const [cart, setCart] = useState<Cart>({});
@@ -60,8 +60,8 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: 
   const addons = menus.filter((m) => m.isAddon);
   const selected = menus.filter((menu) => cart[menu.id]);
 
-  // Packaging: automatic count from the menus' recipes, plus the seller's adjustments.
-  const autoPack = defaultOrderPackaging(selected.map((m) => ({ quantity: cart[m.id], packaging: m.packaging })));
+  // Packaging: automatic count from the menus' recipes (dishes vs add-ons, larger of the two), plus the seller's adjustments.
+  const autoPack = defaultOrderPackaging(selected.map((m) => ({ quantity: cart[m.id], isAddon: m.isAddon, packaging: m.packaging })));
   const packLines = packaging.map((p) => {
     const auto = autoPack.get(p.id) ?? 0;
     return { ...p, auto, quantity: Math.max(0, auto + (adjust[p.id] ?? 0)) };
@@ -133,6 +133,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: 
         items: selected.map((menu) => ({ menu_id: menu.id, quantity: cart[menu.id] })),
         packaging: packLines.filter((l) => l.quantity > 0).map((l) => ({ packaging_item_id: l.id, quantity: l.quantity })),
         fulfillment,
+        pooled_ingredient_bps: pooledBps,
         discount_satang: discountSatang, delivery_charged_satang: deliverySatang, payment_fee_satang: feeSatang,
         payment_amount_satang: paymentAmount, payment_method: payment, payment_status: paymentStatus,
         customer_name: customer.trim() || null,
@@ -159,14 +160,14 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: 
   let step = 1;
   return <div className="sale-composer">
     <section className="composer-main">
-      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>แตะเมนูเพื่อเพิ่มจำนวน</p></div></div>
-      <div className="menu-picker">{mainMenus.map((menu) => <article key={menu.id} className={cart[menu.id] ? "selected" : ""}><button className="menu-select" onClick={() => change(menu.id, 1)}><span>{menu.emoji}</span><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></button>{cart[menu.id] > 0 && <div className="qty"><button onClick={() => change(menu.id, -1)} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button><b>{cart[menu.id]}</b><button onClick={() => change(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={16} /></button></div>}</article>)}{!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}</div>
+      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>กด + ตามจำนวนที่สั่ง</p></div></div>
+      <div className="menu-rows">
+        {mainMenus.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}
+        {!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}
+      </div>
       {addons.length > 0 && <>
-        <h3 className="picker-subhead">ของเพิ่มเติม</h3>
-        <div className="addon-picker">{addons.map((menu) => <div key={menu.id} className={`addon-chip ${cart[menu.id] ? "selected" : ""}`}>
-          <button type="button" className="addon-add" onClick={() => change(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={14} /> {menu.name} <small>{formatBaht(menu.price)}</small></button>
-          {cart[menu.id] > 0 && <><b>{cart[menu.id]}</b><button type="button" className="addon-remove" onClick={() => change(menu.id, -1)} aria-label={`ลด ${menu.name}`}><Minus size={14} /></button></>}
-        </div>)}</div>
+        <h3 className="picker-subhead">ของเพิ่ม</h3>
+        <div className="menu-rows is-addon">{addons.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}</div>
       </>}
 
       {packaging.length > 0 && <>
@@ -202,7 +203,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: 
       {(discountSatang ?? 0) > 0 && <div className="summary-row"><span>ส่วนลด</span><strong>−{formatBaht(discountSatang!)}</strong></div>}
       <div className="summary-total"><span>ยอดที่ต้องรับ</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
       {paymentStatus !== "paid" && <div className="summary-row"><span>ค้างรับ</span><strong>{formatBaht(Math.max(0, amountDue - paymentAmount))}</strong></div>}
-      <div className="summary-row muted-row"><span>ต้นทุนอาหาร</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
+      <div className="summary-row muted-row"><span>ต้นทุนวัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
       {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}
       {(feeSatang ?? 0) > 0 && <div className="summary-row muted-row"><span>ค่าธรรมเนียม</span><strong>−{formatBaht(feeSatang!)}</strong></div>}
       <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes} กล่อง{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
@@ -211,5 +212,18 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: 
       <p className="atomic-note"><ShieldCheck size={15} /> รายการขาย บรรจุภัณฑ์ และการชำระเงินจะบันทึกพร้อมกัน</p>
       {result && <div className={result.ok ? "success-toast" : "error-toast"} role="status">{result.text}{result.ok && result.saleId && <> · <Link href="/sales" className="text-link">ดูประวัติ</Link></>}</div>}
     </aside>
+  </div>;
+}
+
+/** One menu as a row: emoji, name, price and a − count + control (starts at 0). */
+function MenuRow({ menu, count, onChange }: { menu: MenuOption; count: number; onChange: (id: string, delta: number) => void }) {
+  return <div className={`menu-row ${count ? "selected" : ""}`}>
+    <span className="menu-row-emoji" aria-hidden>{menu.emoji}</span>
+    <span className="menu-row-name"><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></span>
+    <div className="menu-row-qty">
+      <button type="button" onClick={() => onChange(menu.id, -1)} disabled={!count} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button>
+      <b>{count}</b>
+      <button type="button" onClick={() => onChange(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={16} /></button>
+    </div>
   </div>;
 }

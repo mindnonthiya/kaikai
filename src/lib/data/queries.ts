@@ -1,10 +1,12 @@
 // Server-side data access. Reads through the signed-in user's session, so Row Level Security limits rows to that user.
 // When Supabase is not configured every function returns empty data (there is no sample data).
+import { COSTING_WINDOW_DAYS, pooledIngredientBps } from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
 import { createClient } from "@/lib/supabase/server";
+import { DAY_MS } from "@/lib/time";
 import type {
-  ExpenseKind, ExpenseRecord, Fulfillment, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
+  ExpenseKind, ExpenseRecord, Fulfillment, IngredientCosting, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
   ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
 } from "./types";
 
@@ -13,6 +15,8 @@ const PAGE_SIZE = 1000; // matches the Data API max_rows default
 
 /** Used until the owner sets their own delivery fee in Settings. */
 export const DEFAULT_DELIVERY_FEE_SATANG = 1500;
+/** Starting guess for other ingredients (rice, herbs, sauce) = 10% of food sales, until there is real data. */
+export const DEFAULT_INITIAL_POOLED_BPS = 1000;
 const SALE_SETTINGS_KEY = "sales";
 
 const num = (value: unknown) => (value === null || value === undefined ? 0 : Number(value));
@@ -109,9 +113,6 @@ export function mapMenu(row: Row): MenuRecord {
     name: str(row.name),
     category: str(row.category),
     price: num(row.selling_price_satang),
-    laborCost: num(row.labor_cost_satang),
-    overheadCost: num(row.overhead_cost_satang),
-    manualFoodCost: num(row.manual_food_cost_satang),
     packagingCost: num(row.packaging_cost_satang),
     cost: num(row.current_cost_satang),
     isAvailable: Boolean(row.is_available),
@@ -123,8 +124,8 @@ export async function fetchMenus(): Promise<MenuRecord[]> {
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
   const data = await fetchAll("เมนู", (from, to) =>
-    supabase.from("menus").select("id,name,category,selling_price_satang,labor_cost_satang,overhead_cost_satang,manual_food_cost_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
-      .order("category").order("name").range(from, to));
+    supabase.from("menus").select("id,name,category,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
+      .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to));
   return data.map(mapMenu);
 }
 
@@ -132,8 +133,15 @@ export async function fetchIngredients(): Promise<IngredientRecord[]> {
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
   const data = await fetchAll("วัตถุดิบ", (from, to) =>
-    supabase.from("ingredients").select("id,name,category,base_unit,weighted_unit_cost_satang,is_active").order("category").order("name").range(from, to));
-  return data.map((row) => ({ id: str(row.id), name: str(row.name), category: str(row.category), baseUnit: str(row.base_unit), unitCost: num(row.weighted_unit_cost_satang), isActive: Boolean(row.is_active) }));
+    supabase.from("ingredients")
+      .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto,yield_updated_at,price_per_purchase_unit_satang,weighted_unit_cost_satang,is_active")
+      .order("costing", { ascending: false }).order("name").range(from, to));
+  return data.map((row) => ({
+    id: str(row.id), name: str(row.name), category: str(row.category), costing: (str(row.costing) || "per_unit") as IngredientCosting,
+    baseUnit: str(row.base_unit), purchaseUnit: str(row.purchase_unit) || str(row.base_unit), unitsPerPurchaseUnit: num(row.units_per_purchase_unit) || 1,
+    yieldAuto: Boolean(row.yield_auto), yieldUpdatedAt: strOrNull(row.yield_updated_at),
+    pricePerPurchaseUnit: num(row.price_per_purchase_unit_satang), unitCost: num(row.weighted_unit_cost_satang), isActive: Boolean(row.is_active),
+  }));
 }
 
 export async function fetchPackaging(): Promise<PackagingRecord[]> {
@@ -152,43 +160,66 @@ export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
   const data = await fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
-    supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,vendor,expense_id,packaging_items(name,unit)")
+    supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items(name,unit)")
       .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to));
   return data.map((row) => {
     const item = one(row.packaging_items);
     return {
       id: str(row.id), packagingItemId: str(row.packaging_item_id), itemName: str(item?.name), unit: str(item?.unit),
-      purchasedAt: str(row.purchased_at), price: num(row.price_satang), packQuantity: num(row.pack_quantity),
+      purchasedAt: str(row.purchased_at), price: num(row.price_satang), packQuantity: num(row.pack_quantity), packCount: num(row.pack_count) || 1,
       vendor: strOrNull(row.vendor), expenseId: strOrNull(row.expense_id),
     };
   });
 }
 
+const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients(name,costing)";
+
+function mapPurchase(row: Row): PurchaseRecord {
+  const ingredient = one(row.ingredients);
+  return {
+    id: str(row.id), ingredientId: str(row.ingredient_id), ingredientName: str(ingredient?.name),
+    costing: (str(ingredient?.costing) || "per_unit") as IngredientCosting, purchasedAt: str(row.purchased_at), price: num(row.price_satang),
+    purchasedQuantity: row.purchased_quantity === null || row.purchased_quantity === undefined ? null : num(row.purchased_quantity),
+    unit: strOrNull(row.purchase_unit), vendor: strOrNull(row.vendor),
+  };
+}
+
 export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
-  const { data, error } = await supabase.from("ingredient_purchases")
-    .select("id,ingredient_id,purchased_at,price_satang,purchased_quantity,usable_quantity,purchase_unit,vendor,ingredients(name)")
-    .order("purchased_at", { ascending: false }).limit(limit);
+  const { data, error } = await supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
+    .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).limit(limit);
   if (error) fail("ประวัติการซื้อ", error);
-  return rows(data).map((row) => {
-    const ingredient = one(row.ingredients);
-    return {
-      id: str(row.id), ingredientId: str(row.ingredient_id), ingredientName: str(ingredient?.name), purchasedAt: str(row.purchased_at),
-      price: num(row.price_satang), purchasedQuantity: num(row.purchased_quantity), usableQuantity: num(row.usable_quantity),
-      unit: str(row.purchase_unit), vendor: strOrNull(row.vendor),
-    };
-  });
+  return rows(data).map(mapPurchase);
 }
 
-/** Latest purchase date per ingredient id. */
-export async function fetchLastPurchaseDates(): Promise<Map<string, string>> {
-  const latest = new Map<string, string>();
+/** Ingredient purchases with purchased_at in [start, end), newest first. */
+export async function fetchIngredientPurchases(start: Date, end: Date): Promise<PurchaseRecord[]> {
+  if (!hasSupabaseEnv) return [];
+  const supabase = await createClient();
+  const data = await fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+    supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
+      .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to));
+  return data.map(mapPurchase);
+}
+
+export type LatestPurchase = { purchasedAt: string; price: number; quantity: number | null };
+
+/** Latest purchase per ingredient id (date, total price, quantity in the purchase unit). */
+export async function fetchLatestPurchases(): Promise<Map<string, LatestPurchase>> {
+  const latest = new Map<string, LatestPurchase>();
   if (!hasSupabaseEnv) return latest;
   const supabase = await createClient();
   const data = await fetchAll("ประวัติการซื้อ", (from, to) =>
-    supabase.from("ingredient_purchases").select("ingredient_id,purchased_at").order("purchased_at", { ascending: false }).range(from, to));
-  for (const row of data) if (!latest.has(str(row.ingredient_id))) latest.set(str(row.ingredient_id), str(row.purchased_at));
+    supabase.from("ingredient_purchases").select("ingredient_id,purchased_at,price_satang,purchased_quantity")
+      .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to));
+  for (const row of data) {
+    if (latest.has(str(row.ingredient_id))) continue;
+    latest.set(str(row.ingredient_id), {
+      purchasedAt: str(row.purchased_at), price: num(row.price_satang),
+      quantity: row.purchased_quantity === null || row.purchased_quantity === undefined ? null : num(row.purchased_quantity),
+    });
+  }
   return latest;
 }
 
@@ -201,14 +232,51 @@ export async function fetchRecipeItems(): Promise<RecipeItemRecord[]> {
 }
 
 export async function fetchSaleSettings(): Promise<SaleSettings> {
-  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG };
+  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS };
   if (!hasSupabaseEnv) return fallback;
   const supabase = await createClient();
   const { data, error } = await supabase.from("settings").select("value").eq("key", SALE_SETTINGS_KEY).maybeSingle();
   if (error) fail("การตั้งค่า", error);
   const value = (data?.value ?? {}) as Row;
   const fee = Number(value.default_delivery_fee_satang);
-  return { defaultDeliveryFee: Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee };
+  const bps = Number(value.initial_pooled_bps);
+  return {
+    defaultDeliveryFee: Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee,
+    initialPooledBps: Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000 ? bps : fallback.initialPooledBps,
+  };
+}
+
+export type PooledRate = ReturnType<typeof pooledIngredientBps> & { pooledPurchases: number; foodRevenue: number; historyDays: number; initialBps: number };
+
+/**
+ * Other-ingredient rate for new orders: purchases of pooled ingredients ÷ food sales,
+ * over the last 30 days (or since the first pooled purchase, if more recent).
+ */
+export async function fetchPooledRate(settings?: SaleSettings): Promise<PooledRate> {
+  const initialBps = (settings ?? (await fetchSaleSettings())).initialPooledBps;
+  const empty = { pooledPurchases: 0, foodRevenue: 0, historyDays: 0, initialBps };
+  if (!hasSupabaseEnv) return { ...pooledIngredientBps(empty), ...empty };
+  const supabase = await createClient();
+  const now = Date.now();
+  const first = await supabase.from("ingredient_purchases").select("purchased_at,ingredients!inner(costing)")
+    .eq("ingredients.costing", "pooled").order("purchased_at").limit(1);
+  if (first.error) fail("การซื้อวัตถุดิบ", first.error);
+  const firstAt = rows(first.data)[0]?.purchased_at;
+  if (!firstAt) return { ...pooledIngredientBps(empty), ...empty };
+  const start = new Date(Math.max(now - COSTING_WINDOW_DAYS * DAY_MS, Date.parse(str(firstAt))));
+  const [purchases, sales] = await Promise.all([
+    fetchAll("การซื้อวัตถุดิบ", (from, to) => supabase.from("ingredient_purchases").select("price_satang,ingredients!inner(costing)")
+      .eq("ingredients.costing", "pooled").gte("purchased_at", start.toISOString()).range(from, to)),
+    fetchAll("ข้อมูลการขาย", (from, to) => supabase.from("sales").select("product_revenue_satang")
+      .eq("status", "confirmed").gte("sold_at", start.toISOString()).range(from, to)),
+  ]);
+  const input = {
+    pooledPurchases: purchases.reduce((sum, r) => sum + num(r.price_satang), 0),
+    foodRevenue: sales.reduce((sum, r) => sum + num(r.product_revenue_satang), 0),
+    historyDays: Math.floor((now - start.getTime()) / DAY_MS),
+    initialBps,
+  };
+  return { ...pooledIngredientBps(input), ...input };
 }
 
 export async function fetchProfile(): Promise<ProfileRecord> {

@@ -42,6 +42,8 @@ export type Summary = {
   fuelExpenses: number;
   /** Packaging handed out with orders (already inside cogs). */
   packagingCost: number;
+  /** Estimated ingredient cost of the orders (cogs − packaging). */
+  foodCost: number;
 };
 
 export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summary {
@@ -77,6 +79,7 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     payments,
     outstanding: Math.max(0, revenue - paid),
     deliveryIncome, deliveryCount, fuelExpenses, packagingCost,
+    foodCost: Math.max(0, cogs - packagingCost),
   };
 }
 
@@ -193,17 +196,27 @@ export function recipeMaterialCost(
   return parts.ingredients + parts.packaging;
 }
 
+type PackagingLine = { quantity: number; isAddon?: boolean; packaging: Array<{ packagingId: string; quantity: number }> };
+
 /**
- * Packaging handed out with an order by default: Σ recipe quantity × dishes, rounded up to whole pieces.
+ * Packaging handed out with an order by default, rounded up to whole pieces.
+ * Dishes add up; add-ons add up separately; each item uses the larger of the two (not the sum).
+ * Example with 1 spoon per dish and per plain rice: 89 + rice×1 → 1 spoon, 89 + rice×2 → 2 spoons.
+ * Add-ons have no box or sauce cup, so those still follow the number of dishes.
  * The seller can still adjust the numbers before saving.
  */
-export function defaultOrderPackaging(lines: Array<{ quantity: number; packaging: Array<{ packagingId: string; quantity: number }> }>) {
-  const totals = new Map<string, number>();
+export function defaultOrderPackaging(lines: PackagingLine[]) {
+  const dishes = new Map<string, number>();
+  const addons = new Map<string, number>();
   for (const line of lines) {
     if (line.quantity <= 0) continue;
-    for (const pack of line.packaging) totals.set(pack.packagingId, (totals.get(pack.packagingId) ?? 0) + pack.quantity * line.quantity);
+    const target = line.isAddon ? addons : dishes;
+    for (const pack of line.packaging) target.set(pack.packagingId, (target.get(pack.packagingId) ?? 0) + pack.quantity * line.quantity);
   }
-  for (const [packagingId, total] of totals) totals.set(packagingId, Math.ceil(total - 1e-9));
+  const totals = new Map<string, number>();
+  for (const id of new Set([...dishes.keys(), ...addons.keys()])) {
+    totals.set(id, Math.max(Math.ceil((dishes.get(id) ?? 0) - 1e-9), Math.ceil((addons.get(id) ?? 0) - 1e-9)));
+  }
   return totals;
 }
 
@@ -212,10 +225,81 @@ export function packagingLinesCost(lines: Array<{ unitCost: number; quantity: nu
   return lines.reduce((sum, line) => sum + (line.quantity > 0 ? Math.round(line.unitCost * line.quantity) : 0), 0);
 }
 
-/** Menus whose cost is missing or whose margin is thin enough to warn the owner. */
-export function menuCostWarnings(menus: MenuRecord[], minMarginBps = 2000) {
+/** Days of history needed before the pooled-ingredient % is calculated from real data. */
+export const POOLED_MIN_DAYS = 7;
+/** Look-back window for prices and the pooled-ingredient %. */
+export const COSTING_WINDOW_DAYS = 30;
+
+/**
+ * Other ingredients (rice, herbs, sauce) as basis points of food sales:
+ * purchases ÷ food sales over the window. Uses the owner's starting guess until there is enough data.
+ */
+export function pooledIngredientBps(input: { pooledPurchases: number; foodRevenue: number; historyDays: number; initialBps: number }) {
+  const { pooledPurchases, foodRevenue, historyDays, initialBps } = input;
+  if (historyDays >= POOLED_MIN_DAYS && foodRevenue > 0 && pooledPurchases > 0) {
+    return { bps: Math.min(10_000, Math.round((pooledPurchases * 10_000) / foodRevenue)), source: "actual" as const };
+  }
+  return { bps: initialBps, source: "initial" as const };
+}
+
+/** Pooled-ingredient cost of one item at the given rate, in whole satang (same rounding as create_sale). */
+export const pooledCost = (price: number, bps: number) => Math.round((price * bps) / 10_000);
+
+type QuantityPurchase = { purchasedAt: string; price: number; quantity: number | null };
+
+/**
+ * Weighted price per purchase unit (e.g. per กก.) over the 30 days up to the latest purchase.
+ * Purchases without a quantity are ignored. Returns 0 when there is nothing to average.
+ */
+export function weightedPricePerUnit(purchases: QuantityPurchase[]) {
+  const withQuantity = purchases.filter((p) => p.quantity && p.quantity > 0);
+  if (!withQuantity.length) return 0;
+  const latest = Math.max(...withQuantity.map((p) => Date.parse(p.purchasedAt)));
+  const from = latest - COSTING_WINDOW_DAYS * DAY_MS;
+  let price = 0, quantity = 0;
+  for (const p of withQuantity) {
+    if (Date.parse(p.purchasedAt) < from) continue;
+    price += p.price;
+    quantity += p.quantity!;
+  }
+  return quantity > 0 ? price / quantity : 0;
+}
+
+/**
+ * Period used to learn "pieces per กก." from real data.
+ * The shop buys when the previous stock runs out, so everything bought before the latest purchase
+ * has been used by the time of that purchase: pieces sold in [start, end) came from `quantity` กก.
+ * Needs at least 3 purchases spanning 7+ days (within 30 days) so one odd day does not skew it.
+ */
+export function yieldWindow(purchases: Array<{ purchasedAt: string; quantity: number | null }>) {
+  const dated = purchases.filter((p) => p.quantity && p.quantity > 0).map((p) => ({ at: Date.parse(p.purchasedAt), quantity: p.quantity! }));
+  if (dated.length < 3) return null;
+  const end = Math.max(...dated.map((p) => p.at));
+  const earlier = dated.filter((p) => p.at < end && p.at >= end - COSTING_WINDOW_DAYS * DAY_MS);
+  if (earlier.length < 2) return null;
+  const start = Math.min(...earlier.map((p) => p.at));
+  if (end - start < POOLED_MIN_DAYS * DAY_MS) return null;
+  return { start: new Date(start), end: new Date(end), quantity: earlier.reduce((sum, p) => sum + p.quantity, 0) };
+}
+
+/**
+ * Pieces per purchase unit learned from sales, rounded to 0.1.
+ * Ignored (null) when it is less than half or more than double the current value — usually a missed purchase entry.
+ */
+export function learnedYield(piecesSold: number, quantityBought: number, current: number) {
+  if (piecesSold <= 0 || quantityBought <= 0) return null;
+  const value = Math.round((piecesSold / quantityBought) * 10) / 10;
+  if (value < current * 0.5 || value > current * 2) return null;
+  return value;
+}
+
+/** Menus whose cost is missing or whose margin is thin enough to warn the owner. Pooled ingredients are added at `pooledBps`. */
+export function menuCostWarnings(menus: MenuRecord[], minMarginBps = 2000, pooledBps = 0) {
   return menus
     .filter((menu) => menu.isAvailable)
-    .map((menu) => ({ menu, marginBps: menu.price ? Math.round(((menu.price - menu.cost) * 10_000) / menu.price) : 0 }))
+    .map((menu) => {
+      const cost = menu.cost + pooledCost(menu.price, pooledBps);
+      return { menu, marginBps: menu.price ? Math.round(((menu.price - cost) * 10_000) / menu.price) : 0 };
+    })
     .filter(({ menu, marginBps }) => menu.cost === 0 || marginBps < minMarginBps);
 }

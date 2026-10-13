@@ -7,14 +7,15 @@ import { dbError } from "@/lib/server-action";
 type Row = Record<string, unknown>;
 
 /**
- * cost per dish = recipe ingredients + food cost typed by the owner + recipe packaging + labor + overhead.
- * Only packaging counted per order is included; bags etc. are booked as expenses when bought.
+ * cost per dish = per-piece ingredients in the recipe (chicken) + per-order packaging.
+ * Pooled ingredients (rice, herbs, sauce) are not here — they are added at sale time as a % of the price.
+ * Packaging not counted per order (bags etc.) is booked as an expense when bought.
  * `packaging_cost_satang` keeps the packaging part so a sale can swap it for what was actually handed out.
  * Without `menuIds` every menu is recalculated.
  */
 export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: string[]) {
   if (menuIds && !menuIds.length) return;
-  let menuQuery = supabase.from("menus").select("id,labor_cost_satang,overhead_cost_satang,manual_food_cost_satang");
+  let menuQuery = supabase.from("menus").select("id");
   let recipeQuery = supabase.from("menu_recipe_items").select("menu_id,ingredient_id,packaging_item_id,quantity");
   if (menuIds) {
     menuQuery = menuQuery.in("id", menuIds);
@@ -23,7 +24,7 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
   const [menus, recipes, ingredients, packaging] = await Promise.all([
     menuQuery,
     recipeQuery,
-    supabase.from("ingredients").select("id,weighted_unit_cost_satang"),
+    supabase.from("ingredients").select("id,costing,weighted_unit_cost_satang"),
     supabase.from("packaging_items").select("id,unit_cost_satang,per_order"),
   ]);
   if (menus.error) dbError(menus.error);
@@ -31,7 +32,7 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
   if (ingredients.error) dbError(ingredients.error);
   if (packaging.error) dbError(packaging.error);
 
-  const ingredientCost = new Map((ingredients.data as Row[]).map((r) => [String(r.id), Number(r.weighted_unit_cost_satang)]));
+  const ingredientCost = new Map((ingredients.data as Row[]).filter((r) => r.costing !== "pooled").map((r) => [String(r.id), Number(r.weighted_unit_cost_satang)]));
   const packagingCost = new Map((packaging.data as Row[]).filter((r) => r.per_order !== false).map((r) => [String(r.id), Number(r.unit_cost_satang)]));
   const byMenu = new Map<string, RecipeItemRecord[]>();
   for (const r of recipes.data as Row[]) {

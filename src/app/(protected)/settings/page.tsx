@@ -3,12 +3,14 @@ import { PageTitle } from "@/components/page-title";
 import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
 import { changePassword, saveProfile, saveSaleSettings } from "@/app/actions/settings";
-import { fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
+import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
+import { fetchPooledRate, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
-import { satangToBahtInput } from "@/lib/money";
+import { formatBaht, satangToBahtInput } from "@/lib/money";
 
 export default async function SettingsPage() {
   const [profile, saleSettings] = await Promise.all([fetchProfile(), fetchSaleSettings()]);
+  const pooled = await fetchPooledRate(saleSettings);
   return <>
     <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
     <div className="settings-grid">
@@ -25,6 +27,9 @@ export default async function SettingsPage() {
         <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
           <label>ค่าส่งเริ่มต้น (บาท)<input id="settings-delivery-fee" name="default_delivery_fee" inputMode="decimal" defaultValue={satangToBahtInput(saleSettings.defaultDeliveryFee)} required /></label>
           <p className="field-hint">ใส่ให้อัตโนมัติเมื่อเลือก “ส่ง” ตอนเพิ่มยอดขาย แก้ได้ทุกออเดอร์</p>
+          <label>วัตถุดิบอื่นเริ่มต้น (% ของราคาขาย)<input id="settings-initial-pooled" name="initial_pooled_percent" inputMode="decimal" defaultValue={String(saleSettings.initialPooledBps / 100)} required /></label>
+          <p className="field-hint">ข้าว พริก กระเทียม ผักชี มะนาว ซอส — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
+          <div className="connection-row"><span>ตอนนี้ใช้</span><strong>{formatPercentBps(pooled.bps)} · {pooled.source === "actual" ? `จากยอดซื้อ ${formatBaht(pooled.pooledPurchases)} ÷ ยอดขาย ${formatBaht(pooled.foodRevenue)} (${pooled.historyDays} วัน)` : `ค่าเริ่มต้น${pooled.historyDays ? ` · มีข้อมูล ${pooled.historyDays}/${POOLED_MIN_DAYS} วัน` : ""}`}</strong></div>
         </ActionForm>
       </section>
       <section className="panel settings-card">

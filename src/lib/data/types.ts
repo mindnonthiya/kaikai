@@ -6,11 +6,22 @@ export type SaleStatus = "draft" | "confirmed" | "cancelled" | "refunded";
 export type ExpenseKind = "direct" | "operating" | "one_time" | "recurring";
 export type Fulfillment = "pickup" | "delivery";
 
-/** Menus in this category are add-ons (extra chicken, plain rice): small buttons when selling, not counted as boxes. */
+/** Menus in this category are add-ons (extra chicken, plain rice): listed separately when selling, not counted as boxes. */
 export const ADDON_CATEGORY = "เพิ่มเติม";
+/** Category used for normal dishes. */
+export const DISH_CATEGORY = "เมนูหลัก";
 export const isAddonCategory = (category: string | null | undefined) => (category ?? "").trim() === ADDON_CATEGORY;
 /** Expense category used to compare delivery income with fuel. */
 export const FUEL_CATEGORY = "ค่าน้ำมัน";
+/** Bills that arrive later (electric stove, gas) — the reports remind the owner when a month has none. */
+export const UTILITY_CATEGORIES = ["ค่าไฟ", "ค่าแก๊ส"];
+
+/**
+ * per_unit: counted in recipes per piece (chicken: bought by กก., 1 กก. ≈ 27 pieces).
+ * pooled:   other ingredients (rice, herbs, sauce) — purchases ÷ food sales = % added to every order.
+ */
+export type IngredientCosting = "per_unit" | "pooled";
+export const INGREDIENT_COSTING_LABELS: Record<IngredientCosting, string> = { per_unit: "นับต่อชิ้น", pooled: "คิดเป็น %" };
 
 export type SaleItemRecord = { menuId: string; name: string; category: string | null; quantity: number; revenue: number; cost: number };
 export type PaymentRecord = { method: PaymentMethod; amount: number };
@@ -53,13 +64,9 @@ export type MenuRecord = {
   name: string;
   category: string;
   price: number;
-  laborCost: number;
-  overheadCost: number;
-  /** Food cost per dish typed in by the owner (added on top of recipe ingredients). */
-  manualFoodCost: number;
   /** Default packaging cost per dish from the recipe (included in `cost`). */
   packagingCost: number;
-  /** Total cost per dish = ingredients + manual food cost + packaging + labor + overhead. */
+  /** Cost per dish = per-piece ingredients (chicken) + packaging. Pooled ingredients are added at sale time as a %. */
   cost: number;
   isAvailable: boolean;
   costCalculatedAt: string | null;
@@ -69,8 +76,19 @@ export type IngredientRecord = {
   id: string;
   name: string;
   category: string;
+  costing: IngredientCosting;
+  /** Unit used in recipes, e.g. ชิ้น. */
   baseUnit: string;
-  /** Satang per base unit; may be fractional (e.g. 9.4 satang per gram). */
+  /** Unit the owner buys in, e.g. กก. */
+  purchaseUnit: string;
+  /** Recipe units per purchase unit, e.g. 27 pieces per กก. */
+  unitsPerPurchaseUnit: number;
+  /** true = unitsPerPurchaseUnit is learned from sales between purchases. */
+  yieldAuto: boolean;
+  yieldUpdatedAt: string | null;
+  /** Satang per purchase unit (weighted, last 30 days); may be fractional. */
+  pricePerPurchaseUnit: number;
+  /** Satang per recipe unit; may be fractional (e.g. 4.5 ฿ per piece = 450). */
   unitCost: number;
   isActive: boolean;
 };
@@ -92,24 +110,33 @@ export type PackagingPurchaseRecord = {
   itemName: string;
   unit: string;
   purchasedAt: string;
+  /** Total price of the purchase. */
   price: number;
+  /** Total pieces bought (all packs). */
   packQuantity: number;
+  /** Number of packs bought. */
+  packCount: number;
   vendor: string | null;
   /** Set when the purchase was also recorded as an expense. */
   expenseId: string | null;
 };
 
-export type SaleSettings = { defaultDeliveryFee: number };
+export type SaleSettings = {
+  defaultDeliveryFee: number;
+  /** Pooled-ingredient rate (basis points of food sales) used until there is enough real data. */
+  initialPooledBps: number;
+};
 
 export type PurchaseRecord = {
   id: string;
   ingredientId: string;
   ingredientName: string;
+  costing: IngredientCosting;
   purchasedAt: string;
   price: number;
-  purchasedQuantity: number;
-  usableQuantity: number;
-  unit: string;
+  /** In the purchase unit (e.g. กก.); null for pooled items recorded by amount only. */
+  purchasedQuantity: number | null;
+  unit: string | null;
   vendor: string | null;
 };
 

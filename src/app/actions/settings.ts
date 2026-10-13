@@ -4,18 +4,34 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
 
-/** Default delivery fee filled in when an order is marked “ส่ง”. Stored in settings (key "sales"). */
+/** Percent text (e.g. "10" or "12.5") → basis points (1000 / 1250). */
+function percentBps(form: FormData, name: string, label: string) {
+  const raw = String(form.get(name) ?? "").trim().replace(/%$/, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) throw new InputError(`${label}ไม่ถูกต้อง (ใส่ตัวเลข เช่น 10 หรือ 12.5)`);
+  const bps = Math.round(Number(raw) * 100);
+  if (bps > 10_000) throw new InputError(`${label}ต้องไม่เกิน 100%`);
+  return bps;
+}
+
+/**
+ * Sale settings (settings key "sales"):
+ * default delivery fee filled in when an order is marked “ส่ง”, and the starting % for other ingredients.
+ */
 export async function saveSaleSettings(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const fee = money(form, "default_delivery_fee", "ค่าส่งเริ่มต้น", { required: true });
+    const initialPooledBps = percentBps(form, "initial_pooled_percent", "% วัตถุดิบอื่นเริ่มต้น");
     const { error } = await supabase.from("settings").upsert(
-      { owner_id: user.id, key: "sales", value: { default_delivery_fee_satang: fee }, updated_at: new Date().toISOString() },
+      { owner_id: user.id, key: "sales", value: { default_delivery_fee_satang: fee, initial_pooled_bps: initialPooledBps }, updated_at: new Date().toISOString() },
       { onConflict: "owner_id,key" },
     );
     if (error) dbError(error);
     revalidatePath("/settings");
     revalidatePath("/sales/new");
-    return { ok: true, message: "บันทึกค่าส่งเริ่มต้นแล้ว" };
+    revalidatePath("/menus");
+    revalidatePath("/ingredients");
+    revalidatePath("/dashboard");
+    return { ok: true, message: "บันทึกการตั้งค่าการขายแล้ว" };
   });
 }
 

@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";
 import { dailySeries, filterExpenses, filterSales, formatChange, formatPercentBps, menuCostWarnings, menuRanking, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchMenus, fetchSales } from "@/lib/data/queries";
+import { fetchExpenses, fetchMenus, fetchPooledRate, fetchSales } from "@/lib/data/queries";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatThaiShortDate, formatTime, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
 
@@ -22,7 +22,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const windowStart = new Date(Math.min(prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
   const windowEnd = new Date(today.getTime() + DAY_MS);
 
-  const [sales, expenses, menus] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus()]);
+  const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate()]);
 
   const current = summarize(filterSales(sales, range.start, range.end), filterExpenses(expenses, range.start, range.end));
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
@@ -31,7 +31,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const chartRevenue = chart.reduce((sum, p) => sum + p.revenue, 0);
   const ranking = menuRanking(filterSales(sales, range.start, range.end)).filter((row) => !row.isAddon).slice(0, 3);
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
-  const warnings = menuCostWarnings(menus);
+  const warnings = menuCostWarnings(menus, 2000, pooled.bps);
   const label = range.label;
 
   return <>

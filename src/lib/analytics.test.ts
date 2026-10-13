@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { dailySeries, defaultOrderPackaging, expensesByCategory, menuCostWarnings, menuRanking, packagingLinesCost, percentChange, recipeCostParts, recipeMaterialCost, summarize } from "./analytics";
+import {
+  dailySeries, defaultOrderPackaging, expensesByCategory, learnedYield, menuCostWarnings, menuRanking, packagingLinesCost, percentChange,
+  pooledCost, pooledIngredientBps, recipeCostParts, recipeMaterialCost, summarize, weightedPricePerUnit, yieldWindow,
+} from "./analytics";
 import type { ExpenseRecord, MenuRecord, SaleRecord } from "./data/types";
 import { bangkokDayKey, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "./time";
 
@@ -93,9 +96,71 @@ describe("menu costing", () => {
     expect(parts).toEqual({ ingredients: 1000, packaging: 260 });
   });
   it("warns about missing cost and thin margins", () => {
-    const base: MenuRecord = { id: "m", name: "A", category: "x", price: 6000, laborCost: 0, overheadCost: 0, manualFoodCost: 0, packagingCost: 0, cost: 3000, isAvailable: true, costCalculatedAt: null };
+    const base: MenuRecord = { id: "m", name: "A", category: "x", price: 6000, packagingCost: 0, cost: 3000, isAvailable: true, costCalculatedAt: null };
     const warnings = menuCostWarnings([base, { ...base, id: "b", cost: 0 }, { ...base, id: "c", cost: 5500 }]);
     expect(warnings.map((w) => w.menu.id)).toEqual(["b", "c"]);
+  });
+  it("adds the pooled-ingredient % before judging the margin", () => {
+    const menu: MenuRecord = { id: "m", name: "A", category: "x", price: 6900, packagingCost: 470, cost: 4000, isAvailable: true, costCalculatedAt: null };
+    expect(menuCostWarnings([menu], 2000, 0)).toHaveLength(0); // 42% margin
+    expect(menuCostWarnings([menu], 2000, 2500)).toHaveLength(1); // 4000 + 1725 → 17.0%
+  });
+  it("costs chicken per piece: 69 = 5 pieces, 89 = 7 pieces", () => {
+    const perPiece = 12500 / 27; // 125 ฿/กก., 27 pieces per กก.
+    const chicken = new Map([["chicken", perPiece]]);
+    const recipe = (pieces: number) => [{ id: "1", menuId: "m", ingredientId: "chicken", packagingItemId: null, quantity: pieces }];
+    expect(recipeCostParts(recipe(5), chicken, new Map()).ingredients).toBe(2315); // 23.15 ฿
+    expect(recipeCostParts(recipe(7), chicken, new Map()).ingredients).toBe(3241); // 32.41 ฿
+  });
+});
+
+describe("pooled ingredients", () => {
+  it("uses the starting % until there are 7 days of data", () => {
+    expect(pooledIngredientBps({ pooledPurchases: 50000, foodRevenue: 200000, historyDays: 6, initialBps: 1000 })).toEqual({ bps: 1000, source: "initial" });
+    expect(pooledIngredientBps({ pooledPurchases: 0, foodRevenue: 200000, historyDays: 30, initialBps: 1000 })).toEqual({ bps: 1000, source: "initial" });
+  });
+  it("divides purchases by food sales once there is enough data", () => {
+    expect(pooledIngredientBps({ pooledPurchases: 50000, foodRevenue: 400000, historyDays: 7, initialBps: 1000 })).toEqual({ bps: 1250, source: "actual" });
+    expect(pooledIngredientBps({ pooledPurchases: 900000, foodRevenue: 100000, historyDays: 10, initialBps: 1000 }).bps).toBe(10000);
+  });
+  it("rounds the pooled cost per item like create_sale", () => {
+    expect(pooledCost(6900, 1250)).toBe(863); // 8.625 ฿ → 8.63
+    expect(pooledCost(8900, 0)).toBe(0);
+  });
+});
+
+describe("chicken price and pieces per กก.", () => {
+  const day = (d: number) => new Date(Date.UTC(2026, 9, d)).toISOString();
+  it("weights the price per กก. by quantity over 30 days", () => {
+    const price = weightedPricePerUnit([
+      { purchasedAt: day(1), price: 19000, quantity: 2 },
+      { purchasedAt: day(5), price: 47500, quantity: 5 },
+      { purchasedAt: day(9), price: 50000, quantity: 5 },
+      { purchasedAt: day(9), price: 3000, quantity: null },
+    ]);
+    expect(price).toBeCloseTo(116500 / 12, 6); // ≈ 97.08 ฿/กก.
+  });
+  it("ignores purchases older than 30 days before the latest one", () => {
+    const price = weightedPricePerUnit([
+      { purchasedAt: new Date(Date.UTC(2026, 7, 1)).toISOString(), price: 10000, quantity: 1 },
+      { purchasedAt: day(10), price: 25000, quantity: 2 },
+    ]);
+    expect(price).toBe(12500);
+  });
+  it("learns from purchases before the latest one, spanning 7+ days", () => {
+    const window = yieldWindow([
+      { purchasedAt: day(1), quantity: 5 },
+      { purchasedAt: day(4), quantity: 5 },
+      { purchasedAt: day(8), quantity: 6 },
+    ]);
+    expect(window).toEqual({ start: new Date(day(1)), end: new Date(day(8)), quantity: 10 });
+    expect(yieldWindow([{ purchasedAt: day(1), quantity: 5 }, { purchasedAt: day(3), quantity: 5 }, { purchasedAt: day(5), quantity: 5 }])).toBeNull();
+    expect(yieldWindow([{ purchasedAt: day(1), quantity: 5 }, { purchasedAt: day(9), quantity: 5 }])).toBeNull();
+  });
+  it("rounds learned pieces per กก. and rejects outliers", () => {
+    expect(learnedYield(268, 10, 27)).toBe(26.8);
+    expect(learnedYield(100, 10, 27)).toBeNull(); // 10 per กก. — probably a missed purchase entry
+    expect(learnedYield(0, 10, 27)).toBeNull();
   });
 });
 
@@ -113,6 +178,16 @@ describe("order packaging", () => {
   it("costs packaging per line in whole satang", () => {
     expect(packagingLinesCost([{ unitCost: 260, quantity: 1 }, { unitCost: 160, quantity: 2 }, { unitCost: 50, quantity: 1 }, { unitCost: 999, quantity: 0 }])).toBe(630);
     expect(packagingLinesCost([{ unitCost: 40 / 3, quantity: 1 }])).toBe(13);
+  });
+  it("gives spoons = the larger of dishes and plain rice, not the sum", () => {
+    const rice = { isAddon: true, packaging: [{ packagingId: "spoon", quantity: 1 }] };
+    const spoons = (dishes: number, rices: number) => defaultOrderPackaging([{ quantity: dishes, packaging: perDish }, { quantity: rices, ...rice }]).get("spoon");
+    expect(spoons(1, 2)).toBe(2); // 89 + rice ×2 → 2 spoons
+    expect(spoons(1, 1)).toBe(1); // 89 + rice ×1 → 1 spoon
+    expect(spoons(3, 1)).toBe(3);
+    expect(spoons(0, 2)).toBe(2); // rice only
+    const box = defaultOrderPackaging([{ quantity: 1, packaging: perDish }, { quantity: 2, ...rice }]).get("box");
+    expect(box).toBe(1); // add-ons do not add boxes
   });
 });
 
