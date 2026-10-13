@@ -2,12 +2,13 @@ import { ShieldCheck } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
-import { changePassword, saveProfile } from "@/app/actions/settings";
-import { fetchProfile } from "@/lib/data/queries";
+import { changePassword, saveProfile, saveSaleSettings } from "@/app/actions/settings";
+import { fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
+import { satangToBahtInput } from "@/lib/money";
 
 export default async function SettingsPage() {
-  const profile = await fetchProfile();
+  const [profile, saleSettings] = await Promise.all([fetchProfile(), fetchSaleSettings()]);
   return <>
     <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
     <div className="settings-grid">
@@ -17,6 +18,13 @@ export default async function SettingsPage() {
           <label>ชื่อร้าน<input id="settings-shop" name="shop_name" defaultValue={profile.shopName} maxLength={80} required /></label>
           <label>ชื่อของคุณ<input id="settings-name" name="display_name" defaultValue={profile.displayName} maxLength={80} required /></label>
           <label>เขตเวลา<input value="Asia/Bangkok (UTC+7)" readOnly /></label>
+        </ActionForm>
+      </section>
+      <section className="panel settings-card">
+        <h2>การขาย</h2>
+        <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
+          <label>ค่าส่งเริ่มต้น (บาท)<input id="settings-delivery-fee" name="default_delivery_fee" inputMode="decimal" defaultValue={satangToBahtInput(saleSettings.defaultDeliveryFee)} required /></label>
+          <p className="field-hint">ใส่ให้อัตโนมัติเมื่อเลือก “ส่ง” ตอนเพิ่มยอดขาย แก้ได้ทุกออเดอร์</p>
         </ActionForm>
       </section>
       <section className="panel settings-card">

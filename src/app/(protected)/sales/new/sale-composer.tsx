@@ -3,14 +3,23 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Check, ImagePlus, Minus, Plus, ShieldCheck, X } from "lucide-react";
-import { calculateSale, formatBaht, tryBahtToSatang } from "@/lib/money";
+import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Store, X } from "lucide-react";
+import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
+import type { Fulfillment } from "@/lib/data/types";
+import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 
 type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
-export type MenuOption = { id: string; name: string; price: number; cost: number; emoji: string; category: string };
+export type MenuOption = {
+  id: string; name: string; price: number; emoji: string; category: string; isAddon: boolean;
+  /** Cost per dish without packaging. */
+  foodCost: number;
+  /** Default packaging per dish (from the menu's recipe). */
+  packaging: Array<{ packagingId: string; quantity: number }>;
+};
+export type PackagingOption = { id: string; name: string; unit: string; unitCost: number };
 
 const SLIP_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 const MAX_SLIP_BYTES = 10 * 1024 * 1024;
@@ -29,11 +38,15 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus }: { menus: MenuOption[] }) {
+export function SaleComposer({ menus, packaging, defaultDeliveryFee }: { menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number }) {
   const router = useRouter();
-  const [cart, setCart] = useState<Cart>(menus[0] ? { [menus[0].id]: 1 } : {});
+  const defaultDelivery = formatBaht(defaultDeliveryFee, false);
+  const [cart, setCart] = useState<Cart>({});
+  /** Seller's +/− on top of the automatic packaging count, per packaging id. */
+  const [adjust, setAdjust] = useState<Record<string, number>>({});
+  const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
+  const [delivery, setDelivery] = useState(defaultDelivery);
   const [discount, setDiscount] = useState("0");
-  const [delivery, setDelivery] = useState("0");
   const [fee, setFee] = useState("0");
   const [payment, setPayment] = useState("transfer");
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("paid");
@@ -43,26 +56,44 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
   const [result, setResult] = useState<{ ok: boolean; text: string; saleId?: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const mainMenus = menus.filter((m) => !m.isAddon);
+  const addons = menus.filter((m) => m.isAddon);
+  const selected = menus.filter((menu) => cart[menu.id]);
+
+  // Packaging: automatic count from the menus' recipes, plus the seller's adjustments.
+  const autoPack = defaultOrderPackaging(selected.map((m) => ({ quantity: cart[m.id], packaging: m.packaging })));
+  const packLines = packaging.map((p) => {
+    const auto = autoPack.get(p.id) ?? 0;
+    return { ...p, auto, quantity: Math.max(0, auto + (adjust[p.id] ?? 0)) };
+  });
+  const packagingCost = packagingLinesCost(packLines);
+  const adjusted = packLines.some((l) => l.quantity !== l.auto);
+
   const discountSatang = tryBahtToSatang(discount);
-  const deliverySatang = tryBahtToSatang(delivery);
+  const deliverySatang = fulfillment === "delivery" ? tryBahtToSatang(delivery) : 0;
   const feeSatang = tryBahtToSatang(fee);
   const paidSatang = tryBahtToSatang(paidAmount);
   const inputError = discountSatang === null ? "ส่วนลดไม่ถูกต้อง" : deliverySatang === null ? "ค่าส่งไม่ถูกต้อง" : feeSatang === null ? "ค่าธรรมเนียมไม่ถูกต้อง" : null;
 
-  const selected = menus.filter((menu) => cart[menu.id]);
-  const items = selected.map((menu) => ({ unitPrice: menu.price, unitCost: menu.cost, quantity: cart[menu.id] }));
+  const items = selected.map((menu) => ({ unitPrice: menu.price, unitCost: menu.foodCost, quantity: cart[menu.id] }));
   let summary = { productRevenue: 0, netRevenue: 0, cogs: 0, grossProfit: 0, boxes: 0, marginBasisPoints: 0 };
   let summaryError: string | null = inputError;
   if (items.length && !inputError) {
-    try { summary = calculateSale({ items, discount: discountSatang!, deliveryCharged: deliverySatang!, paymentFee: feeSatang! }); }
+    try { summary = calculateSale({ items, discount: discountSatang!, deliveryCharged: deliverySatang!, paymentFee: feeSatang!, packagingCost }); }
     catch (error) { summaryError = error instanceof Error ? error.message : "คำนวณยอดไม่ได้"; }
   }
-  // What the customer pays = product − discount + delivery (the payment fee is the shop's cost).
+  const boxes = selected.filter((m) => !m.isAddon).reduce((n, m) => n + cart[m.id], 0);
+  // What the customer pays = food − discount + delivery (the payment fee is the shop's cost).
   const amountDue = summary.productRevenue - (discountSatang ?? 0) + (deliverySatang ?? 0);
   const paymentAmount = paymentStatus === "paid" ? amountDue : paymentStatus === "unpaid" ? 0 : (paidSatang ?? 0);
   const partialError = paymentStatus === "partial" && (paidSatang === null || paidSatang <= 0 || paidSatang >= amountDue) ? "ยอดที่รับแล้วต้องมากกว่า 0 และน้อยกว่ายอดที่ต้องรับ" : null;
 
   const change = (id: string, amount: number) => setCart((current) => ({ ...current, [id]: Math.max(0, (current[id] || 0) + amount) }));
+  const changePack = (id: string, delta: number) => setAdjust((current) => {
+    const auto = autoPack.get(id) ?? 0;
+    const next = Math.max(0, Math.max(0, auto + (current[id] ?? 0)) + delta);
+    return { ...current, [id]: next - auto };
+  });
 
   function chooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -75,13 +106,14 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
   }
 
   function resetForm() {
-    setCart({}); setDiscount("0"); setDelivery("0"); setFee("0"); setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setSlip(null);
+    setCart({}); setAdjust({}); setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setFee("0");
+    setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setSlip(null);
   }
 
   async function save() {
     setResult(null);
     if (summaryError || partialError) return setResult({ ok: false, text: summaryError ?? partialError! });
-    if (!hasSupabaseEnv) return setResult({ ok: true, text: "ตัวอย่าง: ตรวจข้อมูลเรียบร้อย เชื่อม Supabase เพื่อบันทึกจริง" });
+    if (!hasSupabaseEnv) return setResult({ ok: false, text: "ยังไม่ได้เชื่อม Supabase จึงบันทึกไม่ได้" });
     setSaving(true);
     const supabase = createClient();
     let slipPayload: Record<string, unknown> | undefined;
@@ -99,6 +131,8 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
       }
       const { data, error } = await supabase.rpc("create_sale", { payload: {
         items: selected.map((menu) => ({ menu_id: menu.id, quantity: cart[menu.id] })),
+        packaging: packLines.filter((l) => l.quantity > 0).map((l) => ({ packaging_item_id: l.id, quantity: l.quantity })),
+        fulfillment,
         discount_satang: discountSatang, delivery_charged_satang: deliverySatang, payment_fee_satang: feeSatang,
         payment_amount_satang: paymentAmount, payment_method: payment, payment_status: paymentStatus,
         customer_name: customer.trim() || null,
@@ -107,6 +141,7 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
       if (error) {
         if (error.message.includes("slip_uploads_owner_id_file_hash_sha256_key")) throw new Error("สลิปนี้เคยแนบกับรายการอื่นแล้ว — ตรวจสอบว่าไม่ได้บันทึกซ้ำ");
         if (error.message.includes("menu unavailable")) throw new Error("มีเมนูที่ถูกปิดการขายหรือถูกลบไปแล้ว กรุณารีเฟรชหน้า");
+        if (error.message.includes("packaging not found")) throw new Error("มีบรรจุภัณฑ์ที่ถูกลบไปแล้ว กรุณารีเฟรชหน้า");
         throw new Error(`บันทึกไม่สำเร็จ: ${error.message}`);
       }
       const saleId = String((data as { sale_id?: string })?.sale_id ?? "");
@@ -121,19 +156,40 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
     }
   }
 
+  let step = 1;
   return <div className="sale-composer">
     <section className="composer-main">
-      <div className="step-head"><span>1</span><div><h2>เลือกเมนู</h2><p>แตะเมนูเพื่อเพิ่มจำนวน</p></div></div>
-      <div className="menu-picker">{menus.map((menu) => <article key={menu.id} className={cart[menu.id] ? "selected" : ""}><button className="menu-select" onClick={() => change(menu.id, 1)}><span>{menu.emoji}</span><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></button>{cart[menu.id] > 0 && <div className="qty"><button onClick={() => change(menu.id, -1)} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button><b>{cart[menu.id]}</b><button onClick={() => change(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={16} /></button></div>}</article>)}{!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}</div>
-      <div className="step-head second"><span>2</span><div><h2>รายละเอียดการชำระ</h2><p>ยอดเพิ่มเติมและช่องทางรับเงิน</p></div></div>
+      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>แตะเมนูเพื่อเพิ่มจำนวน</p></div></div>
+      <div className="menu-picker">{mainMenus.map((menu) => <article key={menu.id} className={cart[menu.id] ? "selected" : ""}><button className="menu-select" onClick={() => change(menu.id, 1)}><span>{menu.emoji}</span><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></button>{cart[menu.id] > 0 && <div className="qty"><button onClick={() => change(menu.id, -1)} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button><b>{cart[menu.id]}</b><button onClick={() => change(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={16} /></button></div>}</article>)}{!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}</div>
+      {addons.length > 0 && <>
+        <h3 className="picker-subhead">ของเพิ่มเติม</h3>
+        <div className="addon-picker">{addons.map((menu) => <div key={menu.id} className={`addon-chip ${cart[menu.id] ? "selected" : ""}`}>
+          <button type="button" className="addon-add" onClick={() => change(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={14} /> {menu.name} <small>{formatBaht(menu.price)}</small></button>
+          {cart[menu.id] > 0 && <><b>{cart[menu.id]}</b><button type="button" className="addon-remove" onClick={() => change(menu.id, -1)} aria-label={`ลด ${menu.name}`}><Minus size={14} /></button></>}
+        </div>)}</div>
+      </>}
+
+      {packaging.length > 0 && <>
+        <div className="step-head second"><span>{step++}</span><div><h2>บรรจุภัณฑ์</h2><p>นับจากเมนูให้แล้ว — กด +/− ถ้าให้ไม่ตรง เช่น ให้ช้อนเพิ่ม</p></div>{adjusted && <button type="button" className="link-button" onClick={() => setAdjust({})}><RotateCcw size={14} /> คืนค่าอัตโนมัติ</button>}</div>
+        <div className="pack-list">{packLines.map((line) => <div key={line.id} className={`pack-row ${line.quantity ? "" : "is-zero"}`}>
+          <span><strong>{line.name}</strong><small>{formatUnitCost(line.unitCost)}/{line.unit}{line.quantity !== line.auto ? ` · อัตโนมัติ ${line.auto}` : ""}</small></span>
+          <div className="qty"><button type="button" onClick={() => changePack(line.id, -1)} aria-label={`ลด ${line.name}`} disabled={!line.quantity}><Minus size={16} /></button><b>{line.quantity}</b><button type="button" onClick={() => changePack(line.id, 1)} aria-label={`เพิ่ม ${line.name}`}><Plus size={16} /></button></div>
+        </div>)}</div>
+      </>}
+
+      <div className="step-head second"><span>{step++}</span><div><h2>รับเอง / ส่ง และการชำระ</h2><p>ค่าส่งเป็นรายได้ของร้าน · ค่าน้ำมันลงในหน้าค่าใช้จ่าย</p></div></div>
+      <div className="segmented" role="radiogroup" aria-label="รับเองหรือส่ง">
+        <button type="button" role="radio" aria-checked={fulfillment === "pickup"} className={fulfillment === "pickup" ? "active" : ""} onClick={() => setFulfillment("pickup")}><Store size={17} /> รับเอง</button>
+        <button type="button" role="radio" aria-checked={fulfillment === "delivery"} className={fulfillment === "delivery" ? "active" : ""} onClick={() => setFulfillment("delivery")}><Bike size={17} /> ส่ง</button>
+      </div>
       <div className="form-grid">
+        {fulfillment === "delivery" && <label>ค่าส่ง (บาท)<input id="sale-delivery" inputMode="decimal" value={delivery} onChange={(e) => setDelivery(e.target.value)} aria-invalid={deliverySatang === null} /></label>}
         <label>ช่องทางชำระ<select id="sale-payment-method" value={payment} onChange={(e) => setPayment(e.target.value)}><option value="transfer">เงินโอน</option><option value="cash">เงินสด</option><option value="other">อื่น ๆ</option></select></label>
         <label>ชื่อลูกค้า (ไม่บังคับ)<input id="sale-customer" value={customer} onChange={(e) => setCustomer(e.target.value)} maxLength={120} placeholder="เช่น คุณเมย์" /></label>
-        <label>ส่วนลด (บาท)<input id="sale-discount" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} aria-invalid={discountSatang === null} /></label>
-        <label>ค่าส่งที่เรียกเก็บ (บาท)<input id="sale-delivery" inputMode="decimal" value={delivery} onChange={(e) => setDelivery(e.target.value)} aria-invalid={deliverySatang === null} /></label>
-        <label>ค่าธรรมเนียมที่ร้านจ่าย (บาท)<input id="sale-fee" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} aria-invalid={feeSatang === null} /></label>
         <label>สถานะการรับเงิน<select id="sale-payment-status" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}><option value="paid">ชำระครบแล้ว</option><option value="partial">ชำระบางส่วน</option><option value="unpaid">ยังไม่ชำระ</option></select></label>
         {paymentStatus === "partial" && <label>ยอดที่รับแล้ว (บาท)<input id="sale-paid-amount" inputMode="decimal" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} placeholder={`น้อยกว่า ${formatBaht(amountDue, false)}`} aria-invalid={!!partialError} /></label>}
+        <label>ส่วนลด (บาท)<input id="sale-discount" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} aria-invalid={discountSatang === null} /></label>
+        <label>ค่าธรรมเนียมที่ร้านจ่าย (บาท)<input id="sale-fee" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} aria-invalid={feeSatang === null} /></label>
       </div>
       {payment === "transfer" && (slip
         ? <div className="slip-chosen"><ImagePlus size={18} /><span><strong>{slip.name}</strong><small>{(slip.size / 1024).toFixed(0)} KB · จะอัปโหลดเมื่อกดบันทึก</small></span><button type="button" className="icon-button" onClick={() => setSlip(null)} aria-label="เอาสลิปออก"><X size={18} /></button></div>
@@ -141,14 +197,18 @@ export function SaleComposer({ menus }: { menus: MenuOption[] }) {
     </section>
     <aside className="order-summary"><h2>สรุปรายการ</h2>
       <div className="order-lines">{selected.map((menu) => <div key={menu.id}><span>{menu.name}<small>{cart[menu.id]} × {formatBaht(menu.price)}</small></span><strong>{formatBaht(menu.price * cart[menu.id])}</strong></div>)}</div>
-      <div className="summary-row"><span>ยอดสินค้า</span><strong>{formatBaht(summary.productRevenue)}</strong></div>
-      <div className="summary-row"><span>ต้นทุนสินค้า</span><strong>{formatBaht(summary.cogs)}</strong></div>
+      <div className="summary-row"><span>ยอดอาหาร</span><strong>{formatBaht(summary.productRevenue)}</strong></div>
+      {fulfillment === "delivery" && <div className="summary-row"><span>ค่าส่ง</span><strong>+{formatBaht(deliverySatang ?? 0)}</strong></div>}
+      {(discountSatang ?? 0) > 0 && <div className="summary-row"><span>ส่วนลด</span><strong>−{formatBaht(discountSatang!)}</strong></div>}
       <div className="summary-total"><span>ยอดที่ต้องรับ</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
       {paymentStatus !== "paid" && <div className="summary-row"><span>ค้างรับ</span><strong>{formatBaht(Math.max(0, amountDue - paymentAmount))}</strong></div>}
-      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {summary.boxes} กล่อง</small></div>
+      <div className="summary-row muted-row"><span>ต้นทุนอาหาร</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
+      {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}
+      {(feeSatang ?? 0) > 0 && <div className="summary-row muted-row"><span>ค่าธรรมเนียม</span><strong>−{formatBaht(feeSatang!)}</strong></div>}
+      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes} กล่อง{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
       {(summaryError || partialError) && <p className="form-error" role="alert">{summaryError ?? partialError}</p>}
       <button id="sale-save" className="primary-button save-sale" disabled={!summary.boxes || saving || !!summaryError || !!partialError} onClick={save}><Check size={18} /> {saving ? "กำลังบันทึก…" : "ยืนยันและบันทึก"}</button>
-      <p className="atomic-note"><ShieldCheck size={15} /> sale, items, payment และ snapshot จะบันทึกพร้อมกัน</p>
+      <p className="atomic-note"><ShieldCheck size={15} /> รายการขาย บรรจุภัณฑ์ และการชำระเงินจะบันทึกพร้อมกัน</p>
       {result && <div className={result.ok ? "success-toast" : "error-toast"} role="status">{result.text}{result.ok && result.saleId && <> · <Link href="/sales" className="text-link">ดูประวัติ</Link></>}</div>}
     </aside>
   </div>;

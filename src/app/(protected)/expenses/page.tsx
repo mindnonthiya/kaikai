@@ -7,12 +7,12 @@ import { ActionButton, ActionForm } from "@/components/action-form";
 import { deleteExpense, saveExpense } from "@/app/actions/expenses";
 import { isOperatingExpense } from "@/lib/analytics";
 import { fetchExpenses } from "@/lib/data/queries";
-import { EXPENSE_KIND_LABELS, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
+import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month"] as const;
-const CATEGORIES = ["วัตถุดิบ", "บรรจุภัณฑ์", "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "ค่าเช่า", "ค่าแรง", "ค่าขนส่ง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
+const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "วัตถุดิบ", "บรรจุภัณฑ์", "ค่าไฟ", "ค่าน้ำ", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
 
 export default async function ExpensesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string }> }) {
   const params = await searchParams;
@@ -32,18 +32,19 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
     <details className="panel form-panel">
       <summary><WalletCards size={18} /> เพิ่มค่าใช้จ่าย</summary>
       <ActionForm action={saveExpense} submitLabel="บันทึกค่าใช้จ่าย">
-        <label>รายละเอียด<input name="description" maxLength={200} required placeholder="เช่น ถังแก๊ส 2 ถัง" /></label>
-        <label>จำนวนเงิน (บาท)<input name="amount" inputMode="decimal" required placeholder="เช่น 920" /></label>
-        <label>หมวดหมู่<input name="category" list="expense-categories" maxLength={60} required placeholder="เช่น ค่าแก๊ส" /></label>
+        <label>รายละเอียด<input name="description" maxLength={200} required placeholder="เช่น เติมน้ำมันมอเตอร์ไซค์" /></label>
+        <label>จำนวนเงิน (บาท)<input name="amount" inputMode="decimal" required placeholder="เช่น 100" /></label>
+        <label>หมวดหมู่<input name="category" list="expense-categories" maxLength={60} required placeholder={`เช่น ${FUEL_CATEGORY}`} /></label>
         <label>ประเภท<select name="kind" defaultValue="operating">
-          <option value="operating">ดำเนินงาน (หักจากกำไร)</option>
+          <option value="operating">ดำเนินงาน เช่น ค่าน้ำมัน แก๊ส (หักจากกำไร)</option>
           <option value="recurring">ประจำ เช่น ค่าเช่า (หักจากกำไร)</option>
           <option value="one_time">ครั้งเดียว เช่น ซื้ออุปกรณ์ (หักจากกำไร)</option>
-          <option value="direct">ต้นทุนโดยตรง เช่น ซื้อกล่อง (อยู่ในต้นทุนเมนูแล้ว)</option>
+          <option value="direct">ต้นทุนโดยตรง (อยู่ในต้นทุนเมนูแล้ว ไม่หักซ้ำ)</option>
         </select></label>
         <label>วันที่จ่าย<input type="date" name="spent_at" defaultValue={today} max={today} /></label>
         <label>วิธีชำระ<select name="payment_method" defaultValue="cash"><option value="cash">เงินสด</option><option value="transfer">เงินโอน</option><option value="other">อื่น ๆ</option></select></label>
-        <label>ผู้รับเงิน (ไม่บังคับ)<input name="payee" maxLength={120} placeholder="เช่น ร้านแก๊สเจริญ" /></label>
+        <label>ผู้รับเงิน (ไม่บังคับ)<input name="payee" maxLength={120} placeholder="เช่น ปั๊ม ปตท." /></label>
+        <p className="field-hint wide">ซื้อกล่อง ช้อน ถ้วย ถุง ให้บันทึกที่หน้า <Link href="/ingredients" className="text-link">วัตถุดิบและบรรจุภัณฑ์</Link> แทน ระบบจะคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>
       </ActionForm>
       <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
     </details>
@@ -70,7 +71,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
             <td>{e.payee ?? "—"}</td>
             <td>{e.paymentMethod ? PAYMENT_METHOD_LABELS[e.paymentMethod] : "—"}</td>
             <td className="num"><strong>{formatBaht(e.amount)}</strong></td>
-            <td className="num">{!e.id.startsWith("demo-") && <ActionButton action={deleteExpense} fields={{ id: e.id }} label="ลบ" confirmText={`ลบ “${e.description}” ${formatBaht(e.amount)}?`} className="link-button danger" />}</td>
+            <td className="num"><ActionButton action={deleteExpense} fields={{ id: e.id }} label="ลบ" confirmText={`ลบ “${e.description}” ${formatBaht(e.amount)}?`} className="link-button danger" /></td>
           </tr>)}
           {!expenses.length && <tr><td colSpan={7}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีค่าใช้จ่ายในช่วงนี้"}</div></td></tr>}
         </tbody>

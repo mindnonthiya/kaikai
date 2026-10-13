@@ -35,7 +35,13 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <StatCard label="เงินสด" value={formatBaht(current.payments.cash)} />
       <StatCard label="เงินโอน" value={formatBaht(current.payments.transfer)} />
       <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} />
-      <StatCard label="จำนวนกล่อง" value={current.boxes.toLocaleString("th-TH")} />
+      <StatCard label="จำนวนกล่อง" value={current.boxes.toLocaleString("th-TH")} detail={current.addons ? `+ ของเพิ่ม ${current.addons.toLocaleString("th-TH")} รายการ` : undefined} />
+    </div>
+    <div className="stat-grid mini-stats">
+      <StatCard label="ค่าส่งที่เก็บได้" value={formatBaht(current.deliveryIncome)} detail={`${current.deliveryCount.toLocaleString("th-TH")} ออเดอร์ส่ง`} />
+      <StatCard label="ค่าน้ำมัน" value={formatBaht(current.fuelExpenses)} detail="จากหน้าค่าใช้จ่าย หมวดค่าน้ำมัน" />
+      <StatCard label="กำไรจากการส่ง" value={formatBaht(current.deliveryIncome - current.fuelExpenses)} detail="ค่าส่ง − ค่าน้ำมัน" />
+      <StatCard label="ต้นทุนบรรจุภัณฑ์" value={formatBaht(current.packagingCost)} detail={current.boxes ? `เฉลี่ย ${formatBaht(Math.round(current.packagingCost / current.boxes))}/กล่อง` : "รวมอยู่ในต้นทุนสินค้าแล้ว"} />
     </div>
 
     <section className="panel table-panel spaced">
@@ -43,11 +49,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <table className="data-table">
         <thead><tr><th>เมนู</th><th className="num">จำนวน</th><th className="num">ยอดขาย</th><th className="num">ต้นทุน</th><th className="num">กำไร</th><th className="num">Margin</th></tr></thead>
         <tbody>
-          {menus.map((m) => <tr key={m.menuId}><td><strong>{m.name}</strong></td><td className="num">{m.quantity.toLocaleString("th-TH")}</td><td className="num">{formatBaht(m.revenue)}</td><td className="num">{formatBaht(m.cost)}</td><td className="num"><strong>{formatBaht(m.profit)}</strong></td><td className="num">{formatPercentBps(m.marginBps)}</td></tr>)}
+          {menus.map((m) => <tr key={m.menuId}><td><strong>{m.name}</strong>{m.isAddon && <> <span className="status muted">เพิ่มเติม</span></>}</td><td className="num">{m.quantity.toLocaleString("th-TH")}</td><td className="num">{formatBaht(m.revenue)}</td><td className="num">{formatBaht(m.cost)}</td><td className="num"><strong>{formatBaht(m.profit)}</strong></td><td className="num">{formatPercentBps(m.marginBps)}</td></tr>)}
           {!menus.length && <tr><td colSpan={6}><div className="empty-state">ยังไม่มียอดขายในช่วงนี้</div></td></tr>}
         </tbody>
       </table>
-      <p className="table-footnote">ยอดขายรายเมนูยังไม่หักส่วนลดหรือค่าธรรมเนียมระดับบิล ผลรวมจึงอาจต่างจากยอดขายสุทธิด้านบนเล็กน้อย</p>
+      <p className="table-footnote">ต้นทุนรายเมนูใช้บรรจุภัณฑ์ตามสูตร ส่วนยอดด้านบนใช้บรรจุภัณฑ์ที่ให้จริงแต่ละออเดอร์ และยอดรายเมนูยังไม่หักส่วนลด ไม่รวมค่าส่ง ผลรวมจึงอาจต่างกันเล็กน้อย</p>
     </section>
 
     <section className="panel table-panel spaced">

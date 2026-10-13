@@ -2,7 +2,22 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { InputError, dbError, runAction, text } from "@/lib/server-action";
+import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
+
+/** Default delivery fee filled in when an order is marked “ส่ง”. Stored in settings (key "sales"). */
+export async function saveSaleSettings(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    const fee = money(form, "default_delivery_fee", "ค่าส่งเริ่มต้น", { required: true });
+    const { error } = await supabase.from("settings").upsert(
+      { owner_id: user.id, key: "sales", value: { default_delivery_fee_satang: fee }, updated_at: new Date().toISOString() },
+      { onConflict: "owner_id,key" },
+    );
+    if (error) dbError(error);
+    revalidatePath("/settings");
+    revalidatePath("/sales/new");
+    return { ok: true, message: "บันทึกค่าส่งเริ่มต้นแล้ว" };
+  });
+}
 
 export async function saveProfile(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {

@@ -46,12 +46,14 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
           {sales.map((sale) => <tr key={sale.id} className={sale.status === "cancelled" ? "row-muted" : undefined}>
             <td><strong>{formatTime(sale.soldAt)}</strong> <small className="muted">{formatThaiShortDate(sale.soldAt)}</small><br />#{sale.saleNumber}</td>
             <td>{sale.customerName ?? "ลูกค้าทั่วไป"}</td>
-            <td>{sale.items.map((i) => `${i.name} ×${i.quantity}`).join(" · ")}</td>
+            <td>{sale.items.map((i) => `${i.name} ×${i.quantity}`).join(" · ")}
+              {(sale.fulfillment === "delivery" || sale.packagingCost > 0) && <><br /><small className="muted">{sale.fulfillment === "delivery" ? `🛵 ส่ง ${formatBaht(sale.delivery)}` : "รับเอง"}{sale.packagingCost > 0 ? ` · บรรจุภัณฑ์ ${formatBaht(sale.packagingCost)}` : ""}</small></>}
+            </td>
             <td>{sale.payments.length ? [...new Set(sale.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", ") : "—"}</td>
             <td>{statusBadge(sale)}</td>
             <td className="num"><strong>{formatBaht(sale.netRevenue)}</strong></td>
             <td className="num">{formatBaht(sale.grossProfit)}</td>
-            <td className="num">{sale.status === "confirmed" && !sale.id.startsWith("demo-") && <ActionButton action={cancelSale} fields={{ id: sale.id }} label="ยกเลิก" pendingLabel="กำลังยกเลิก…" confirmText={`ยกเลิกรายการ #${sale.saleNumber} ยอด ${formatBaht(sale.netRevenue)}?\nรายการจะไม่ถูกนับในยอดขายและกำไรอีก`} className="link-button danger" />}</td>
+            <td className="num">{sale.status === "confirmed" && <ActionButton action={cancelSale} fields={{ id: sale.id }} label="ยกเลิก" pendingLabel="กำลังยกเลิก…" confirmText={`ยกเลิกรายการ #${sale.saleNumber} ยอด ${formatBaht(sale.netRevenue)}?\nรายการจะไม่ถูกนับในยอดขายและกำไรอีก`} className="link-button danger" />}</td>
           </tr>)}
           {!sales.length && <tr><td colSpan={8}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีรายการขายในช่วงนี้"}</div></td></tr>}
         </tbody>

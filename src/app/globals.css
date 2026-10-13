@@ -131,3 +131,41 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 
 @media (max-width: 900px) { .form-panels { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .topbar-shop { display: none; } .table-toolbar { flex-wrap: wrap; } }
+
+/* ---- packaging, delivery, add-ons ---- */
+.section-heading { display: flex; align-items: center; gap: 10px; margin: 30px 0 12px; font-size: 18px; letter-spacing: -.2px; }
+.section-heading::before { content: ""; width: 4px; height: 18px; border-radius: 4px; background: var(--primary); }
+.page-heading + .section-heading, .section-heading:first-of-type { margin-top: 6px; }
+.pack-price { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.pack-preview { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 12px; transition: background .2s ease, color .2s ease; }
+.pack-preview.is-ready { background: var(--green-soft); color: var(--green); font-weight: 700; }
+.pack-preview strong { font-size: 16px; margin-left: 2px; }
+.field-hint.wide { grid-column: 1 / -1; margin: 0; color: var(--muted); font-weight: 500; line-height: 1.6; }
+.cost-split { margin: 8px 0 0 !important; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.picker-subhead { margin: 20px 0 8px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .2px; }
+.addon-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.addon-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); padding: 3px; transition: border-color .15s ease, background .15s ease; }
+.addon-chip.selected { border-color: #e9a37f; background: #fff9f5; }
+.addon-chip > b { min-width: 14px; text-align: center; font-size: 13px; color: var(--primary-dark); }
+.addon-add, .addon-remove { border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; border-radius: 99px; color: var(--ink); }
+.addon-add { min-height: 34px; padding: 0 12px 0 9px; font-size: 12px; font-weight: 700; }
+.addon-add svg { color: var(--primary); }
+.addon-add small { color: var(--primary-dark); font-weight: 800; }
+.addon-add:hover { background: #fff0e6; }
+.addon-remove { justify-content: center; width: 30px; height: 30px; margin-right: 2px; background: white; border: 1px solid var(--line); }
+.addon-remove:hover { background: #fce8e6; color: #a7352c; }
+.pack-list { margin-top: 12px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.pack-row { position: relative; display: flex; align-items: center; min-height: 58px; padding: 9px 120px 9px 14px; border-bottom: 1px solid var(--line); transition: opacity .15s ease; }
+.pack-row:last-child { border-bottom: 0; }
+.pack-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pack-row strong { font-size: 13px; }
+.pack-row small { color: var(--muted); font-size: 10px; }
+.pack-row.is-zero { opacity: .6; background: #fcfaf6; }
+.pack-row .qty button:disabled { opacity: .4; cursor: not-allowed; }
+.step-head > .link-button { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 15px; padding: 4px; border-radius: 13px; background: var(--surface-2); }
+.segmented button { min-height: 42px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-weight: 700; cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }
+.segmented button:hover { color: var(--ink); }
+.segmented button.active { background: var(--surface); color: var(--primary-dark); box-shadow: 0 2px 8px rgba(47, 39, 28, .08); }
+.summary-row.muted-row { padding: 3px 0 3px 10px; font-size: 11px; opacity: .85; }
+@media (max-width: 560px) { .pack-price { grid-template-columns: 1fr; } .pack-row { padding-right: 112px; } }

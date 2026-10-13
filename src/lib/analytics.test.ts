@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dailySeries, expensesByCategory, menuCostWarnings, menuRanking, percentChange, recipeMaterialCost, summarize } from "./analytics";
+import { dailySeries, defaultOrderPackaging, expensesByCategory, menuCostWarnings, menuRanking, packagingLinesCost, percentChange, recipeCostParts, recipeMaterialCost, summarize } from "./analytics";
 import type { ExpenseRecord, MenuRecord, SaleRecord } from "./data/types";
 import { bangkokDayKey, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "./time";
 
 const sale = (over: Partial<SaleRecord> = {}): SaleRecord => ({
   id: "s", saleNumber: 1, soldAt: "2026-10-13T05:00:00.000Z", status: "confirmed", paymentStatus: "paid", customerName: null, notes: null,
-  productRevenue: 12000, discount: 0, delivery: 0, fee: 0, netRevenue: 12000, cogs: 6550, grossProfit: 5450,
-  items: [{ menuId: "m1", name: "ข้าวไก่", quantity: 2, revenue: 12000, cost: 6550 }],
+  productRevenue: 12000, discount: 0, delivery: 0, fee: 0, netRevenue: 12000, cogs: 6550, grossProfit: 5450, fulfillment: "pickup", packagingCost: 0,
+  items: [{ menuId: "m1", name: "ข้าวไก่", category: "ข้าวกล่อง", quantity: 2, revenue: 12000, cost: 6550 }],
   payments: [{ method: "transfer", amount: 12000 }],
   ...over,
 });
@@ -28,13 +28,34 @@ describe("summarize", () => {
   it("handles an empty period without dividing by zero", () => {
     expect(summarize([], [])).toMatchObject({ revenue: 0, netProfit: 0, netMarginBps: 0, averageProfitPerBox: 0 });
   });
+  it("counts add-ons separately from boxes", () => {
+    const s = summarize([sale({ items: [
+      { menuId: "m1", name: "ข้าวไก่", category: "ข้าวกล่อง", quantity: 2, revenue: 13800, cost: 6000 },
+      { menuId: "a1", name: "ไก่เพิ่ม", category: "เพิ่มเติม", quantity: 3, revenue: 2400, cost: 900 },
+    ] })], []);
+    expect(s).toMatchObject({ boxes: 2, addons: 3 });
+  });
+  it("totals delivery income, fuel and packaging", () => {
+    const s = summarize(
+      [sale({ fulfillment: "delivery", delivery: 1500, packagingCost: 470 }), sale({ id: "s2", packagingCost: 470 })],
+      [expense({ category: "ค่าน้ำมัน", amount: 4000 }), expense({ id: "e2" })],
+    );
+    expect(s).toMatchObject({ deliveryIncome: 1500, deliveryCount: 1, fuelExpenses: 4000, packagingCost: 940, operatingExpenses: 6000 });
+  });
 });
 
 describe("rankings and breakdowns", () => {
   it("ranks menus by profit using sale snapshots", () => {
-    const rows = menuRanking([sale(), sale({ id: "s2", items: [{ menuId: "m2", name: "พิเศษ", quantity: 1, revenue: 7500, cost: 4120 }] })]);
+    const rows = menuRanking([sale(), sale({ id: "s2", items: [{ menuId: "m2", name: "พิเศษ", category: "ข้าวกล่อง", quantity: 1, revenue: 7500, cost: 4120 }] })]);
     expect(rows.map((r) => r.menuId)).toEqual(["m1", "m2"]);
     expect(rows[0]).toMatchObject({ quantity: 2, profit: 5450 });
+  });
+  it("lists add-ons after dishes even when they earn more", () => {
+    const rows = menuRanking([sale({ items: [
+      { menuId: "a1", name: "ไก่เพิ่ม", category: "เพิ่มเติม", quantity: 50, revenue: 40000, cost: 10000 },
+      { menuId: "m1", name: "ข้าวไก่", category: "ข้าวกล่อง", quantity: 1, revenue: 6900, cost: 3000 },
+    ] })]);
+    expect(rows.map((r) => [r.menuId, r.isAddon])).toEqual([["m1", false], ["a1", true]]);
   });
   it("groups expenses by category with shares", () => {
     const rows = expensesByCategory([expense({ amount: 3000 }), expense({ id: "e2", category: "ค่าไฟ", amount: 1000 })]);
@@ -60,10 +81,38 @@ describe("menu costing", () => {
     );
     expect(cost).toBe(1578); // 120 × 9.4 = 1128 + 450
   });
+  it("splits recipe cost into food and packaging, skipping packaging not counted per order", () => {
+    const parts = recipeCostParts(
+      [
+        { id: "1", menuId: "m", ingredientId: "chicken", packagingItemId: null, quantity: 100 },
+        { id: "2", menuId: "m", ingredientId: null, packagingItemId: "box", quantity: 1 },
+        { id: "3", menuId: "m", ingredientId: null, packagingItemId: "bag", quantity: 1 },
+      ],
+      new Map([["chicken", 10]]), new Map([["box", 260]]),
+    );
+    expect(parts).toEqual({ ingredients: 1000, packaging: 260 });
+  });
   it("warns about missing cost and thin margins", () => {
-    const base: MenuRecord = { id: "m", name: "A", category: "x", price: 6000, laborCost: 0, overheadCost: 0, cost: 3000, isAvailable: true, costCalculatedAt: null };
+    const base: MenuRecord = { id: "m", name: "A", category: "x", price: 6000, laborCost: 0, overheadCost: 0, manualFoodCost: 0, packagingCost: 0, cost: 3000, isAvailable: true, costCalculatedAt: null };
     const warnings = menuCostWarnings([base, { ...base, id: "b", cost: 0 }, { ...base, id: "c", cost: 5500 }]);
     expect(warnings.map((w) => w.menu.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("order packaging", () => {
+  // Shop example: box+lid 65฿/25 = 2.60, spoon 40฿/25 = 1.60, sauce cup 25฿/50 = 0.50.
+  const perDish = [{ packagingId: "box", quantity: 1 }, { packagingId: "spoon", quantity: 1 }, { packagingId: "cup", quantity: 1 }];
+  it("multiplies recipe packaging by dishes and ignores add-ons without packaging", () => {
+    const totals = defaultOrderPackaging([{ quantity: 2, packaging: perDish }, { quantity: 1, packaging: perDish }, { quantity: 3, packaging: [] }]);
+    expect(Object.fromEntries(totals)).toEqual({ box: 3, spoon: 3, cup: 3 });
+  });
+  it("rounds fractional pieces up and skips empty lines", () => {
+    const totals = defaultOrderPackaging([{ quantity: 3, packaging: [{ packagingId: "bag", quantity: 0.5 }] }, { quantity: 0, packaging: perDish }]);
+    expect(Object.fromEntries(totals)).toEqual({ bag: 2 });
+  });
+  it("costs packaging per line in whole satang", () => {
+    expect(packagingLinesCost([{ unitCost: 260, quantity: 1 }, { unitCost: 160, quantity: 2 }, { unitCost: 50, quantity: 1 }, { unitCost: 999, quantity: 0 }])).toBe(630);
+    expect(packagingLinesCost([{ unitCost: 40 / 3, quantity: 1 }])).toBe(13);
   });
 });
 

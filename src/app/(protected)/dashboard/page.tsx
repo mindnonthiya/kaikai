@@ -29,7 +29,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
   const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now));
   const chartRevenue = chart.reduce((sum, p) => sum + p.revenue, 0);
-  const ranking = menuRanking(filterSales(sales, range.start, range.end)).slice(0, 3);
+  const ranking = menuRanking(filterSales(sales, range.start, range.end)).filter((row) => !row.isAddon).slice(0, 3);
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
   const warnings = menuCostWarnings(menus);
   const label = range.label;
@@ -40,7 +40,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     <section className="stat-grid main-stats">
       <StatCard label={`ยอดขาย${label}`} value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), COMPARE_LABEL[key]) ?? `${current.saleCount} รายการ`} tone="blue" icon={TrendingUp} />
       <StatCard label={`กำไรสุทธิ${label}`} value={formatBaht(current.netProfit)} detail={current.revenue ? `${formatPercentBps(current.netMarginBps)} ของยอดขาย` : "ยังไม่มียอดขาย"} tone="green" icon={Wallet} />
-      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรขั้นต้นเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง` : undefined} tone="amber" icon={PackageCheck} />
+      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรขั้นต้นเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} tone="amber" icon={PackageCheck} />
     </section>
     <section className="stat-grid mini-stats">
       <StatCard label="ต้นทุนสินค้าที่ขาย" value={formatBaht(current.cogs)} />

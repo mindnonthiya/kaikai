@@ -42,18 +42,21 @@ export function calculateSale(input: {
   discount?: number;
   deliveryCharged?: number;
   paymentFee?: number;
+  /** Order-level packaging cost, added to cost of goods sold. */
+  packagingCost?: number;
 }) {
   if (!input.items.length) throw new Error("ต้องมีสินค้าอย่างน้อยหนึ่งรายการ");
   const lines = input.items.map((item) => calculateLine(item.unitPrice, item.unitCost, item.quantity));
   const discount = input.discount ?? 0;
   const deliveryCharged = input.deliveryCharged ?? 0;
   const paymentFee = input.paymentFee ?? 0;
-  [discount, deliveryCharged, paymentFee].forEach((value) => {
+  const packagingCost = input.packagingCost ?? 0;
+  [discount, deliveryCharged, paymentFee, packagingCost].forEach((value) => {
     assertSafeInteger(value, "ส่วนปรับยอด");
     if (value < 0) throw new Error("ส่วนปรับยอดห้ามติดลบ");
   });
   const productRevenue = lines.reduce((sum, line) => sum + line.revenue, 0);
-  const cogs = lines.reduce((sum, line) => sum + line.cost, 0);
+  const cogs = lines.reduce((sum, line) => sum + line.cost, 0) + packagingCost;
   const netRevenue = productRevenue - discount + deliveryCharged - paymentFee;
   if (netRevenue < 0) throw new Error("รายได้สุทธิต้องไม่ติดลบ");
   const grossProfit = netRevenue - cogs;

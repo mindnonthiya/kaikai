@@ -29,13 +29,18 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
   }
 }
 
+/** PostgREST / Postgres codes for "table or column does not exist" — the database is missing a migration. */
+export const SCHEMA_OUTDATED_CODES = new Set(["PGRST204", "PGRST205", "42P01", "42703"]);
+export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน (เช่น 202610140001_packaging_delivery.sql) ใน SQL Editor";
+
 /** Converts a Postgres/PostgREST error into a Thai message. */
 export function dbError(error: { code?: string; message: string }, context?: { unique?: string; foreignKey?: string }): never {
   if (error.code === "23505") throw new InputError(context?.unique ?? "มีข้อมูลนี้อยู่แล้ว");
   if (error.code === "23503") throw new InputError(context?.foreignKey ?? "ข้อมูลนี้ถูกใช้งานอยู่ จึงลบไม่ได้");
   if (error.code === "23514") throw new InputError("ข้อมูลไม่ผ่านการตรวจสอบ (เช่น ตัวเลขติดลบ)");
   if (error.code === "42501") throw new InputError("ไม่มีสิทธิ์ทำรายการนี้");
-  if (error.code === "22P02" && error.message.includes("bigint")) throw new InputError("ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารัน migration 202610130002_app_data.sql");
+  if (error.code && SCHEMA_OUTDATED_CODES.has(error.code)) throw new InputError(SCHEMA_OUTDATED_MESSAGE);
+  if (error.code === "22P02" && error.message.includes("bigint")) throw new InputError("ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารัน migration 202610130002_app_data.sql และ 202610140001_packaging_delivery.sql");
   throw new Error(error.message);
 }
 

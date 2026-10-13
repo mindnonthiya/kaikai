@@ -17,26 +17,27 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
     const name = text(form, "name", "ชื่อเมนู", { max: 120 });
     const category = text(form, "category", "หมวดหมู่", { max: 60 });
     const price = money(form, "price", "ราคาขาย", { required: true, positive: true });
-    const material = money(form, "material", "ต้นทุนวัตถุดิบและบรรจุภัณฑ์");
-    const labor = money(form, "labor", "ค่าแรงต่อกล่อง");
-    const overhead = money(form, "overhead", "ค่าโสหุ้ยต่อกล่อง");
-    const now = new Date().toISOString();
-    const fields = { name, category, selling_price_satang: price, labor_cost_satang: labor, overhead_cost_satang: overhead, updated_at: now };
+    const foodCost = money(form, "food_cost", "ต้นทุนอาหารต่อจาน");
+    const labor = money(form, "labor", "ค่าแรงต่อจาน");
+    const overhead = money(form, "overhead", "ค่าโสหุ้ยต่อจาน");
+    const fields = {
+      name, category, selling_price_satang: price, manual_food_cost_satang: foodCost,
+      labor_cost_satang: labor, overhead_cost_satang: overhead, updated_at: new Date().toISOString(),
+    };
     const unique = { unique: `มีเมนูชื่อ “${name}” อยู่แล้ว` };
 
+    let savedId = menuId;
     if (menuId) {
-      const { count, error: countError } = await supabase.from("menu_recipe_items").select("id", { count: "exact", head: true }).eq("menu_id", menuId);
-      if (countError) dbError(countError);
-      const hasRecipe = (count ?? 0) > 0;
-      const { error } = await supabase.from("menus")
-        .update(hasRecipe ? fields : { ...fields, current_cost_satang: material + labor + overhead, cost_calculated_at: now })
-        .eq("id", menuId);
+      const { error } = await supabase.from("menus").update(fields).eq("id", menuId);
       if (error) dbError(error, unique);
-      if (hasRecipe) await recalculateMenuCosts(supabase, [menuId]);
     } else {
-      const { error } = await supabase.from("menus").insert({ ...fields, owner_id: user.id, current_cost_satang: material + labor + overhead, cost_calculated_at: now, is_available: true });
+      const { data, error } = await supabase.from("menus")
+        .insert({ ...fields, owner_id: user.id, current_cost_satang: foodCost + labor + overhead, is_available: true })
+        .select("id").single();
       if (error) dbError(error, unique);
+      savedId = String((data as { id: string }).id);
     }
+    await recalculateMenuCosts(supabase, [savedId!]);
     revalidateMenus();
     return { ok: true, message: menuId ? "บันทึกการแก้ไขแล้ว" : `เพิ่มเมนู “${name}” แล้ว` };
   });
