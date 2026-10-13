@@ -20,11 +20,13 @@ export function satang(value: number): Satang {
 
 export function formatBaht(value: number, showSymbol = true) {
   assertSafeInteger(value, "จำนวนเงิน");
+  const abs = Math.abs(value);
   const formatted = new Intl.NumberFormat("th-TH", {
-    minimumFractionDigits: value % 100 === 0 ? 0 : 2,
+    minimumFractionDigits: abs % 100 === 0 ? 0 : 2,
     maximumFractionDigits: 2,
-  }).format(value / 100);
-  return showSymbol ? `฿${formatted}` : formatted;
+  }).format(abs / 100);
+  const sign = value < 0 ? "-" : "";
+  return showSymbol ? `${sign}฿${formatted}` : `${sign}${formatted}`;
 }
 
 export function calculateLine(unitPrice: number, unitCost: number, quantity: number) {
@@ -87,4 +89,23 @@ export function calculateNetProfit(grossProfit: number, operatingExpenses: numbe
   assertSafeInteger(operatingExpenses, "ค่าใช้จ่าย");
   if (operatingExpenses < 0) throw new Error("ค่าใช้จ่ายห้ามติดลบ");
   return satang(grossProfit - operatingExpenses);
+}
+
+/** Per-unit cost that may be a fraction of a satang, e.g. 9.4 satang/gram → "฿0.094". */
+export function formatUnitCost(satangPerUnit: number) {
+  if (!Number.isFinite(satangPerUnit)) return "—";
+  return `฿${new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(satangPerUnit / 100)}`;
+}
+
+/** Satang → plain baht string for form defaults and CSV, e.g. 6025 → "60.25". */
+export function satangToBahtInput(value: number) {
+  assertSafeInteger(value, "จำนวนเงิน");
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+}
+
+/** Like bahtToSatang but returns null instead of throwing (for live form previews). */
+export function tryBahtToSatang(value: string): Satang | null {
+  try { return bahtToSatang(value || "0"); } catch { return null; }
 }

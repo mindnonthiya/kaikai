@@ -1,6 +1,74 @@
-import { Download, FileText, TrendingUp } from "lucide-react";
+import { Download, TrendingUp } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
+import { RangeTabs } from "@/components/range-tabs";
+import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, percentChange, summarize } from "@/lib/analytics";
+import { fetchExpenses, fetchSales } from "@/lib/data/queries";
 import { formatBaht } from "@/lib/money";
+import { DAY_MS, parseRange, previousRange, resolveRange } from "@/lib/time";
 
-export default function ReportsPage() { return <><PageTitle eyebrow="ผลประกอบการ" title="รายงาน" description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ" action={<a className="primary-button" href="/api/reports/export"><Download size={17} /> ส่งออก CSV</a>} /><div className="range-tabs"><button>7 วัน</button><button className="active">เดือนนี้</button><button>เดือนก่อน</button><button>กำหนดเอง</button></div><div className="stat-grid main-stats"><StatCard label="ยอดขาย" value={formatBaht(1248500)} detail="↑ 18.4% จากช่วงก่อน" tone="blue" icon={TrendingUp} /><StatCard label="กำไรขั้นต้น" value={formatBaht(592200)} detail="47.4% margin" tone="green" /><StatCard label="กำไรสุทธิ" value={formatBaht(391400)} detail="หลังหักค่าใช้จ่าย" tone="amber" /></div><section className="report-cards"><article className="panel"><FileText /><h2>ยอดขายรายวัน</h2><p>รายการ ยอดรับ และวิธีชำระแยกตามวัน</p><button className="secondary-button">เปิดรายงาน</button></article><article className="panel"><FileText /><h2>กำไรแยกตามเมนู</h2><p>ปริมาณขาย ต้นทุน snapshot และ margin</p><button className="secondary-button">เปิดรายงาน</button></article><article className="panel"><FileText /><h2>ค่าใช้จ่ายตามหมวด</h2><p>สัดส่วนค่าใช้จ่ายดำเนินงานและรายการครั้งเดียว</p><button className="secondary-button">เปิดรายงาน</button></article></section></>; }
+const RANGES = ["7d", "month", "last-month"] as const;
+
+export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+  const key = parseRange((await searchParams).range, [...RANGES], "month");
+  const range = resolveRange(key);
+  const prev = previousRange(range);
+  const [sales, expenses] = await Promise.all([fetchSales(prev.start, range.end), fetchExpenses(prev.start, range.end)]);
+  const curSales = filterSales(sales, range.start, range.end);
+  const curExpenses = filterExpenses(expenses, range.start, range.end);
+  const current = summarize(curSales, curExpenses);
+  const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
+  const days = Math.round((range.end.getTime() - range.start.getTime()) / DAY_MS);
+  const daily = dailySeries(curSales, curExpenses, range.start, days).reverse();
+  const menus = menuRanking(curSales);
+  const categories = expensesByCategory(curExpenses);
+
+  return <>
+    <PageTitle eyebrow="ผลประกอบการ" title="รายงาน" description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ" action={<a className="primary-button" href={`/api/reports/export?range=${key}`}><Download size={17} /> ส่งออก CSV</a>} />
+    <RangeTabs basePath="/reports" options={[...RANGES]} active={key} />
+    <div className="stat-grid main-stats">
+      <StatCard label="ยอดขาย" value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), "ช่วงก่อน") ?? `${current.saleCount} รายการ`} tone="blue" icon={TrendingUp} />
+      <StatCard label="กำไรขั้นต้น" value={formatBaht(current.grossProfit)} detail={current.revenue ? `${formatPercentBps(current.grossMarginBps)} margin` : undefined} tone="green" />
+      <StatCard label="กำไรสุทธิ" value={formatBaht(current.netProfit)} detail={`หลังหักค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" />
+    </div>
+    <div className="stat-grid mini-stats">
+      <StatCard label="เงินสด" value={formatBaht(current.payments.cash)} />
+      <StatCard label="เงินโอน" value={formatBaht(current.payments.transfer)} />
+      <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} />
+      <StatCard label="จำนวนกล่อง" value={current.boxes.toLocaleString("th-TH")} />
+    </div>
+
+    <section className="panel table-panel spaced">
+      <div className="table-title"><h2>กำไรแยกตามเมนู</h2><span>ใช้ราคาและต้นทุน ณ เวลาที่ขาย</span></div>
+      <table className="data-table">
+        <thead><tr><th>เมนู</th><th className="num">จำนวน</th><th className="num">ยอดขาย</th><th className="num">ต้นทุน</th><th className="num">กำไร</th><th className="num">Margin</th></tr></thead>
+        <tbody>
+          {menus.map((m) => <tr key={m.menuId}><td><strong>{m.name}</strong></td><td className="num">{m.quantity.toLocaleString("th-TH")}</td><td className="num">{formatBaht(m.revenue)}</td><td className="num">{formatBaht(m.cost)}</td><td className="num"><strong>{formatBaht(m.profit)}</strong></td><td className="num">{formatPercentBps(m.marginBps)}</td></tr>)}
+          {!menus.length && <tr><td colSpan={6}><div className="empty-state">ยังไม่มียอดขายในช่วงนี้</div></td></tr>}
+        </tbody>
+      </table>
+      <p className="table-footnote">ยอดขายรายเมนูยังไม่หักส่วนลดหรือค่าธรรมเนียมระดับบิล ผลรวมจึงอาจต่างจากยอดขายสุทธิด้านบนเล็กน้อย</p>
+    </section>
+
+    <section className="panel table-panel spaced">
+      <div className="table-title"><h2>ยอดขายรายวัน</h2><span>{days} วัน</span></div>
+      <table className="data-table">
+        <thead><tr><th>วันที่</th><th className="num">รายการ</th><th className="num">ยอดขาย</th><th className="num">กำไรขั้นต้น</th><th className="num">ค่าใช้จ่ายดำเนินงาน</th><th className="num">กำไรสุทธิ</th></tr></thead>
+        <tbody>
+          {daily.map((d) => <tr key={d.key} className={d.saleCount || d.operatingExpenses ? undefined : "row-muted"}><td>{d.shortDate}</td><td className="num">{d.saleCount}</td><td className="num">{formatBaht(d.revenue)}</td><td className="num">{formatBaht(d.grossProfit)}</td><td className="num">{formatBaht(d.operatingExpenses)}</td><td className={`num ${d.netProfit < 0 ? "negative" : ""}`}><strong>{formatBaht(d.netProfit)}</strong></td></tr>)}
+        </tbody>
+      </table>
+    </section>
+
+    <section className="panel table-panel spaced">
+      <div className="table-title"><h2>ค่าใช้จ่ายตามหมวด</h2><span>รวมทุกประเภท {formatBaht(current.operatingExpenses + current.directExpenses)}</span></div>
+      <table className="data-table">
+        <thead><tr><th>หมวดหมู่</th><th className="num">รายการ</th><th className="num">จำนวนเงิน</th><th className="num">สัดส่วน</th></tr></thead>
+        <tbody>
+          {categories.map((c) => <tr key={c.category}><td><strong>{c.category}</strong></td><td className="num">{c.count}</td><td className="num">{formatBaht(c.amount)}</td><td className="num"><span className="share-bar"><i style={{ width: `${c.shareBps / 100}%` }} /></span>{formatPercentBps(c.shareBps)}</td></tr>)}
+          {!categories.length && <tr><td colSpan={4}><div className="empty-state">ยังไม่มีค่าใช้จ่ายในช่วงนี้</div></td></tr>}
+        </tbody>
+      </table>
+    </section>
+  </>;
+}

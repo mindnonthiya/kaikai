@@ -84,14 +84,26 @@ Schema, function, trigger, index, RLS และ Storage policy อยู่ใ�
 
 ## Auth
 
-Production ใช้ Email/Password และปิด public signup ใน `supabase/config.toml` สำหรับ local ส่วน Production ต้องปิดใน Supabase Dashboard → Authentication → Providers ด้วย บัญชีเจ้าของร้านสร้างหรือ invite จาก Dashboard เท่านั้น
+ใช้ Email/Password และ**เปิดให้สมัครเองได้** ที่ `/signup` — แต่ละบัญชีคือร้านของตัวเอง ข้อมูลแยกกันด้วย RLS (ร้านอื่นมองไม่เห็น)
 
-ตั้งค่า Auth URL:
+| หน้า | หน้าที่ |
+|---|---|
+| `/signup` | สมัคร (ชื่อร้าน, ชื่อผู้ใช้, อีเมล, รหัสผ่าน) — trigger `handle_new_user` สร้างแถวใน `profiles` ให้อัตโนมัติ |
+| `/login` | เข้าสู่ระบบ รองรับ `?next=` กลับไปหน้าเดิม |
+| `/forgot-password` → `/reset-password` | ส่งลิงก์รีเซ็ตทางอีเมล แล้วตั้งรหัสใหม่ |
+| `/auth/callback` | ปลายทางของลิงก์ในอีเมล (ยืนยันอีเมล / รีเซ็ตรหัสผ่าน) |
+| `/settings` | แก้ชื่อร้าน ชื่อผู้ใช้ และเปลี่ยนรหัสผ่าน |
 
-- Site URL: URL ของ Vercel Production
-- Redirect URLs: local URL, Vercel Preview pattern ที่อนุญาต และ Production URL
+ตั้งค่าใน Supabase Dashboard → **Authentication → URL Configuration**:
 
-Next.js middleware refresh cookie session และส่งผู้ที่ยังไม่ login ไป `/login` เมื่อมี environment variables ครบ การซ่อนหน้าจอไม่ใช่การป้องกันหลัก—RLS เป็นด่านสุดท้ายเสมอ
+- **Site URL:** URL ของ Vercel Production เช่น `https://kaikai.vercel.app`
+- **Redirect URLs:** `http://localhost:3001/**`, `https://kaikai.vercel.app/**` และ pattern ของ Vercel Preview เช่น `https://kaikai-*-<team>.vercel.app/**`
+
+**Confirm email** (Authentication → Sign In / Providers → Email) เปิดอยู่เป็นค่าเริ่มต้น ผู้สมัครต้องกดลิงก์ในอีเมลก่อนเข้าระบบ อีเมลจากระบบของ Supabase เองส่งได้จำนวนจำกัดต่อชั่วโมง ถ้าใช้งานจริงควรตั้ง **Custom SMTP** หรือปิด Confirm email ถ้ายอมรับได้
+
+ถ้าต้องการกลับไปใช้แบบเจ้าของร้านคนเดียว ให้ปิด **Allow new users to sign up** แล้วสร้างบัญชีจาก Authentication → Users แทน
+
+Next.js middleware refresh cookie session, ส่งผู้ที่ยังไม่ login ไป `/login` และตอบ `401` สำหรับ `/api/*` เมื่อมี environment variables ครบ การซ่อนหน้าจอไม่ใช่การป้องกันหลัก—RLS เป็นด่านสุดท้ายเสมอ
 
 ## OCR
 

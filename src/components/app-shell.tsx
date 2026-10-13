@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Menu, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Brand } from "./brand";
 import { navItems } from "./icons";
 
-export function AppShell({ children, demoMode }: { children: React.ReactNode; demoMode: boolean }) {
+export function AppShell({ children, demoMode, shopName, displayName }: { children: React.ReactNode; demoMode: boolean; shopName: string; displayName: string }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const active = (href: string) => href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+  const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
+  const initial = Array.from(displayName.trim())[0] ?? "ก";
 
   return (
     <div className="app-shell">
@@ -23,7 +24,7 @@ export function AppShell({ children, demoMode }: { children: React.ReactNode; de
             </Link>
           ))}
         </nav>
-        <div className="sidebar-footer"><div className="avatar">ก</div><div><strong>เจ้าของร้าน</strong><span>{demoMode ? "โหมดตัวอย่าง" : "เชื่อมต่อ Supabase"}</span></div></div>
+        <div className="sidebar-footer"><div className="avatar">{initial}</div><div><strong>{displayName}</strong><span>{demoMode ? "โหมดตัวอย่าง" : shopName}</span></div></div>
       </aside>
       {open && <button className="scrim" onClick={() => setOpen(false)} aria-label="ปิดเมนู" />}
       <div className="main-column">
@@ -32,8 +33,8 @@ export function AppShell({ children, demoMode }: { children: React.ReactNode; de
           <div className="mobile-only"><Brand compact /></div>
           <div className="topbar-spacer" />
           {demoMode && <span className="demo-pill">ข้อมูลตัวอย่าง</span>}
-          <button className="icon-button" aria-label="การแจ้งเตือน"><Bell size={20} /></button>
-          <div className="avatar small">ก</div>
+          <span className="topbar-shop">{shopName}</span>
+          <Link href="/settings" className="avatar small" aria-label="ตั้งค่าบัญชี">{initial}</Link>
         </header>
         {demoMode && <div className="demo-banner">กำลังแสดงข้อมูลตัวอย่าง — เชื่อมต่อ Supabase เพื่อบันทึกข้อมูลจริง</div>}
         <main className="page-content">{children}</main>
