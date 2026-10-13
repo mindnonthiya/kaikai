@@ -1,0 +1,6 @@
+import { ShieldCheck } from "lucide-react";
+import { PageTitle } from "@/components/page-title";
+import { hasSupabaseEnv } from "@/lib/env";
+import { LogoutButton } from "@/components/logout-button";
+
+export default function SettingsPage() { return <><PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" /><div className="settings-grid"><section className="panel settings-card"><h2>ข้อมูลร้าน</h2><label>ชื่อร้าน<input defaultValue="kaikai ข้าวไก่ต้มน้ำปลา" /></label><label>เขตเวลา<input value="Asia/Bangkok" readOnly /></label><button className="primary-button">บันทึกการเปลี่ยนแปลง</button></section><section className="panel settings-card"><h2>สถานะระบบ</h2><div className="connection-row"><span><i className={hasSupabaseEnv ? "ok" : "warn"} />Supabase</span><strong>{hasSupabaseEnv ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</strong></div><div className="connection-row"><span><i className="warn" />OCR provider</span><strong>ยังไม่เปิดใช้</strong></div><p className="privacy-note"><ShieldCheck size={17} />ข้อมูลถูกจำกัดด้วย Row Level Security และสลิปเก็บใน Private Storage เมื่อเชื่อม Supabase</p></section><section className="panel settings-card"><h2>บัญชี</h2><p>การสร้างบัญชีและเปลี่ยนรหัสผ่านจัดการผ่าน Supabase Auth</p><LogoutButton /></section></div></>; }
