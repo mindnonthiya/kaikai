@@ -38,7 +38,10 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
 export async function saveProfile(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const shopName = text(form, "shop_name", "ชื่อร้าน", { max: 80 });
-    const displayName = text(form, "display_name", "ชื่อของคุณ", { max: 80 });
+    const rawDisplayName = form.get("display_name");
+    const displayName = typeof rawDisplayName === "string" && rawDisplayName.trim()
+      ? rawDisplayName.trim()
+      : shopName;
     const { data, error } = await supabase.from("profiles")
       .update({ shop_name: shopName, display_name: displayName, updated_at: new Date().toISOString() })
       .eq("id", user.id).select("id");
@@ -63,5 +66,82 @@ export async function changePassword(form: FormData): Promise<ActionState> {
       throw new InputError(`เปลี่ยนรหัสผ่านไม่สำเร็จ: ${error.message}`);
     }
     return { ok: true, message: "เปลี่ยนรหัสผ่านแล้ว" };
+  });
+}
+
+type Row = Record<string, unknown>;
+
+/**
+ * Recalculates COGS, packaging cost, and profits for historical sales whose items had 0 cost
+ * (recorded before recipes/costs were configured).
+ */
+export async function syncHistoricalSalesCosts(): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    // 1) Fetch current menus with cost > 0
+    const { data: menus, error: menuErr } = await supabase.from("menus")
+      .select("id,name,current_cost_satang,packaging_cost_satang").eq("owner_id", user.id);
+    if (menuErr) dbError(menuErr);
+    const menuMap = new Map((menus as Row[]).map((m) => [String(m.id), m]));
+    const nameMap = new Map((menus as Row[]).map((m) => [String(m.name), m]));
+
+    // 2) Fetch sale_items that have 0 or null line cost
+    const { data: items, error: itemErr } = await supabase.from("sale_items")
+      .select("id,sale_id,menu_id,menu_name_snapshot,quantity,unit_price_satang,line_cost_satang").eq("owner_id", user.id);
+    if (itemErr) dbError(itemErr);
+
+    const affectedSaleIds = new Set<string>();
+    let updatedCount = 0;
+    for (const item of (items as Row[])) {
+      if (Number(item.line_cost_satang) > 0) continue;
+      const m = menuMap.get(String(item.menu_id)) ?? nameMap.get(String(item.menu_name_snapshot));
+      if (!m || Number(m.current_cost_satang) <= 0) continue;
+      const qty = Number(item.quantity);
+      const unitCost = Number(m.current_cost_satang);
+      const packCost = Number(m.packaging_cost_satang);
+      const ingredientCost = Math.max(0, unitCost - packCost);
+      const unitPrice = Number(item.unit_price_satang);
+
+      const { error: updateErr } = await supabase.from("sale_items").update({
+        ingredient_cost_satang: ingredientCost,
+        packaging_cost_satang: packCost,
+        unit_cost_satang: unitCost,
+        unit_profit_satang: unitPrice - unitCost,
+        line_cost_satang: unitCost * qty,
+      }).eq("id", String(item.id));
+      if (updateErr) dbError(updateErr);
+
+      affectedSaleIds.add(String(item.sale_id));
+      updatedCount++;
+    }
+
+    // 3) Recalculate totals for all affected sales
+    for (const saleId of affectedSaleIds) {
+      const { data: saleItems, error: siErr } = await supabase.from("sale_items")
+        .select("line_cost_satang,packaging_cost_satang,quantity").eq("sale_id", saleId);
+      if (siErr) dbError(siErr);
+      let totalCogs = 0, totalPack = 0;
+      for (const si of (saleItems as Row[])) {
+        totalCogs += Number(si.line_cost_satang);
+        totalPack += Number(si.packaging_cost_satang) * Number(si.quantity);
+      }
+      const { data: saleData } = await supabase.from("sales").select("net_revenue_satang").eq("id", saleId).single();
+      const net = Number((saleData as Row)?.net_revenue_satang ?? 0);
+      const { error: saleUpdateErr } = await supabase.from("sales").update({
+        cogs_satang: totalCogs,
+        packaging_cost_satang: totalPack,
+        gross_profit_satang: net - totalCogs,
+      }).eq("id", saleId);
+      if (saleUpdateErr) dbError(saleUpdateErr);
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath("/reports");
+    revalidatePath("/sales");
+    return {
+      ok: true,
+      message: updatedCount > 0
+        ? `คำนวณต้นทุนย้อนหลังให้ออเดอร์เก่า ${affectedSaleIds.size} รายการ (${updatedCount} เมนู) เรียบร้อยแล้ว`
+        : "ออเดอร์ทั้งหมดมีข้อมูลต้นทุนครบถ้วนอยู่แล้ว",
+    };
   });
 }
