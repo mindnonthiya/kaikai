@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CircleAlert, PackageCheck, TrendingUp, Wallet } from "lucide-react";
+import { ArrowRight, CircleAlert, PackageCheck, TrendingUp, Wallet, WalletCards } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";
@@ -33,27 +33,29 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
   const warnings = menuCostWarnings(menus, 2000, pooled.bps);
   const label = range.label;
+  const totalExpenses = current.operatingExpenses + current.directExpenses;
+  const netCash = current.revenue - totalExpenses;
 
   return <>
     <section className="page-heading"><div><p className="eyebrow">{formatThaiLongDate(now)}</p><h1>สวัสดี วันนี้ร้านเป็นอย่างไรบ้าง?</h1><p>ตัวเลขจากรายการขายและค่าใช้จ่ายที่บันทึกไว้</p></div><Link href="/sales/new" className="primary-button">+ เพิ่มยอดขาย</Link></section>
     <RangeTabs basePath="/dashboard" options={[...RANGES]} active={key} />
     <section className="stat-grid main-stats">
-      <StatCard label={`ยอดขาย${label}`} value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), COMPARE_LABEL[key]) ?? `${current.saleCount} รายการ`} tone="blue" icon={TrendingUp} />
+      <StatCard label={`ยอดขาย${label}`} value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), COMPARE_LABEL[key]) ?? `${current.saleCount.toLocaleString("th-TH")} รายการ`} tone="blue" icon={TrendingUp} />
+      <StatCard label={`ค่าใช้จ่ายทั้งหมด${label}`} value={formatBaht(totalExpenses)} detail={current.directExpenses ? `ของสด/กล่อง ${formatBaht(current.directExpenses)} · ค่าร้าน ${formatBaht(current.operatingExpenses)}` : `ค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" icon={WalletCards} />
       <StatCard label={`กำไรสุทธิ${label}`} value={formatBaht(current.netProfit)} detail={current.revenue ? `${formatPercentBps(current.netMarginBps)} ของยอดขาย` : "ยังไม่มียอดขาย"} tone="green" icon={Wallet} />
-      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรขั้นต้นเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} tone="amber" icon={PackageCheck} />
     </section>
     <section className="stat-grid mini-stats">
-      <StatCard label="ต้นทุนสินค้าที่ขาย" value={formatBaht(current.cogs)} />
-      <StatCard label="กำไรขั้นต้น" value={formatBaht(current.grossProfit)} />
-      <StatCard label="ค่าใช้จ่ายดำเนินงาน" value={formatBaht(current.operatingExpenses)} detail={current.directExpenses ? `ไม่รวมต้นทุนโดยตรง ${formatBaht(current.directExpenses)}` : undefined} />
-      <StatCard label="เงินโอนเข้า" value={formatBaht(current.payments.transfer)} detail={current.outstanding ? `ค้างรับ ${formatBaht(current.outstanding)}` : undefined} />
+      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} />
+      <StatCard label="ต้นทุนของที่ขาย" value={formatBaht(current.cogs)} detail="หักตามจำนวนจานที่ขายจริง" />
+      <StatCard label="เงินโอนเข้า" value={formatBaht(current.payments.transfer)} detail={current.outstanding ? `ค้างรับ ${formatBaht(current.outstanding)}` : (current.payments.cash ? `เงินสด ${formatBaht(current.payments.cash)}` : undefined)} />
+      <StatCard label="เงินสดคงเหลือจริง" value={formatBaht(netCash)} detail="ยอดขายรับเข้า − ค่าใช้จ่ายจริง" />
     </section>
     <section className="dashboard-grid">
       <article className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขายและกำไร</h2><p>7 วันล่าสุด · {formatThaiShortDate(chartStart)} – {formatThaiShortDate(today)}</p></div><span className="metric-up">{formatBaht(chartRevenue)}</span></div><SalesChart points={chart} /></article>
       <article className="panel"><div className="panel-head"><div><h2>ภาพรวมเดือนนี้</h2><p>{formatThaiShortDate(monthStart)} – {formatThaiShortDate(today)}</p></div></div>
         <div className="month-total"><span>ยอดขาย</span><strong>{formatBaht(month.revenue)}</strong></div>
+        <div className="month-total"><span>ค่าใช้จ่ายทั้งหมด</span><strong>{formatBaht(month.operatingExpenses + month.directExpenses)}</strong></div>
         <div className="month-total green"><span>กำไรสุทธิ</span><strong>{formatBaht(month.netProfit)}</strong></div>
-        <div className="month-total"><span>ค่าใช้จ่ายดำเนินงาน</span><strong>{formatBaht(month.operatingExpenses)}</strong></div>
         <div className="progress-row"><span>{month.saleCount.toLocaleString("th-TH")} รายการ · {month.boxes.toLocaleString("th-TH")} กล่อง</span><b>{month.revenue ? formatPercentBps(month.netMarginBps) : "–"}</b></div>
         <div className="progress"><i style={{ width: `${Math.min(100, Math.max(0, month.netMarginBps / 100))}%` }} /></div>
       </article>

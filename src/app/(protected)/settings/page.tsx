@@ -2,7 +2,7 @@ import { ShieldCheck } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
-import { changePassword, saveProfile, saveSaleSettings } from "@/app/actions/settings";
+import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
 import { fetchPooledRate, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -30,6 +30,13 @@ export default async function SettingsPage() {
           <label>วัตถุดิบอื่นเริ่มต้น (% ของราคาขาย)<input id="settings-initial-pooled" name="initial_pooled_percent" inputMode="decimal" defaultValue={String(saleSettings.initialPooledBps / 100)} required /></label>
           <p className="field-hint">ข้าว พริก กระเทียม ผักชี มะนาว ซอส — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
           <div className="connection-row"><span>ตอนนี้ใช้</span><strong>{formatPercentBps(pooled.bps)} · {pooled.source === "actual" ? `จากยอดซื้อ ${formatBaht(pooled.pooledPurchases)} ÷ ยอดขาย ${formatBaht(pooled.foodRevenue)} (${pooled.historyDays} วัน)` : `ค่าเริ่มต้น${pooled.historyDays ? ` · มีข้อมูล ${pooled.historyDays}/${POOLED_MIN_DAYS} วัน` : ""}`}</strong></div>
+        </ActionForm>
+      </section>
+      <section className="panel settings-card">
+        <h2>ออเดอร์และต้นทุนย้อนหลัง</h2>
+        <p className="field-hint">หากคุณมีออเดอร์ในอดีตที่เคยบันทึกไว้ก่อนผูกสูตรต้นทุน สามารถกดปุ่มนี้เพื่อให้ระบบนำต้นทุนปัจจุบันไปคำนวณกำไรต่อกล่องย้อนหลังให้ได้</p>
+        <ActionForm action={syncHistoricalSalesCosts} submitLabel="คำนวณต้นทุนออเดอร์เก่าใหม่" className="settings-form" resetOnSuccess={false}>
+          <div className="connection-row"><span>ต้นทุนออเดอร์เก่า</span><strong>อัปเดตตามสูตรปัจจุบัน</strong></div>
         </ActionForm>
       </section>
       <section className="panel settings-card">
