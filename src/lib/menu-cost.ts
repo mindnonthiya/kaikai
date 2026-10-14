@@ -45,9 +45,9 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
   const now = new Date().toISOString();
   for (const menu of menus.data as Row[]) {
     const parts = recipeCostParts(byMenu.get(String(menu.id)) ?? [], ingredientCost, packagingCost);
-    const total = parts.ingredients + Number(menu.manual_food_cost_satang) + parts.packaging + Number(menu.labor_cost_satang) + Number(menu.overhead_cost_satang);
+    const total = parts.ingredients + parts.packaging;
     const { error } = await supabase.from("menus")
-      .update({ current_cost_satang: total, packaging_cost_satang: parts.packaging, cost_calculated_at: now, updated_at: now })
+      .update({ current_cost_satang: Math.round(total), packaging_cost_satang: Math.round(parts.packaging), cost_calculated_at: now, updated_at: now })
       .eq("id", String(menu.id));
     if (error) dbError(error);
   }

@@ -6,6 +6,7 @@ playwright-report/
 test-results/
 .env
 .env.local
+.env.cloud
 .env.*.local
 .DS_Store
 *.tsbuildinfo
