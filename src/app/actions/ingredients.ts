@@ -147,21 +147,33 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
 
     const rows: Row[] = [];
     const perUnit: PerUnitIngredient[] = [];
+    const expensesToInsert: Row[] = [];
     for (const r of data as Row[]) {
       const ingredientId = String(r.id), name = String(r.name);
       const costing = String(r.costing) as IngredientCosting;
       if (costing === "pooled") {
         const amount = money(form, `amount_${ingredientId}`, `ราคา${name}`);
-        if (amount > 0) rows.push({ owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: amount, vendor });
+        if (amount > 0) {
+          rows.push({ owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: amount, vendor });
+          expensesToInsert.push({
+            owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
+            description: `ซื้อ${name}`, payee: vendor,
+          });
+        }
         continue;
       }
       const qty = amountOrZero(form, `qty_${ingredientId}`, `จำนวน${name}`);
       if (!qty) continue;
       const unitPrice = money(form, `unit_price_${ingredientId}`, `ราคาต่อ${r.purchase_unit ?? "หน่วย"}ของ${name}`, { required: true, positive: true });
       const unit = String(r.purchase_unit ?? r.base_unit);
+      const priceSatang = Math.round(qty * unitPrice);
       rows.push({
-        owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: Math.round(qty * unitPrice),
+        owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: priceSatang,
         purchased_quantity: qty, usable_quantity: qty, purchase_unit: unit, vendor,
+      });
+      expensesToInsert.push({
+        owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
+        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor,
       });
       perUnit.push({
         id: ingredientId, name, base_unit: String(r.base_unit), purchase_unit: unit,
@@ -171,11 +183,15 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
     if (!rows.length) throw new InputError("กรอกอย่างน้อย 1 รายการ");
     const { error: insertError } = await supabase.from("ingredient_purchases").insert(rows);
     if (insertError) dbError(insertError);
+    if (expensesToInsert.length) {
+      const { error: expenseError } = await supabase.from("expenses").insert(expensesToInsert);
+      if (expenseError) dbError(expenseError);
+    }
 
     const notes: string[] = [];
     for (const ingredient of perUnit) notes.push(await refreshPerUnitCost(supabase, ingredient));
     revalidateCosts();
-    return { ok: true, message: [`บันทึกการซื้อ ${rows.length} รายการแล้ว`, ...notes].join(" · ") };
+    return { ok: true, message: [`บันทึกการซื้อ ${rows.length} รายการแล้ว · ลงในรายการค่าใช้จ่ายแล้ว`, ...notes].join(" · ") };
   });
 }
 
