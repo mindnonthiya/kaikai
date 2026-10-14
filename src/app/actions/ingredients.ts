@@ -207,14 +207,17 @@ function firstPackFields(form: FormData): PackPurchase | null {
 
 /**
  * Saves a packaging purchase and sets the item's cost per piece = Σ price ÷ Σ pieces of all its purchases.
- * Items not counted per order (e.g. bags) are also booked as an operating expense, so profit stays correct.
+ * Items not counted per order (e.g. bags) are booked as an operating expense (deducted from profit).
+ * Items counted per order (e.g. boxes, spoons) are booked as a direct expense (already in menu cost, not deducted twice).
  */
 async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string, item: PackagingItem, purchase: PackPurchase) {
   let expenseId: string | null = null;
-  if (!item.per_order && purchase.price > 0) {
+  if (purchase.price > 0) {
     const packs = purchase.packCount > 1 ? `${purchase.packCount.toLocaleString("th-TH")} แพ็ก (${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit})` : `${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit}`;
     const { data, error } = await supabase.from("expenses").insert({
-      owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY, kind: "operating", amount_satang: purchase.price,
+      owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY,
+      kind: item.per_order ? "direct" : "operating",
+      amount_satang: purchase.price,
       description: `ซื้อ${item.name} ${packs}`, payee: purchase.vendor,
     }).select("id").single();
     if (error) dbError(error);
@@ -292,13 +295,12 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
       rows.push({ item, purchase: { purchasedAt, vendor, packCount: packs, price: packPrice * packs, packQuantity: perPack * packs } });
     }
     if (!rows.length) throw new InputError("เลือกจำนวนแพ็กอย่างน้อย 1 รายการ");
-    let total = 0, expensed = false;
+    let total = 0;
     for (const { item, purchase } of rows) {
       await recordPackagingPurchase(supabase, user.id, item, purchase);
       total += purchase.price;
-      if (!item.per_order && purchase.price > 0) expensed = true;
     }
     revalidateCosts();
-    return { ok: true, message: `บันทึกการซื้อ ${rows.length} รายการ รวม ${formatBaht(total)}${expensed ? " · ถุงลงในค่าใช้จ่ายให้แล้ว" : ""}` };
+    return { ok: true, message: `บันทึกการซื้อ ${rows.length} รายการ รวม ${formatBaht(total)} · ลงในรายการค่าใช้จ่ายแล้ว` };
   });
 }

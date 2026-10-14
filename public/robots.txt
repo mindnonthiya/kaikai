@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /.well-known/ai-catalog.json
+Allow: /ai-catalog.json
+Disallow: /api/
+
+Sitemap: https://kaikai-woad.vercel.app/sitemap.xml

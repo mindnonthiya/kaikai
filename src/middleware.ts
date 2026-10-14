@@ -6,6 +6,8 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // CSV export is no longer excluded: it contains real sales data and must require login.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Exclude static assets, icons, and discovery files so bots and crawlers get them directly without auth redirect
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|llms.txt|llms-full.txt|ai-catalog.json|.*\\.png$|.*\\.jpg$|.*\\.svg$|.*\\.webp$|\\.well-known).*)",
+  ],
 };

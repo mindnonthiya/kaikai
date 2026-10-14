@@ -1,0 +1,39 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "kaikai",
+    "identifier": "https://kaikai-woad.vercel.app"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:kaikai-woad.vercel.app:doc:llms-txt",
+      "displayName": "kaikai LLM Documentation",
+      "type": "text/markdown",
+      "description": "เอกสารและคำอธิบายระบบ kaikai สำหรับ LLMs และ AI Agents",
+      "tags": ["restaurant", "pos", "costing", "food-service"],
+      "capabilities": ["CostCalculation", "SalesTracking", "InventoryManagement"],
+      "representativeQueries": [
+        "ระบบคิดต้นทุนร้านข้าวมันไก่และอาหารจานเดียว",
+        "วิธีบันทึกยอดขายและคำนวณกำไรสุทธิ kaikai"
+      ],
+      "version": "1.0.0",
+      "updatedAt": "2026-10-14T00:00:00Z",
+      "url": "https://kaikai-woad.vercel.app/llms.txt"
+    },
+    {
+      "identifier": "urn:air:kaikai-woad.vercel.app:doc:llms-full-txt",
+      "displayName": "kaikai Full System Documentation",
+      "type": "text/markdown",
+      "description": "คู่มือฉบับเต็มของระบบ kaikai",
+      "tags": ["documentation", "restaurant-management"],
+      "capabilities": ["SystemDocumentation"],
+      "representativeQueries": [
+        "คู่มือฉบับเต็ม kaikai",
+        "สถาปัตยกรรมระบบ kaikai"
+      ],
+      "version": "1.0.0",
+      "updatedAt": "2026-10-14T00:00:00Z",
+      "url": "https://kaikai-woad.vercel.app/llms-full.txt"
+    }
+  ]
+}
