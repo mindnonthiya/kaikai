@@ -1,5 +1,6 @@
 // Server-side data access. Reads through the signed-in user's session, so Row Level Security limits rows to that user.
 // When Supabase is not configured every function returns empty data (there is no sample data).
+import { cache } from "react";
 import { COSTING_WINDOW_DAYS, pooledIngredientBps } from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
@@ -279,7 +280,7 @@ export async function fetchPooledRate(settings?: SaleSettings): Promise<PooledRa
   return { ...pooledIngredientBps(input), ...input };
 }
 
-export async function fetchProfile(): Promise<ProfileRecord> {
+export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
   const fallback = { displayName: "เจ้าของร้าน", shopName: "kaikai", email: null };
   if (!hasSupabaseEnv) return fallback;
   const supabase = await createClient();
@@ -292,4 +293,4 @@ export async function fetchProfile(): Promise<ProfileRecord> {
     shopName: str(data?.shop_name) || str(meta.shop_name) || fallback.shopName,
     email: user.email ?? null,
   };
-}
+});

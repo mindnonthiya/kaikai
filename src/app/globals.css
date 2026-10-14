@@ -229,3 +229,26 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   .restock-packs { grid-column: 1 / -1; }
   .amount-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Page loading shimmer skeleton */
+.page-loading-skeleton { display: flex; flex-direction: column; gap: 20px; padding: 4px 0 20px; animation: skeletonFade .2s ease; }
+@keyframes skeletonFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+.skeleton-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.skeleton-bar {
+  background: linear-gradient(90deg, #f0edea 25%, #fdfcfb 50%, #f0edea 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  height: 16px; border-radius: 8px;
+}
+.skeleton-bar.title-bar { width: 220px; height: 28px; border-radius: 10px; }
+.skeleton-bar.subtitle-bar { width: 340px; max-width: 80%; }
+.skeleton-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.skeleton-card {
+  background: linear-gradient(90deg, #f0edea 25%, #fdfcfb 50%, #f0edea 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  height: 100px; border-radius: 18px; border: 1px solid var(--line);
+}
+.skeleton-card.large { height: 260px; }
+

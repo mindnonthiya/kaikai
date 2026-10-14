@@ -2,7 +2,19 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 /** Pages anyone can open without signing in. */
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/auth/"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/auth/",
+  "/robots.txt",
+  "/sitemap.xml",
+  "/llms.txt",
+  "/llms-full.txt",
+  "/.well-known/",
+  "/ai-catalog.json",
+  "/favicon.ico",
+];
 /** Signed-in users are sent from these to the dashboard. */
 const GUEST_ONLY_PATHS = ["/login", "/signup", "/forgot-password"];
 
