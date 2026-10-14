@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
+import { recalculateMenuCosts } from "@/lib/menu-cost";
 
 /** Percent text (e.g. "10" or "12.5") → basis points (1000 / 1250). */
 function percentBps(form: FormData, name: string, label: string) {
@@ -77,29 +78,36 @@ type Row = Record<string, unknown>;
  */
 export async function syncHistoricalSalesCosts(): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
-    // 1) Fetch current menus with cost > 0
+    // 1) Ensure all menus with recipes have up-to-date costs computed first
+    try {
+      await recalculateMenuCosts(supabase);
+    } catch (e) {
+      console.warn("recalculateMenuCosts error:", e);
+    }
+
+    // 2) Fetch current menus with cost > 0
     const { data: menus, error: menuErr } = await supabase.from("menus")
       .select("id,name,current_cost_satang,packaging_cost_satang").eq("owner_id", user.id);
     if (menuErr) dbError(menuErr);
     const menuMap = new Map((menus as Row[]).map((m) => [String(m.id), m]));
-    const nameMap = new Map((menus as Row[]).map((m) => [String(m.name), m]));
+    const nameMap = new Map((menus as Row[]).map((m) => [String(m.name).trim().toLowerCase(), m]));
 
-    // 2) Fetch sale_items that have 0 or null line cost
+    // 3) Fetch sale_items that have 0 or null line cost
     const { data: items, error: itemErr } = await supabase.from("sale_items")
-      .select("id,sale_id,menu_id,menu_name_snapshot,quantity,unit_price_satang,line_cost_satang").eq("owner_id", user.id);
+      .select("id,sale_id,menu_id,menu_name_snapshot,quantity,unit_price_satang,line_cost_satang,unit_cost_satang").eq("owner_id", user.id);
     if (itemErr) dbError(itemErr);
 
     const affectedSaleIds = new Set<string>();
     let updatedCount = 0;
     for (const item of (items as Row[])) {
-      if (Number(item.line_cost_satang) > 0) continue;
-      const m = menuMap.get(String(item.menu_id)) ?? nameMap.get(String(item.menu_name_snapshot));
+      if (Number(item.line_cost_satang) > 0 && Number(item.unit_cost_satang) > 0) continue;
+      const m = menuMap.get(String(item.menu_id)) ?? nameMap.get(String(item.menu_name_snapshot).trim().toLowerCase());
       if (!m || Number(m.current_cost_satang) <= 0) continue;
-      const qty = Number(item.quantity);
+      const qty = Number(item.quantity) || 1;
       const unitCost = Number(m.current_cost_satang);
-      const packCost = Number(m.packaging_cost_satang);
+      const packCost = Number(m.packaging_cost_satang) || 0;
       const ingredientCost = Math.max(0, unitCost - packCost);
-      const unitPrice = Number(item.unit_price_satang);
+      const unitPrice = Number(item.unit_price_satang) || 0;
 
       const { error: updateErr } = await supabase.from("sale_items").update({
         ingredient_cost_satang: ingredientCost,
@@ -114,15 +122,22 @@ export async function syncHistoricalSalesCosts(): Promise<ActionState> {
       updatedCount++;
     }
 
-    // 3) Recalculate totals for all affected sales
+    // 4) Also check for any sales whose cogs_satang is 0 or null
+    const { data: zeroCogsSales } = await supabase.from("sales")
+      .select("id").eq("owner_id", user.id).eq("status", "confirmed").or("cogs_satang.eq.0,cogs_satang.is.null");
+    for (const z of (zeroCogsSales ?? []) as Row[]) {
+      affectedSaleIds.add(String(z.id));
+    }
+
+    // 5) Recalculate totals for all affected sales
     for (const saleId of affectedSaleIds) {
       const { data: saleItems, error: siErr } = await supabase.from("sale_items")
         .select("line_cost_satang,packaging_cost_satang,quantity").eq("sale_id", saleId);
       if (siErr) dbError(siErr);
       let totalCogs = 0, totalPack = 0;
       for (const si of (saleItems as Row[])) {
-        totalCogs += Number(si.line_cost_satang);
-        totalPack += Number(si.packaging_cost_satang) * Number(si.quantity);
+        totalCogs += Number(si.line_cost_satang) || 0;
+        totalPack += (Number(si.packaging_cost_satang) || 0) * (Number(si.quantity) || 1);
       }
       const { data: saleData } = await supabase.from("sales").select("net_revenue_satang").eq("id", saleId).single();
       const net = Number((saleData as Row)?.net_revenue_satang ?? 0);
@@ -139,8 +154,8 @@ export async function syncHistoricalSalesCosts(): Promise<ActionState> {
     revalidatePath("/sales");
     return {
       ok: true,
-      message: updatedCount > 0
-        ? `คำนวณต้นทุนย้อนหลังให้ออเดอร์เก่า ${affectedSaleIds.size} รายการ (${updatedCount} เมนู) เรียบร้อยแล้ว`
+      message: updatedCount > 0 || affectedSaleIds.size > 0
+        ? `คำนวณต้นทุนย้อนหลังให้ออเดอร์เก่า ${affectedSaleIds.size} รายการ เรียบร้อยแล้ว`
         : "ออเดอร์ทั้งหมดมีข้อมูลต้นทุนครบถ้วนอยู่แล้ว",
     };
   });

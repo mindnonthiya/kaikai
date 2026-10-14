@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { PageTitle } from "@/components/page-title";
 import { RangeTabs } from "@/components/range-tabs";
-import { ActionButton } from "@/components/action-form";
+import { ActionButton, ActionForm } from "@/components/action-form";
 import { cancelSale } from "@/app/actions/sales";
+import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
 import { fetchSales } from "@/lib/data/queries";
 import { PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, type SaleRecord } from "@/lib/data/types";
@@ -23,6 +24,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const q = (params.q ?? "").trim();
   const range = resolveRange(key);
   const all = await fetchSales(range.start, range.end);
+  const uncalculatedCount = all.filter((s) => s.status === "confirmed" && s.cogs === 0 && s.netRevenue > 0).length;
   const needle = q.toLowerCase().replace(/^#/, "");
   const sales = needle
     ? all.filter((s) => String(s.saleNumber) === needle || (s.customerName ?? "").toLowerCase().includes(needle) || s.items.some((i) => i.name.toLowerCase().includes(needle)))
@@ -32,6 +34,21 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   return <>
     <PageTitle eyebrow="รายการทั้งหมด" title="ประวัติการขาย" description="ตรวจสอบรายการ สถานะการรับเงิน และยกเลิกรายการที่บันทึกผิด" action={<Link className="primary-button" href="/sales/new">+ เพิ่มยอดขาย</Link>} />
     <RangeTabs basePath="/sales" options={[...RANGES]} active={key} extraParams={{ q }} />
+    {uncalculatedCount > 0 && (
+      <div className="warning-card" style={{ marginBottom: 16 }}>
+        <div>
+          <strong>พบ {uncalculatedCount} ออเดอร์ที่บันทึกก่อนผูกสูตรต้นทุน (เช่น ออเดอร์ #16 - #24)</strong>
+          <p>ออเดอร์เหล่านี้ยังไม่ได้หักต้นทุนอาหาร ทำให้กำไรแสดงเท่ากับยอดขาย</p>
+        </div>
+        <ActionButton
+          action={syncHistoricalSalesCosts}
+          fields={{}}
+          label="คำนวณต้นทุนให้ออเดอร์เก่าทันที"
+          pendingLabel="กำลังคำนวณ…"
+          className="primary-button"
+        />
+      </div>
+    )}
     <section className="panel table-panel">
       <form className="table-toolbar" action="/sales">
         <input type="hidden" name="range" value={key} />
