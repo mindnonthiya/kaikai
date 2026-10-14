@@ -11,7 +11,7 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
-  const initial = Array.from(displayName.trim())[0] ?? "ก";
+  const initial = Array.from((displayName || shopName || "ก").trim())[0] ?? "ก";
 
   return (
     <div className="app-shell">
@@ -24,7 +24,13 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
             </Link>
           ))}
         </nav>
-        <div className="sidebar-footer"><div className="avatar">{initial}</div><div><strong>{displayName}</strong><span>{demoMode ? "ยังไม่เชื่อมฐานข้อมูล" : shopName}</span></div></div>
+        <div className="sidebar-footer">
+          <div className="avatar">{initial}</div>
+          <div>
+            <strong>{displayName || shopName}</strong>
+            <span>{demoMode ? "ยังไม่เชื่อมฐานข้อมูล" : (displayName !== shopName && shopName ? shopName : "ร้านค้าของคุณ")}</span>
+          </div>
+        </div>
       </aside>
       {open && <button className="scrim" onClick={() => setOpen(false)} aria-label="ปิดเมนู" />}
       <div className="main-column">
@@ -33,7 +39,7 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
           <div className="mobile-only"><Brand compact /></div>
           <div className="topbar-spacer" />
           {demoMode && <span className="demo-pill">ยังไม่เชื่อมฐานข้อมูล</span>}
-          <span className="topbar-shop">{shopName}</span>
+          <span className="topbar-shop">{shopName || displayName}</span>
           <Link href="/settings" className="avatar small" aria-label="ตั้งค่าบัญชี">{initial}</Link>
         </header>
         {demoMode && <div className="demo-banner">ยังไม่ได้เชื่อม Supabase — ตั้งค่า .env.local แล้วรีสตาร์ตเซิร์ฟเวอร์เพื่อบันทึกข้อมูลจริง</div>}

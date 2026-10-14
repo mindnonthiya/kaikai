@@ -38,7 +38,10 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
 export async function saveProfile(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const shopName = text(form, "shop_name", "ชื่อร้าน", { max: 80 });
-    const displayName = text(form, "display_name", "ชื่อของคุณ", { max: 80 });
+    const rawDisplayName = form.get("display_name");
+    const displayName = typeof rawDisplayName === "string" && rawDisplayName.trim()
+      ? rawDisplayName.trim()
+      : shopName;
     const { data, error } = await supabase.from("profiles")
       .update({ shop_name: shopName, display_name: displayName, updated_at: new Date().toISOString() })
       .eq("id", user.id).select("id");
