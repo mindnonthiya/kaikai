@@ -68,7 +68,14 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
       };
       if (units !== Number(current.units_per_purchase_unit)) update.yield_updated_at = now;
     }
-    const { error } = await supabase.from("ingredients").update(update).eq("id", ingredientId);
+    let { error } = await supabase.from("ingredients").update(update).eq("id", ingredientId);
+    if (error && error.code === "22P02" && error.message.includes("bigint") && update.weighted_unit_cost_satang !== undefined) {
+      const fallback = await supabase.from("ingredients").update({
+        ...update,
+        weighted_unit_cost_satang: Math.round(Number(update.weighted_unit_cost_satang)),
+      }).eq("id", ingredientId);
+      error = fallback.error;
+    }
     if (error) dbError(error, { unique: `มีวัตถุดิบชื่อ “${name}” อยู่แล้ว` });
     await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingredientId));
     revalidateCosts();
@@ -124,10 +131,17 @@ async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitI
   }
   const now = new Date().toISOString();
   const unitCost = roundCost(pricePerUnit / units);
-  const { error: updateError } = await supabase.from("ingredients").update({
+  let { error: updateError } = await supabase.from("ingredients").update({
     price_per_purchase_unit_satang: pricePerUnit, units_per_purchase_unit: units, weighted_unit_cost_satang: unitCost, updated_at: now,
     ...(learned ? { yield_updated_at: now } : {}),
   }).eq("id", ingredient.id);
+  if (updateError && updateError.code === "22P02" && updateError.message.includes("bigint")) {
+    const fallbackUpdate = await supabase.from("ingredients").update({
+      price_per_purchase_unit_satang: Math.round(pricePerUnit), units_per_purchase_unit: units, weighted_unit_cost_satang: Math.round(unitCost), updated_at: now,
+      ...(learned ? { yield_updated_at: now } : {}),
+    }).eq("id", ingredient.id);
+    updateError = fallbackUpdate.error;
+  }
   if (updateError) dbError(updateError);
   await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingredient.id));
   return `${ingredient.name} ตก${ingredient.base_unit}ละ ${formatUnitCost(unitCost)} (${units.toLocaleString("th-TH")} ${ingredient.base_unit}/${ingredient.purchase_unit ?? "หน่วย"})`;
@@ -253,7 +267,11 @@ async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string
   let totalPrice = 0, totalPieces = 0;
   for (const p of purchases as Row[]) { totalPrice += Number(p.price_satang); totalPieces += Number(p.pack_quantity); }
   const unitCost = totalPieces > 0 ? roundCost(totalPrice / totalPieces) : 0;
-  const { error: updateError } = await supabase.from("packaging_items").update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() }).eq("id", item.id);
+  let { error: updateError } = await supabase.from("packaging_items").update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() }).eq("id", item.id);
+  if (updateError && updateError.code === "22P02" && updateError.message.includes("bigint")) {
+    const fallback = await supabase.from("packaging_items").update({ unit_cost_satang: Math.round(unitCost), updated_at: new Date().toISOString() }).eq("id", item.id);
+    updateError = fallback.error;
+  }
   if (updateError) dbError(updateError);
   await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", item.id));
   return unitCost;
