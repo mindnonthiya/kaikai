@@ -1,13 +1,13 @@
 import { ChefHat } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { ActionButton, ActionForm } from "@/components/action-form";
+import { MenuImageField } from "@/components/menu-image-field";
 import { StepperInput } from "@/components/stepper-input";
 import { deleteMenu, saveMenu, saveMenuRecipe, setMenuAvailability } from "@/app/actions/menus";
 import { formatPercentBps, pooledCost } from "@/lib/analytics";
-import { fetchIngredients, fetchMenus, fetchPackaging, fetchPooledRate, fetchRecipeItems } from "@/lib/data/queries";
+import { fetchIngredients, fetchMenus, fetchPackaging, fetchPooledRate, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
 import type { IngredientRecord, MenuRecord, PackagingRecord, RecipeItemRecord } from "@/lib/data/types";
 import { ADDON_CATEGORY, DISH_CATEGORY, isAddonCategory } from "@/lib/data/types";
-import { menuEmoji } from "@/lib/menu-emoji";
 import { formatBaht, formatUnitCost, satangToBahtInput } from "@/lib/money";
 
 function MenuFields({ menu }: { menu?: MenuRecord }) {
@@ -22,6 +22,7 @@ function MenuFields({ menu }: { menu?: MenuRecord }) {
       </select>
     </label>
     <label>ราคาขาย (บาท)<input name="price" inputMode="decimal" defaultValue={menu ? satangToBahtInput(menu.price) : ""} required placeholder="69" /></label>
+    <MenuImageField currentImage={menu?.imagePath} />
     {!menu && <p className="field-hint wide">เมนูหลักใหม่ใส่บรรจุภัณฑ์ต่อออเดอร์ให้อย่างละ 1 อัตโนมัติ · ค่าแก๊ส/ค่าไฟลงเป็นค่าใช้จ่ายทีหลัง ไม่ต้องใส่ในเมนู</p>}
   </>;
 }
@@ -77,7 +78,10 @@ function RecipeRow({ row }: { row: EditorRow }) {
 }
 
 export default async function MenusPage() {
-  const [menus, recipeItems, ingredients, packaging, pooledRate] = await Promise.all([fetchMenus(), fetchRecipeItems(), fetchIngredients(), fetchPackaging(), fetchPooledRate()]);
+  const [menus, recipeItems, ingredients, packaging, pooledRate, saleSettings] = await Promise.all([
+    fetchMenus(), fetchRecipeItems(), fetchIngredients(), fetchPackaging(), fetchPooledRate(), fetchSaleSettings()
+  ]);
+  const showImages = saleSettings.showMenuImages ?? true;
   const recipesByMenu = new Map<string, RecipeItemRecord[]>();
   for (const item of recipeItems) recipesByMenu.set(item.menuId, [...(recipesByMenu.get(item.menuId) ?? []), item]);
   const dishes = menus.filter((m) => !isAddonCategory(m.category));
@@ -91,7 +95,16 @@ export default async function MenusPage() {
     const marginBps = menu.price ? Math.round((profit * 10_000) / menu.price) : 0;
     const fixedFood = Math.max(0, menu.cost - menu.packagingCost);
     return <article className={`menu-card ${menu.isAvailable ? "" : "is-off"}`} key={menu.id}>
-      <div className="menu-card-head"><div className="menu-icon">{menuEmoji(menu.name, menu.category)}</div><span className={`status ${menu.isAvailable ? "success" : "muted"}`}>{menu.isAvailable ? "พร้อมขาย" : "ปิดการขาย"}</span></div>
+      {showImages && menu.imagePath && (
+        <div className="menu-card-photo-wrap">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={menu.imagePath} alt={menu.name} className="menu-card-photo" loading="lazy" />
+        </div>
+      )}
+      <div className="menu-card-head">
+        <span className="category-pill">{isAddonCategory(menu.category) ? "ของเพิ่ม" : "เมนูหลัก"}</span>
+        <span className={`status ${menu.isAvailable ? "success" : "muted"}`}>{menu.isAvailable ? "พร้อมขาย" : "ปิดการขาย"}</span>
+      </div>
       <h3>{menu.name}</h3>
       <p>{isAddonCategory(menu.category) ? "ของเพิ่ม · ไม่นับเป็นกล่อง" : "เมนูหลัก"}</p>
       <div className="menu-price"><div><span>ราคาขาย</span><strong>{formatBaht(menu.price)}</strong></div><div><span>ต้นทุน (ประมาณ)</span><strong>{formatBaht(total)}</strong></div></div>

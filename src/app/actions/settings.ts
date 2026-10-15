@@ -22,8 +22,18 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const fee = money(form, "default_delivery_fee", "ค่าส่งเริ่มต้น", { required: true });
     const initialPooledBps = percentBps(form, "initial_pooled_percent", "% วัตถุดิบอื่นเริ่มต้น");
+    const showMenuImages = form.get("show_menu_images") === "on" || form.get("show_menu_images") === "true";
     const { error } = await supabase.from("settings").upsert(
-      { owner_id: user.id, key: "sales", value: { default_delivery_fee_satang: fee, initial_pooled_bps: initialPooledBps }, updated_at: new Date().toISOString() },
+      {
+        owner_id: user.id,
+        key: "sales",
+        value: {
+          default_delivery_fee_satang: fee,
+          initial_pooled_bps: initialPooledBps,
+          show_menu_images: showMenuImages,
+        },
+        updated_at: new Date().toISOString()
+      },
       { onConflict: "owner_id,key" },
     );
     if (error) dbError(error);
@@ -32,7 +42,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
     revalidatePath("/menus");
     revalidatePath("/ingredients");
     revalidatePath("/dashboard");
-    return { ok: true, message: "บันทึกการตั้งค่าการขายแล้ว" };
+    return { ok: true, message: "บันทึกการตั้งค่าแล้ว" };
   });
 }
 
