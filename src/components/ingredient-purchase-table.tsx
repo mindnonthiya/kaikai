@@ -65,13 +65,15 @@ export function IngredientPurchaseTable({ perUnit, pooled }: { perUnit: PerUnitP
           <strong>{item.name}</strong>
           <small>{item.unitsPerPurchaseUnit.toLocaleString("th-TH")} {item.baseUnit}/{item.purchaseUnit}{price ? ` · ตก${item.baseUnit}ละ ${formatUnitCost(price / item.unitsPerPurchaseUnit)}` : ""}</small>
         </div>
-        <label className="restock-packs">จำนวน ({item.purchaseUnit})
-          <StepperInput name={`qty_${item.id}`} label={`จำนวน${item.purchaseUnit} ${item.name}`} onChange={(value) => set("qty", item.id, value)} />
-        </label>
-        <label>ราคาต่อ{item.purchaseUnit} (บาท)
-          <input name={`unit_price_${item.id}`} inputMode="decimal" value={raw} required={qty > 0} placeholder="เช่น 125"
-            onChange={(e) => set("unitPrice", item.id, e.target.value)} aria-invalid={raw.trim() !== "" && price === null} />
-        </label>
+        <div className="restock-inputs is-ingredient">
+          <label className="restock-packs">จำนวน ({item.purchaseUnit})
+            <StepperInput name={`qty_${item.id}`} label={`จำนวน${item.purchaseUnit} ${item.name}`} onChange={(value) => set("qty", item.id, value)} />
+          </label>
+          <label>ราคาต่อ{item.purchaseUnit} (บาท)
+            <input name={`unit_price_${item.id}`} inputMode="decimal" value={raw} required={qty > 0} placeholder="เช่น 125"
+              onChange={(e) => set("unitPrice", item.id, e.target.value)} aria-invalid={raw.trim() !== "" && price === null} />
+          </label>
+        </div>
         <p className="restock-line">{line !== null
           ? <>{qty.toLocaleString("th-TH")} {item.purchaseUnit} × {formatBaht(price!)} = <strong>{formatBaht(line)}</strong> · ≈ {Math.round(qty * item.unitsPerPurchaseUnit).toLocaleString("th-TH")} {item.baseUnit}</>
           : qty > 0 ? `กรอกราคาต่อ${item.purchaseUnit}` : "ไม่ได้ซื้อ"}</p>
