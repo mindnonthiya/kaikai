@@ -24,9 +24,15 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
     <div className="app-shell">
       <aside className={`sidebar ${open ? "is-open" : ""}`}>
         <div className="sidebar-head"><Brand /><button className="icon-button mobile-only" onClick={() => setOpen(false)} aria-label="ปิดเมนู"><X /></button></div>
+        <div className="mobile-drawer-label mobile-only">เมนูเพิ่มเติม</div>
         <nav className="side-nav" aria-label="เมนูหลัก">
-          {navItems.map(({ href, label, icon: Icon }) => (
-            <Link key={href} href={href} onClick={() => setOpen(false)} className={active(href) ? "active" : ""}>
+          {navItems.map(({ href, label, icon: Icon, inBottomBar }) => (
+            <Link
+              key={href}
+              href={href}
+              onClick={() => setOpen(false)}
+              className={`${active(href) ? "active" : ""} ${inBottomBar ? "hide-in-mobile-drawer" : ""}`}
+            >
               <Icon size={20} strokeWidth={2} /><span>{label}</span>
             </Link>
           ))}
@@ -46,7 +52,10 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
           <div className="topbar-spacer" />
           {demoMode && <span className="demo-pill">ยังไม่เชื่อมฐานข้อมูล</span>}
           <span className="topbar-shop">{shopName || displayName}</span>
-          <Link href="/settings" className="avatar small" aria-label="ตั้งค่าบัญชี">{initial}</Link>
+          <Link href="/settings" className="avatar small desktop-only" aria-label="ตั้งค่าบัญชี">{initial}</Link>
+          <button type="button" className="topbar-menu-btn mobile-only" onClick={() => setOpen(true)} aria-label="เปิดเมนู">
+            <Menu size={20} />
+          </button>
         </header>
         {demoMode && <div className="demo-banner">ยังไม่ได้เชื่อม Supabase — ตั้งค่า .env.local แล้วรีสตาร์ตเซิร์ฟเวอร์เพื่อบันทึกข้อมูลจริง</div>}
         <main className="page-content">{children}</main>
@@ -57,7 +66,10 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
             <Icon size={accent ? 25 : 21} /><span>{label}</span>
           </Link>
         ))}
-        <button type="button" onClick={() => setOpen(true)} aria-label="เมนูเพิ่มเติม"><Menu size={21} /><span>เพิ่มเติม</span></button>
+        <Link href="/settings" className={`nav-profile-tab ${active("/settings") ? "active" : ""}`} aria-label="โปรไฟล์">
+          <span className="nav-avatar">{initial}</span>
+          <span>โปรไฟล์</span>
+        </Link>
       </nav>
     </div>
   );
