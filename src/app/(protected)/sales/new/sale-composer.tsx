@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, UtensilsCrossed, X, Zap } from "lucide-react";
+import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
 import type { Fulfillment } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
@@ -281,9 +281,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
 
       {/* 1. เมนูหลัก (อาหาร) */}
       <div className="pos-section">
-        <h3 className="pos-section-title">
-          <UtensilsCrossed size={16} /> เมนูหลัก (อาหาร)
-        </h3>
+        <h3 className="pos-section-title">เมนูหลัก (อาหาร)</h3>
         <div className="pos-grid">
           {dishes.map((menu) => (
             <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
@@ -295,9 +293,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       {/* 2. ของเพิ่ม */}
       {addons.length > 0 && (
         <div className="pos-section">
-          <h3 className="pos-section-title">
-            <Sparkles size={16} /> ของเพิ่ม
-          </h3>
+          <h3 className="pos-section-title">ของเพิ่ม</h3>
           <div className="pos-grid">
             {addons.map((menu) => (
               <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
@@ -309,9 +305,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       {/* 3. จ็อบเสริม / บริการ (รายการประจำ) */}
       <div className="pos-section">
         <div className="pos-section-head">
-          <h3 className="pos-section-title">
-            <Bike size={17} /> จ็อบเสริม / บริการ (รายการประจำ)
-          </h3>
+          <h3 className="pos-section-title">จ็อบเสริม / บริการ (รายการประจำ)</h3>
           <Link href="/menus" className="pos-add-service-link">
             + ตั้งค่าจ็อบประจำ
           </Link>
@@ -332,15 +326,10 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       {/* 4. รายการพิเศษเฉพาะบิลนี้ (ครั้งคราว) */}
       {customItems.length > 0 && (
         <div className="pos-section">
-          <h3 className="pos-section-title">
-            <Zap size={16} /> รายการพิเศษชั่วคราว (เฉพาะบิลนี้)
-          </h3>
+          <h3 className="pos-section-title">รายการพิเศษชั่วคราว (เฉพาะบิลนี้)</h3>
           <div className="pos-grid">
             {customItems.map((item) => (
-              <div key={item.id} className="pos-menu-card is-custom is-selected">
-                <div className="pos-card-badge-icon service">
-                  <Zap size={22} />
-                </div>
+              <div key={item.id} className="pos-menu-card is-custom is-selected no-image">
                 <div className="pos-card-body">
                   <div className="pos-card-info">
                     <strong className="pos-card-title">{item.name}</strong>
@@ -483,14 +472,10 @@ function PosMenuCard({
         }
       }}
     >
-      {hasImage ? (
+      {hasImage && (
         <div className="pos-card-media">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={menu.imagePath!} alt="" className="pos-card-img" loading="lazy" />
-        </div>
-      ) : (
-        <div className={`pos-card-badge-icon ${menu.isService ? "service" : menu.isAddon ? "addon" : "dish"}`}>
-          {menu.isService ? <Bike size={24} /> : menu.isAddon ? <Sparkles size={22} /> : <UtensilsCrossed size={22} />}
         </div>
       )}
 

@@ -729,6 +729,10 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   box-shadow: 0 4px 16px rgba(230, 103, 41, 0.12);
 }
 
+.pos-menu-card.no-image {
+  padding: 14px 16px;
+}
+
 .pos-card-media {
   width: 58px;
   height: 58px;
