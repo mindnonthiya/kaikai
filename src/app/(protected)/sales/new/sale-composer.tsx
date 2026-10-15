@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
+import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, UtensilsCrossed, X, Zap } from "lucide-react";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
 import type { Fulfillment } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
@@ -20,7 +20,7 @@ export type CustomItem = {
   quantity: number;
 };
 export type MenuOption = {
-  id: string; name: string; price: number; imagePath?: string | null; category: string; isAddon: boolean;
+  id: string; name: string; price: number; imagePath?: string | null; category: string; isAddon: boolean; isService?: boolean;
   /** Cost per dish without packaging, including the pooled-ingredient %. */
   foodCost: number;
   /** Default packaging per dish (from the menu's recipe). */
@@ -72,12 +72,13 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   const [result, setResult] = useState<{ ok: boolean; text: string; saleId?: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const mainMenus = menus.filter((m) => !m.isAddon);
+  const dishes = menus.filter((m) => !m.isAddon && !m.isService);
   const addons = menus.filter((m) => m.isAddon);
+  const services = menus.filter((m) => m.isService);
   const selected = menus.filter((menu) => cart[menu.id]);
 
   // Packaging: automatic count from the menus' recipes (dishes vs add-ons, larger of the two), plus the seller's adjustments.
-  const autoPack = defaultOrderPackaging(selected.map((m) => ({ quantity: cart[m.id], isAddon: m.isAddon, packaging: m.packaging })));
+  const autoPack = defaultOrderPackaging(selected.map((m) => ({ quantity: cart[m.id], isAddon: m.isAddon || m.isService, packaging: m.packaging })));
   const packLines = packaging.map((p) => {
     const auto = autoPack.get(p.id) ?? 0;
     return { ...p, auto, quantity: Math.max(0, auto + (adjust[p.id] ?? 0)) };
@@ -126,7 +127,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       summaryError = error instanceof Error ? error.message : "คำนวณยอดไม่ได้";
     }
   }
-  const boxes = selected.filter((m) => !m.isAddon).reduce((n, m) => n + cart[m.id], 0);
+  const boxes = selected.filter((m) => !m.isAddon && !m.isService).reduce((n, m) => n + cart[m.id], 0);
   // What the customer pays = food − discount + delivery + tip
   const baseDue = summary.productRevenue - (discountSatang ?? 0) + (deliverySatang ?? 0);
   const amountDue = baseDue + (tipSatang ?? 0);
@@ -270,42 +271,104 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   let step = 1;
   return <div className="sale-composer">
     <section className="composer-main">
-      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>กด + ตามจำนวนที่สั่ง หรือเพิ่มรายการพิเศษ/จ็อบวิ่งส่ง</p></div></div>
-      <div className="menu-rows">
-        {mainMenus.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />)}
-        {!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}
-      </div>
-      {addons.length > 0 && <>
-        <h3 className="picker-subhead">ของเพิ่ม</h3>
-        <div className="menu-rows is-addon">{addons.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />)}</div>
-      </>}
-
-      {customItems.length > 0 && <>
-        <h3 className="picker-subhead">รายการพิเศษ / จ็อบวิ่งส่ง</h3>
-        <div className="menu-rows">
-          {customItems.map((item) => (
-            <div key={item.id} className="menu-row is-custom selected">
-              <span className="custom-item-badge">พิเศษ</span>
-              <span className="menu-row-name">
-                <strong>{item.name}</strong>
-                <small>{formatBaht(item.price)}{item.cost > 0 ? ` · ทุน ${formatBaht(item.cost)}` : ""}</small>
-              </span>
-              <div className="menu-row-qty">
-                <button type="button" onClick={() => updateCustomQty(item.id, -1)} aria-label={`ลด ${item.name}`}><Minus size={16} /></button>
-                <b>{item.quantity}</b>
-                <button type="button" onClick={() => updateCustomQty(item.id, 1)} aria-label={`เพิ่ม ${item.name}`}><Plus size={16} /></button>
-                <button type="button" className="menu-row-remove" onClick={() => removeCustomItem(item.id)} aria-label="ลบรายการ"><Trash2 size={16} /></button>
-              </div>
-            </div>
-          ))}
+      <div className="step-head">
+        <span>{step++}</span>
+        <div>
+          <h2>เลือกรายการ</h2>
+          <p>แตะที่รายการเพื่อเพิ่มจำนวน หรือกดปุ่ม +/-</p>
         </div>
-      </>}
+      </div>
+
+      {/* 1. เมนูหลัก (อาหาร) */}
+      <div className="pos-section">
+        <h3 className="pos-section-title">
+          <UtensilsCrossed size={16} /> เมนูหลัก (อาหาร)
+        </h3>
+        <div className="pos-grid">
+          {dishes.map((menu) => (
+            <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
+          ))}
+          {!dishes.length && <div className="empty-state">ยังไม่มีเมนูหลัก — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}
+        </div>
+      </div>
+
+      {/* 2. ของเพิ่ม */}
+      {addons.length > 0 && (
+        <div className="pos-section">
+          <h3 className="pos-section-title">
+            <Sparkles size={16} /> ของเพิ่ม
+          </h3>
+          <div className="pos-grid">
+            {addons.map((menu) => (
+              <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 3. จ็อบเสริม / บริการ (รายการประจำ) */}
+      <div className="pos-section">
+        <div className="pos-section-head">
+          <h3 className="pos-section-title">
+            <Bike size={17} /> จ็อบเสริม / บริการ (รายการประจำ)
+          </h3>
+          <Link href="/menus" className="pos-add-service-link">
+            + ตั้งค่าจ็อบประจำ
+          </Link>
+        </div>
+        {services.length > 0 ? (
+          <div className="pos-grid">
+            {services.map((menu) => (
+              <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
+            ))}
+          </div>
+        ) : (
+          <p className="pos-service-hint">
+            ยังไม่มีรายการจ็อบเสริมประจำ (สามารถสร้างไว้ที่หน้า <Link href="/menus" className="text-link">เมนู</Link> แล้วเลือกประเภท “จ็อบเสริม / บริการ” เช่น mj ส่งด่วน, ค่าหิ้ว จะมาแสดงตรงนี้ตลอดโดยไม่ต้องพิมพ์ใหม่)
+          </p>
+        )}
+      </div>
+
+      {/* 4. รายการพิเศษเฉพาะบิลนี้ (ครั้งคราว) */}
+      {customItems.length > 0 && (
+        <div className="pos-section">
+          <h3 className="pos-section-title">
+            <Zap size={16} /> รายการพิเศษชั่วคราว (เฉพาะบิลนี้)
+          </h3>
+          <div className="pos-grid">
+            {customItems.map((item) => (
+              <div key={item.id} className="pos-menu-card is-custom is-selected">
+                <div className="pos-card-badge-icon service">
+                  <Zap size={22} />
+                </div>
+                <div className="pos-card-body">
+                  <div className="pos-card-info">
+                    <strong className="pos-card-title">{item.name}</strong>
+                    <span className="pos-card-price">
+                      {formatBaht(item.price)}
+                      {item.cost > 0 && <small className="pos-card-cost"> (ทุน {formatBaht(item.cost)})</small>}
+                    </span>
+                  </div>
+                  <div className="pos-card-controls">
+                    <div className="pos-stepper">
+                      <button type="button" className="pos-stepper-btn minus" onClick={() => updateCustomQty(item.id, -1)} aria-label={`ลด ${item.name}`}><Minus size={16} /></button>
+                      <span className="pos-stepper-count">{item.quantity}</span>
+                      <button type="button" className="pos-stepper-btn plus" onClick={() => updateCustomQty(item.id, 1)} aria-label={`เพิ่ม ${item.name}`}><Plus size={16} /></button>
+                      <button type="button" className="pos-stepper-btn remove" onClick={() => removeCustomItem(item.id)} aria-label="ลบรายการ"><Trash2 size={16} /></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showCustomForm ? (
-        <div className="custom-item-card">
-          <h4>เพิ่มรายการด่วน / จ็อบวิ่งส่ง</h4>
+        <div className="custom-item-card" style={{ marginTop: "16px" }}>
+          <h4>เพิ่มรายการด่วนพิเศษเฉพาะบิลนี้ (ครั้งคราว)</h4>
           <div className="custom-item-grid">
-            <label>ชื่อรายการ<input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="เช่น ฝากซื้อน้ำอัดลม หรือ ค่าวิ่งส่งอาหาร" autoFocus maxLength={120} /></label>
+            <label>ชื่อรายการ<input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="เช่น ฝากซื้อน้ำอัดลม, ค่าของฝาก" autoFocus maxLength={120} /></label>
             <label>ราคาขาย (บาท)<input inputMode="decimal" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)} placeholder="เช่น 40" /></label>
             <label>ต้นทุน (บาท)<input inputMode="decimal" value={customCost} onChange={(e) => setCustomCost(e.target.value)} placeholder="0 (เว้นว่างได้)" /></label>
           </div>
@@ -315,8 +378,8 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
           </div>
         </div>
       ) : (
-        <button type="button" className="add-custom-trigger" onClick={() => setShowCustomForm(true)}>
-          <Plus size={16} /> เพิ่มรายการพิเศษ / จ็อบวิ่งส่งด่วน
+        <button type="button" className="add-custom-trigger" style={{ marginTop: "14px" }} onClick={() => setShowCustomForm(true)}>
+          <Plus size={16} /> มีรายการพิเศษจร/ฝากซื้อเฉพาะบิลนี้ (ครั้งคราว)
         </button>
       )}
 
@@ -391,20 +454,87 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   </div>;
 }
 
-/** One menu as a row: photo thumbnail (if enabled), name, price and a − count + control (starts at 0). */
-function MenuRow({ menu, count, showImages = true, onChange }: { menu: MenuOption; count: number; showImages?: boolean; onChange: (id: string, delta: number) => void }) {
+/** Touch-friendly POS Menu Card: big tap area, prominent price, comfortable steppers */
+function PosMenuCard({
+  menu,
+  count,
+  showImages = true,
+  onChange,
+}: {
+  menu: MenuOption;
+  count: number;
+  showImages?: boolean;
+  onChange: (id: string, delta: number) => void;
+}) {
   const hasImage = Boolean(showImages && menu.imagePath);
-  return <div className={`menu-row ${count ? "selected" : ""} ${!hasImage ? "no-image" : ""}`}>
-    {hasImage ? (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={menu.imagePath!} alt="" className="menu-row-thumb" aria-hidden />
-    ) : null}
-    <span className="menu-row-name"><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></span>
-    <div className="menu-row-qty">
-      <button type="button" onClick={() => onChange(menu.id, -1)} disabled={!count} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button>
-      <b>{count}</b>
-      <button type="button" onClick={() => onChange(menu.id, 1)} aria-label={`เพิ่ม ${menu.name}`}><Plus size={16} /></button>
+
+  return (
+    <div
+      className={`pos-menu-card ${count ? "is-selected" : ""} ${!hasImage ? "no-image" : ""}`}
+      onClick={() => {
+        if (count === 0) onChange(menu.id, 1);
+      }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (count === 0) onChange(menu.id, 1);
+        }
+      }}
+    >
+      {hasImage ? (
+        <div className="pos-card-media">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={menu.imagePath!} alt="" className="pos-card-img" loading="lazy" />
+        </div>
+      ) : (
+        <div className={`pos-card-badge-icon ${menu.isService ? "service" : menu.isAddon ? "addon" : "dish"}`}>
+          {menu.isService ? <Bike size={24} /> : menu.isAddon ? <Sparkles size={22} /> : <UtensilsCrossed size={22} />}
+        </div>
+      )}
+
+      <div className="pos-card-body">
+        <div className="pos-card-info">
+          <strong className="pos-card-title">{menu.name}</strong>
+          <span className="pos-card-price">{formatBaht(menu.price)}</span>
+        </div>
+
+        <div className="pos-card-controls" onClick={(e) => e.stopPropagation()}>
+          {count === 0 ? (
+            <button
+              type="button"
+              className="pos-add-btn"
+              onClick={() => onChange(menu.id, 1)}
+              aria-label={`เพิ่ม ${menu.name}`}
+            >
+              <Plus size={16} />
+              <span>เพิ่ม</span>
+            </button>
+          ) : (
+            <div className="pos-stepper">
+              <button
+                type="button"
+                className="pos-stepper-btn minus"
+                onClick={() => onChange(menu.id, -1)}
+                aria-label={`ลด ${menu.name}`}
+              >
+                <Minus size={16} />
+              </button>
+              <span className="pos-stepper-count">{count}</span>
+              <button
+                type="button"
+                className="pos-stepper-btn plus"
+                onClick={() => onChange(menu.id, 1)}
+                aria-label={`เพิ่ม ${menu.name}`}
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
-  </div>;
+  );
 }
 

@@ -8,9 +8,21 @@ export type Fulfillment = "pickup" | "delivery";
 
 /** Menus in this category are add-ons (extra chicken, plain rice): listed separately when selling, not counted as boxes. */
 export const ADDON_CATEGORY = "เพิ่มเติม";
-/** Category used for normal dishes. */
+/** Category used for normal dishes (chicken rice boxes). */
 export const DISH_CATEGORY = "เมนูหลัก";
+/** Category used for courier/delivery gigs and side services (e.g. mj ส่งด่วน, ค่าหิ้ว): permanent preset options, not food boxes. */
+export const SERVICE_CATEGORY = "บริการ";
+
 export const isAddonCategory = (category: string | null | undefined) => (category ?? "").trim() === ADDON_CATEGORY;
+export const isServiceCategory = (category: string | null | undefined, name?: string) => {
+  const cat = (category ?? "").trim();
+  if (cat === SERVICE_CATEGORY || cat === "บริการ / จ็อบเสริม" || cat === "จ็อบเสริม") return true;
+  if (name && /ส่งด่วน|รับหิ้ว|ค่าส่ง|ไรเดอร์|จ็อบเสริม/.test(name) && !/ข้าว|ไก่/.test(name)) return true;
+  return false;
+};
+export const isDishCategory = (category: string | null | undefined, name?: string) => {
+  return !isAddonCategory(category) && !isServiceCategory(category, name);
+};
 /** Expense category used to compare delivery income with fuel. */
 export const FUEL_CATEGORY = "ค่าน้ำมัน";
 /** Bills that arrive later (electric stove, gas) — the reports remind the owner when a month has none. */
