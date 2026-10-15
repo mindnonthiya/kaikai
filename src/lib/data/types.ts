@@ -38,6 +38,7 @@ export type SaleRecord = {
   productRevenue: number;
   discount: number;
   delivery: number;
+  tip?: number;
   fee: number;
   /** Packaging actually handed out with this order (part of cogs). */
   packagingCost: number;

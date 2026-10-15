@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Store, X } from "lucide-react";
+import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
 import type { Fulfillment } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
@@ -12,6 +12,13 @@ import { createClient } from "@/lib/supabase/client";
 
 type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
+export type CustomItem = {
+  id: string;
+  name: string;
+  price: number; // satang
+  cost: number;  // satang
+  quantity: number;
+};
 export type MenuOption = {
   id: string; name: string; price: number; emoji: string; category: string; isAddon: boolean;
   /** Cost per dish without packaging, including the pooled-ingredient %. */
@@ -42,11 +49,18 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
   const [cart, setCart] = useState<Cart>({});
+  const [customItems, setCustomItems] = useState<CustomItem[]>([]);
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
+  const [customCost, setCustomCost] = useState("");
+
   /** Seller's +/− on top of the automatic packaging count, per packaging id. */
   const [adjust, setAdjust] = useState<Record<string, number>>({});
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   const [delivery, setDelivery] = useState(defaultDelivery);
   const [discount, setDiscount] = useState("0");
+  const [tip, setTip] = useState("0");
   const [fee, setFee] = useState("0");
   const [payment, setPayment] = useState("transfer");
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("paid");
@@ -71,22 +85,56 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
 
   const discountSatang = tryBahtToSatang(discount);
   const deliverySatang = fulfillment === "delivery" ? tryBahtToSatang(delivery) : 0;
+  const tipSatang = tryBahtToSatang(tip);
   const feeSatang = tryBahtToSatang(fee);
   const paidSatang = tryBahtToSatang(paidAmount);
-  const inputError = discountSatang === null ? "ส่วนลดไม่ถูกต้อง" : deliverySatang === null ? "ค่าส่งไม่ถูกต้อง" : feeSatang === null ? "ค่าธรรมเนียมไม่ถูกต้อง" : null;
+  const inputError = discountSatang === null
+    ? "ส่วนลดไม่ถูกต้อง"
+    : deliverySatang === null
+    ? "ค่าส่งไม่ถูกต้อง"
+    : tipSatang === null
+    ? "ทิปไม่ถูกต้อง"
+    : feeSatang === null
+    ? "ค่าธรรมเนียมไม่ถูกต้อง"
+    : null;
 
-  const items = selected.map((menu) => ({ unitPrice: menu.price, unitCost: menu.foodCost, quantity: cart[menu.id] }));
+  const regularItems = selected.map((menu) => ({ unitPrice: menu.price, unitCost: menu.foodCost, quantity: cart[menu.id] }));
+  const customSaleItems = customItems.map((c) => ({ unitPrice: c.price, unitCost: c.cost, quantity: c.quantity }));
+  const items = [...regularItems, ...customSaleItems];
+  const calcItems = items.length > 0
+    ? items
+    : (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0)
+    ? [{ unitPrice: 0, unitCost: 0, quantity: 1 }]
+    : [];
+
   let summary = { productRevenue: 0, netRevenue: 0, cogs: 0, grossProfit: 0, boxes: 0, marginBasisPoints: 0 };
   let summaryError: string | null = inputError;
-  if (items.length && !inputError) {
-    try { summary = calculateSale({ items, discount: discountSatang!, deliveryCharged: deliverySatang!, paymentFee: feeSatang!, packagingCost }); }
-    catch (error) { summaryError = error instanceof Error ? error.message : "คำนวณยอดไม่ได้"; }
+  if (calcItems.length && !inputError) {
+    try {
+      summary = calculateSale({
+        items: calcItems,
+        discount: discountSatang!,
+        deliveryCharged: deliverySatang!,
+        tip: tipSatang!,
+        paymentFee: feeSatang!,
+        packagingCost,
+      });
+      if (items.length === 0) summary.boxes = 0;
+    } catch (error) {
+      summaryError = error instanceof Error ? error.message : "คำนวณยอดไม่ได้";
+    }
   }
   const boxes = selected.filter((m) => !m.isAddon).reduce((n, m) => n + cart[m.id], 0);
-  // What the customer pays = food − discount + delivery (the payment fee is the shop's cost).
-  const amountDue = summary.productRevenue - (discountSatang ?? 0) + (deliverySatang ?? 0);
+  // What the customer pays = food − discount + delivery + tip
+  const baseDue = summary.productRevenue - (discountSatang ?? 0) + (deliverySatang ?? 0);
+  const amountDue = baseDue + (tipSatang ?? 0);
   const paymentAmount = paymentStatus === "paid" ? amountDue : paymentStatus === "unpaid" ? 0 : (paidSatang ?? 0);
   const partialError = paymentStatus === "partial" && (paidSatang === null || paidSatang <= 0 || paidSatang >= amountDue) ? "ยอดที่รับแล้วต้องมากกว่า 0 และน้อยกว่ายอดที่ต้องรับ" : null;
+
+  // Smart round up target (e.g. 135 -> 150)
+  const roundStepSatang = baseDue > 20000 ? 10000 : 5000;
+  const nextRoundSatang = Math.ceil((baseDue + 100) / roundStepSatang) * roundStepSatang;
+  const roundUpDiffSatang = Math.max(0, nextRoundSatang - baseDue);
 
   const change = (id: string, amount: number) => setCart((current) => ({ ...current, [id]: Math.max(0, (current[id] || 0) + amount) }));
   const changePack = (id: string, delta: number) => setAdjust((current) => {
@@ -94,6 +142,45 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
     const next = Math.max(0, Math.max(0, auto + (current[id] ?? 0)) + delta);
     return { ...current, [id]: next - auto };
   });
+
+  function addTipQuick(deltaSatang: number) {
+    const current = tryBahtToSatang(tip) ?? 0;
+    const next = current + deltaSatang;
+    setTip(formatBaht(next, false));
+  }
+
+  function addCustomItem() {
+    const name = customName.trim();
+    const priceSatang = tryBahtToSatang(customPrice);
+    const costSatang = customCost.trim() ? (tryBahtToSatang(customCost) ?? 0) : 0;
+    if (!name) return;
+    if (priceSatang === null || priceSatang < 0) return;
+    if (costSatang < 0) return;
+    const newItem: CustomItem = {
+      id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      price: priceSatang,
+      cost: costSatang,
+      quantity: 1,
+    };
+    setCustomItems((prev) => [...prev, newItem]);
+    setCustomName("");
+    setCustomPrice("");
+    setCustomCost("");
+    setShowCustomForm(false);
+  }
+
+  function updateCustomQty(id: string, delta: number) {
+    setCustomItems((prev) =>
+      prev
+        .map((item) => (item.id === id ? { ...item, quantity: item.quantity + delta } : item))
+        .filter((item) => item.quantity > 0)
+    );
+  }
+
+  function removeCustomItem(id: string) {
+    setCustomItems((prev) => prev.filter((item) => item.id !== id));
+  }
 
   function chooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -106,7 +193,8 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
   }
 
   function resetForm() {
-    setCart({}); setAdjust({}); setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setFee("0");
+    setCart({}); setAdjust({}); setCustomItems([]); setShowCustomForm(false);
+    setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setTip("0"); setFee("0");
     setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setSlip(null);
   }
 
@@ -129,16 +217,35 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
         if (uploadError) { uploadedPath = null; throw new Error(`อัปโหลดสลิปไม่สำเร็จ: ${uploadError.message}`); }
         slipPayload = { storage_path: uploadedPath, mime_type: slip.type, size_bytes: slip.size, file_hash_sha256: hash };
       }
+
+      const notesParts = [
+        tipSatang && tipSatang > 0 ? `ทิป/โอนเกิน ${formatBaht(tipSatang)}` : null,
+        customItems.length ? `รายการพิเศษ: ${customItems.map((c) => `${c.name} x${c.quantity}`).join(", ")}` : null,
+      ].filter(Boolean);
+
       const { data, error } = await supabase.rpc("create_sale", { payload: {
         items: selected.map((menu) => ({ menu_id: menu.id, quantity: cart[menu.id] })),
+        custom_items: customItems.map((c) => ({
+          name: c.name,
+          price_satang: c.price,
+          cost_satang: c.cost,
+          quantity: c.quantity,
+        })),
         packaging: packLines.filter((l) => l.quantity > 0).map((l) => ({ packaging_item_id: l.id, quantity: l.quantity })),
         fulfillment,
         pooled_ingredient_bps: pooledBps,
-        discount_satang: discountSatang, delivery_charged_satang: deliverySatang, payment_fee_satang: feeSatang,
-        payment_amount_satang: paymentAmount, payment_method: payment, payment_status: paymentStatus,
+        discount_satang: discountSatang,
+        delivery_charged_satang: deliverySatang,
+        tip_satang: tipSatang,
+        payment_fee_satang: feeSatang,
+        payment_amount_satang: paymentAmount,
+        payment_method: payment,
+        payment_status: paymentStatus,
         customer_name: customer.trim() || null,
+        notes: notesParts.join(" · ") || null,
         ...(slipPayload ? { slip: slipPayload } : {}),
       } });
+
       if (error) {
         if (error.message.includes("slip_uploads_owner_id_file_hash_sha256_key")) throw new Error("สลิปนี้เคยแนบกับรายการอื่นแล้ว — ตรวจสอบว่าไม่ได้บันทึกซ้ำ");
         if (error.message.includes("menu unavailable")) throw new Error("มีเมนูที่ถูกปิดการขายหรือถูกลบไปแล้ว กรุณารีเฟรชหน้า");
@@ -157,10 +264,11 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
     }
   }
 
+  const hasItemsOrService = items.length > 0 || (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0);
   let step = 1;
   return <div className="sale-composer">
     <section className="composer-main">
-      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>กด + ตามจำนวนที่สั่ง</p></div></div>
+      <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>กด + ตามจำนวนที่สั่ง หรือเพิ่มรายการพิเศษ/จ็อบวิ่งส่ง</p></div></div>
       <div className="menu-rows">
         {mainMenus.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}
         {!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}
@@ -169,6 +277,46 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
         <h3 className="picker-subhead">ของเพิ่ม</h3>
         <div className="menu-rows is-addon">{addons.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}</div>
       </>}
+
+      {customItems.length > 0 && <>
+        <h3 className="picker-subhead">รายการพิเศษ / จ็อบวิ่งส่ง</h3>
+        <div className="menu-rows">
+          {customItems.map((item) => (
+            <div key={item.id} className="menu-row is-custom selected">
+              <span className="menu-row-emoji" aria-hidden>{item.name.includes("ส่ง") || item.name.includes("ไรเดอร์") ? "🛵" : "⚡"}</span>
+              <span className="menu-row-name">
+                <strong>{item.name}</strong>
+                <small>{formatBaht(item.price)}{item.cost > 0 ? ` · ทุน ${formatBaht(item.cost)}` : ""}</small>
+              </span>
+              <div className="menu-row-qty">
+                <button type="button" onClick={() => updateCustomQty(item.id, -1)} aria-label={`ลด ${item.name}`}><Minus size={16} /></button>
+                <b>{item.quantity}</b>
+                <button type="button" onClick={() => updateCustomQty(item.id, 1)} aria-label={`เพิ่ม ${item.name}`}><Plus size={16} /></button>
+                <button type="button" className="menu-row-remove" onClick={() => removeCustomItem(item.id)} aria-label="ลบรายการ"><Trash2 size={16} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>}
+
+      {showCustomForm ? (
+        <div className="custom-item-card">
+          <h4>เพิ่มรายการด่วน / จ็อบวิ่งส่ง</h4>
+          <div className="custom-item-grid">
+            <label>ชื่อรายการ<input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="เช่น ฝากซื้อน้ำอัดลม หรือ ค่าวิ่งส่งอาหาร" autoFocus maxLength={120} /></label>
+            <label>ราคาขาย (บาท)<input inputMode="decimal" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)} placeholder="เช่น 40" /></label>
+            <label>ต้นทุน (บาท)<input inputMode="decimal" value={customCost} onChange={(e) => setCustomCost(e.target.value)} placeholder="0 (เว้นว่างได้)" /></label>
+          </div>
+          <div className="custom-item-actions">
+            <button type="button" className="link-button" onClick={() => { setShowCustomForm(false); setCustomName(""); setCustomPrice(""); setCustomCost(""); }}>ยกเลิก</button>
+            <button type="button" className="primary-button" style={{ minHeight: 38, padding: "0 14px", fontSize: 13 }} onClick={addCustomItem} disabled={!customName.trim() || tryBahtToSatang(customPrice) === null}>+ เพิ่มลงบิล</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="add-custom-trigger" onClick={() => setShowCustomForm(true)}>
+          <Plus size={16} /> เพิ่มรายการพิเศษ / จ็อบวิ่งส่งด่วน
+        </button>
+      )}
 
       {packaging.length > 0 && <>
         <div className="step-head second"><span>{step++}</span><div><h2>บรรจุภัณฑ์</h2><p>นับจากเมนูให้แล้ว — กด +/− ถ้าให้ไม่ตรง เช่น ให้ช้อนเพิ่ม</p></div>{adjusted && <button type="button" className="link-button" onClick={() => setAdjust({})}><RotateCcw size={14} /> คืนค่าอัตโนมัติ</button>}</div>
@@ -185,6 +333,28 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
       </div>
       <div className="form-grid">
         {fulfillment === "delivery" && <label>ค่าส่ง (บาท)<input id="sale-delivery" inputMode="decimal" value={delivery} onChange={(e) => setDelivery(e.target.value)} aria-invalid={deliverySatang === null} /></label>}
+        <div className="tip-input-wrap">
+          <div className="label-row">
+            <label htmlFor="sale-tip">ทิป / ลูกค้าโอนเกิน (บาท)</label>
+            {roundUpDiffSatang > 0 && (
+              <button type="button" className="chip-btn round-up" onClick={() => setTip(formatBaht(roundUpDiffSatang, false))}>
+                <Sparkles size={12} style={{ display: "inline", verticalAlign: "-1px", marginRight: 3 }} />
+                ปัดเศษเป็น {formatBaht(nextRoundSatang, false)} (+{formatBaht(roundUpDiffSatang, false)})
+              </button>
+            )}
+          </div>
+          <div className="tip-input-group">
+            <input id="sale-tip" inputMode="decimal" value={tip} onChange={(e) => setTip(e.target.value)} aria-invalid={tipSatang === null} placeholder="0" />
+            <div className="tip-chips">
+              <button type="button" className="chip-btn" onClick={() => addTipQuick(1000)}>+10</button>
+              <button type="button" className="chip-btn" onClick={() => addTipQuick(2000)}>+20</button>
+              <button type="button" className="chip-btn" onClick={() => addTipQuick(5000)}>+50</button>
+              {tipSatang !== null && tipSatang > 0 && (
+                <button type="button" className="chip-btn clear" onClick={() => setTip("0")}>ล้าง</button>
+              )}
+            </div>
+          </div>
+        </div>
         <label>ช่องทางชำระ<select id="sale-payment-method" value={payment} onChange={(e) => setPayment(e.target.value)}><option value="transfer">เงินโอน</option><option value="cash">เงินสด</option><option value="other">อื่น ๆ</option></select></label>
         <label>ชื่อลูกค้า (ไม่บังคับ)<input id="sale-customer" value={customer} onChange={(e) => setCustomer(e.target.value)} maxLength={120} placeholder="เช่น คุณเมย์" /></label>
         <label>สถานะการรับเงิน<select id="sale-payment-status" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}><option value="paid">ชำระครบแล้ว</option><option value="partial">ชำระบางส่วน</option><option value="unpaid">ยังไม่ชำระ</option></select></label>
@@ -197,18 +367,22 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
         : <label className="slip-drop"><input id="sale-slip" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseSlip} /><ImagePlus /><strong>แนบสลิปการโอน (ไม่บังคับ)</strong><span>JPG, PNG หรือ WebP ไม่เกิน 10 MB</span><small>สลิปไม่ใช่หลักฐานยืนยันว่าเงินเข้าบัญชีจริง</small></label>)}
     </section>
     <aside className="order-summary"><h2>สรุปรายการ</h2>
-      <div className="order-lines">{selected.map((menu) => <div key={menu.id}><span>{menu.name}<small>{cart[menu.id]} × {formatBaht(menu.price)}</small></span><strong>{formatBaht(menu.price * cart[menu.id])}</strong></div>)}</div>
-      <div className="summary-row"><span>ยอดอาหาร</span><strong>{formatBaht(summary.productRevenue)}</strong></div>
+      <div className="order-lines">
+        {selected.map((menu) => <div key={menu.id}><span>{menu.name}<small>{cart[menu.id]} × {formatBaht(menu.price)}</small></span><strong>{formatBaht(menu.price * cart[menu.id])}</strong></div>)}
+        {customItems.map((item) => <div key={item.id}><span>{item.name}<small>{item.quantity} × {formatBaht(item.price)}</small></span><strong>{formatBaht(item.price * item.quantity)}</strong></div>)}
+      </div>
+      <div className="summary-row"><span>ยอดสินค้า/บริการ</span><strong>{formatBaht(summary.productRevenue)}</strong></div>
       {fulfillment === "delivery" && <div className="summary-row"><span>ค่าส่ง</span><strong>+{formatBaht(deliverySatang ?? 0)}</strong></div>}
       {(discountSatang ?? 0) > 0 && <div className="summary-row"><span>ส่วนลด</span><strong>−{formatBaht(discountSatang!)}</strong></div>}
-      <div className="summary-total"><span>ยอดที่ต้องรับ</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
+      {(tipSatang ?? 0) > 0 && <div className="summary-row green"><span>ทิป / ได้รับเพิ่ม</span><strong>+{formatBaht(tipSatang!)}</strong></div>}
+      <div className="summary-total"><span>ยอดที่ต้องรับ (ตรงสลิป)</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
       {paymentStatus !== "paid" && <div className="summary-row"><span>ค้างรับ</span><strong>{formatBaht(Math.max(0, amountDue - paymentAmount))}</strong></div>}
-      <div className="summary-row muted-row"><span>ต้นทุนวัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
+      <div className="summary-row muted-row"><span>ต้นทุนสินค้า/วัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
       {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}
       {(feeSatang ?? 0) > 0 && <div className="summary-row muted-row"><span>ค่าธรรมเนียม</span><strong>−{formatBaht(feeSatang!)}</strong></div>}
-      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes} กล่อง{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
+      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes > 0 ? `${boxes} กล่อง` : "บริการ/พิเศษ"}{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
       {(summaryError || partialError) && <p className="form-error" role="alert">{summaryError ?? partialError}</p>}
-      <button id="sale-save" className="primary-button save-sale" disabled={!summary.boxes || saving || !!summaryError || !!partialError} onClick={save}><Check size={18} /> {saving ? "กำลังบันทึก…" : "ยืนยันและบันทึก"}</button>
+      <button id="sale-save" className="primary-button save-sale" disabled={!hasItemsOrService || saving || !!summaryError || !!partialError} onClick={save}><Check size={18} /> {saving ? "กำลังบันทึก…" : "ยืนยันและบันทึก"}</button>
       <p className="atomic-note"><ShieldCheck size={15} /> รายการขาย บรรจุภัณฑ์ และการชำระเงินจะบันทึกพร้อมกัน</p>
       {result && <div className={result.ok ? "success-toast" : "error-toast"} role="status">{result.text}{result.ok && result.saleId && <> · <Link href="/sales" className="text-link">ดูประวัติ</Link></>}</div>}
     </aside>
@@ -227,3 +401,4 @@ function MenuRow({ menu, count, onChange }: { menu: MenuOption; count: number; o
     </div>
   </div>;
 }
+

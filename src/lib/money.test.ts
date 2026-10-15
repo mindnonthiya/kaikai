@@ -14,6 +14,10 @@ describe("money utilities", () => {
       .toMatchObject({ netRevenue: 8400, cogs: 3470, grossProfit: 4930 });
     expect(() => calculateSale({ items: [{ unitPrice: 6900, unitCost: 3000, quantity: 1 }], packagingCost: -1 })).toThrow();
   });
+  it("adds tip/overtransferred amount to net revenue and gross profit", () => {
+    expect(calculateSale({ items: [{ unitPrice: 6000, unitCost: 3000, quantity: 1 }], deliveryCharged: 1500, tip: 1000 }))
+      .toMatchObject({ productRevenue: 6000, netRevenue: 8500, cogs: 3000, grossProfit: 5500 });
+  });
   it("guards invalid values and division by zero", () => { expect(() => calculateSale({ items: [] })).toThrow(); expect(() => calculateLine(100, 50, 0)).toThrow(); });
   it("keeps old sale snapshots independent from changed menu cost", () => { const snapshot = calculateLine(6000, 3000, 1); calculateLine(6000, 4000, 1); expect(snapshot.cost).toBe(3000); });
 });

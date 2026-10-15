@@ -58,6 +58,7 @@ function mapSale(row: Row): SaleRecord {
     productRevenue: num(row.product_revenue_satang),
     discount: num(row.discount_satang),
     delivery: num(row.delivery_charged_satang),
+    tip: num(row.tip_satang),
     fee: num(row.payment_fee_satang),
     packagingCost: num(row.packaging_cost_satang),
     netRevenue: num(row.net_revenue_satang),
