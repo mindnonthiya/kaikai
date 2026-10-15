@@ -79,7 +79,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
         role="tab"
         aria-selected={activeTab === "ingredients"}
       >
-        <span>วัตถุดิบ (ของสด / เครื่องปรุง)</span>
+        <span>วัตถุดิบ</span>
         <span className="tab-count-badge">{ingredients.length}</span>
       </Link>
       <Link
@@ -88,7 +88,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
         role="tab"
         aria-selected={activeTab === "packaging"}
       >
-        <span>บรรจุภัณฑ์ (กล่อง / ช้อน / ถุง)</span>
+        <span>บรรจุภัณฑ์</span>
         <span className="tab-count-badge">{packaging.length}</span>
       </Link>
     </div>

@@ -943,21 +943,24 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   border: 1px solid var(--line);
   border-radius: 14px;
   margin: 16px 0 22px;
-  max-width: 580px;
+  max-width: 480px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .segmented-tab {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px 14px;
   border-radius: 10px;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--muted);
   text-decoration: none;
   transition: all .16s ease;
   white-space: nowrap;
+  min-width: 0;
 }
 .segmented-tab:hover {
   color: var(--ink);
@@ -979,6 +982,7 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   font-weight: 800;
   background: rgba(0, 0, 0, 0.06);
   color: inherit;
+  flex-shrink: 0;
 }
 .segmented-tab.active .tab-count-badge {
   background: #ffe3d3;
@@ -989,15 +993,18 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
     max-width: 100%;
     gap: 4px;
     padding: 4px;
+    margin: 12px 0 18px;
   }
   .segmented-tab {
     padding: 9px 8px;
-    font-size: 12px;
-    gap: 5px;
+    font-size: 13.5px;
+    gap: 6px;
   }
   .tab-count-badge {
-    font-size: 10.5px;
-    padding: 0 4px;
+    font-size: 11px;
+    height: 18px;
+    min-width: 18px;
+    padding: 0 5px;
   }
 }
 
