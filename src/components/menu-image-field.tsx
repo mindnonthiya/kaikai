@@ -59,17 +59,18 @@ export function MenuImageField({ currentImage }: { currentImage?: string | null 
         <div className="menu-image-preview-wrap">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={previewUrl} alt="ตัวอย่างรูปเมนู" className="menu-image-preview-thumb" />
-          <div className="menu-image-meta">
-            <strong>{fileName ? fileName : "มีรูปภาพเมนูนี้แล้ว"}</strong>
-            <small className="muted-hint">{fileName ? "เลือกรูปใหม่แล้ว (กดบันทึกเพื่ออัปเดต)" : "สามารถเปลี่ยนหรือลบรูปภาพได้"}</small>
-          </div>
-          <div className="menu-image-actions">
-            <button type="button" className="btn-subtle" onClick={handleTriggerClick} title="เปลี่ยนรูปภาพ">
-              <Upload size={14} /> เปลี่ยน
-            </button>
-            <button type="button" className="btn-subtle danger" onClick={handleRemove} title="ลบรูปภาพ">
-              <Trash2 size={14} /> ลบ
-            </button>
+          <div className="menu-image-content">
+            <strong className="menu-image-filename" title={fileName ?? "รูปภาพเมนู"}>
+              {fileName ? fileName : "มีรูปภาพเมนูนี้แล้ว"}
+            </strong>
+            <div className="menu-image-actions">
+              <button type="button" className="btn-subtle" onClick={handleTriggerClick} title="เปลี่ยนรูปภาพ">
+                <Upload size={13} /> เปลี่ยนรูป
+              </button>
+              <button type="button" className="btn-subtle danger" onClick={handleRemove} title="ลบรูปภาพ">
+                <Trash2 size={13} /> ลบรูป
+              </button>
+            </div>
           </div>
         </div>
       ) : (

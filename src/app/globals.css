@@ -86,8 +86,9 @@ a { color: inherit; text-decoration: none; }
 .form-footer { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .form-footer .form-error, .form-footer .form-success { margin: 0; margin-right: auto; }
 .form-success { color: var(--green); background: var(--green-soft); border-radius: 9px; padding: 9px; font-size: 12px; }
-.form-grid.compact { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
-.form-grid.compact input, .form-grid.compact select { min-height: 42px; }
+.form-grid.compact { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.form-grid.compact > * { min-width: 0; max-width: 100%; }
+.form-grid.compact input, .form-grid.compact select { min-height: 42px; width: 100%; min-width: 0; box-sizing: border-box; }
 .form-inline { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 8px; }
 .form-inline label { display: grid; gap: 4px; font-size: 11px; font-weight: 700; color: #4d554f; }
 .form-inline input { min-height: 38px; width: 110px; border: 1px solid var(--line); border-radius: 9px; padding: 0 10px; }
@@ -117,7 +118,7 @@ a { color: inherit; text-decoration: none; }
 .menu-card.is-off { opacity: .7; }
 .menu-card-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .menu-margin.warn { color: var(--amber); }
-.menu-details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.menu-details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; min-width: 0; max-width: 100%; }
 .menu-details > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink); }
 .recipe-list { list-style: none; margin: 10px 0 0; padding: 0; }
 .recipe-list li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
@@ -487,6 +488,9 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   display: grid;
   gap: 8px;
   grid-column: 1 / -1;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   margin: 6px 0 2px;
 }
 .field-label-text {
@@ -506,6 +510,8 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   text-align: left;
   transition: background .15s ease, border-color .15s ease;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   box-sizing: border-box;
 }
 .menu-image-upload-drop:hover {
@@ -522,61 +528,87 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   box-shadow: 0 2px 6px rgba(230, 103, 41, .15);
   flex-shrink: 0;
 }
+.upload-drop-text {
+  flex: 1;
+  min-width: 0;
+}
 .upload-drop-text strong {
   display: block;
   font-size: 13px;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .upload-drop-text small {
   display: block;
   font-size: 11px;
   color: var(--muted);
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .menu-image-preview-wrap {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-radius: 13px;
   background: var(--surface-2);
   border: 1px solid var(--line);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .menu-image-preview-thumb {
-  width: 56px;
-  height: 56px;
-  border-radius: 11px;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
   object-fit: cover;
   border: 1px solid rgba(0, 0, 0, 0.08);
   flex-shrink: 0;
 }
-.menu-image-meta {
+.menu-image-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
 }
-.menu-image-meta strong {
+.menu-image-filename {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
 }
 .menu-image-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .btn-subtle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 5px 9px;
   font-size: 11px;
   font-weight: 700;
   border: 1px solid var(--line);
   background: white;
-  border-radius: 8px;
+  border-radius: 7px;
   cursor: pointer;
   color: var(--ink);
+  white-space: nowrap;
+  line-height: 1.3;
   transition: all .12s ease;
 }
 .btn-subtle:hover {
