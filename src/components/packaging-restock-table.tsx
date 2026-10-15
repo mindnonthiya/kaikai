@@ -57,17 +57,19 @@ export function PackagingRestockTable({ items }: { items: RestockItem[] }) {
           <strong>{item.name}</strong>
           <small>{item.perOrder ? "ต่อออเดอร์" : "ลงค่าใช้จ่าย"}{valid ? ` · ตก${item.unit}ละ ${formatUnitCost(price! / perPack)}` : ""}</small>
         </div>
-        <label className="restock-packs">จำนวนแพ็ก
-          <StepperInput name={`packs_${item.id}`} label={`จำนวนแพ็ก ${item.name}`} decimals={false} onChange={(packs) => update(item.id, { packs })} />
-        </label>
-        <label>ราคา/แพ็ก (บาท)
-          <input name={`price_${item.id}`} inputMode="decimal" value={row.price} required={active} placeholder="เช่น 65"
-            onChange={(e) => update(item.id, { price: e.target.value })} aria-invalid={row.price.trim() !== "" && price === null} />
-        </label>
-        <label>{item.unit}/แพ็ก
-          <input name={`qty_${item.id}`} inputMode="decimal" value={row.perPack} required={active} placeholder="เช่น 25"
-            onChange={(e) => update(item.id, { perPack: e.target.value })} />
-        </label>
+        <div className="restock-inputs">
+          <label className="restock-packs">จำนวนแพ็ก
+            <StepperInput name={`packs_${item.id}`} label={`จำนวนแพ็ก ${item.name}`} decimals={false} onChange={(packs) => update(item.id, { packs })} />
+          </label>
+          <label>ราคา/แพ็ก (บาท)
+            <input name={`price_${item.id}`} inputMode="decimal" value={row.price} required={active} placeholder="เช่น 65"
+              onChange={(e) => update(item.id, { price: e.target.value })} aria-invalid={row.price.trim() !== "" && price === null} />
+          </label>
+          <label>{item.unit}/แพ็ก
+            <input name={`qty_${item.id}`} inputMode="decimal" value={row.perPack} required={active} placeholder="เช่น 25"
+              onChange={(e) => update(item.id, { perPack: e.target.value })} />
+          </label>
+        </div>
         <p className="restock-line">{active && valid
           ? <>{row.packs.toLocaleString("th-TH")} แพ็ก = <strong>{formatBaht(price! * row.packs)}</strong> · {(perPack * row.packs).toLocaleString("th-TH")} {item.unit}</>
           : active ? "กรอกราคาและจำนวนต่อแพ็ก" : "ไม่ได้ซื้อ"}</p>
