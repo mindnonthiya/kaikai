@@ -4,10 +4,10 @@ import {
 } from "lucide-react";
 
 export const navItems = [
-  { href: "/dashboard", label: "ภาพรวม", icon: LayoutDashboard },
-  { href: "/sales/new", label: "เพิ่มยอดขาย", icon: PlusCircle, accent: true },
-  { href: "/sales", label: "การขาย", icon: ShoppingBag },
-  { href: "/menus", label: "เมนูและสูตร", icon: ChefHat },
+  { href: "/dashboard", label: "ภาพรวม", icon: LayoutDashboard, inBottomBar: true },
+  { href: "/sales/new", label: "เปิดบิล", icon: PlusCircle, accent: true, inBottomBar: true },
+  { href: "/sales", label: "การขาย", icon: ShoppingBag, inBottomBar: true },
+  { href: "/menus", label: "เมนูและสูตร", icon: ChefHat, inBottomBar: true },
   { href: "/ingredients", label: "วัตถุดิบ", icon: PackageOpen },
   { href: "/expenses", label: "ค่าใช้จ่าย", icon: WalletCards },
   { href: "/reports", label: "รายงาน", icon: BarChart3 },

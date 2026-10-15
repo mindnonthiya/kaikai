@@ -1,15 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { LogOut, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Brand } from "./brand";
 import { navItems } from "./icons";
+import { hasSupabaseEnv } from "@/lib/env";
+import { createClient } from "@/lib/supabase/client";
 
 export function AppShell({ children, demoMode, shopName, displayName }: { children: React.ReactNode; demoMode: boolean; shopName: string; displayName: string }) {
+  const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (!window.confirm("คุณต้องการออกจากระบบใช่หรือไม่?")) return;
+    setLoggingOut(true);
+    setOpen(false);
+    try {
+      if (hasSupabaseEnv) {
+        await createClient().auth.signOut();
+      }
+    } finally {
+      router.push("/login");
+      router.refresh();
+    }
+  }
+
   const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
   const initial = Array.from((displayName || shopName || "ก").trim())[0] ?? "ก";
   const itemByHref = new Map(navItems.map((item) => [item.href, item]));
@@ -24,12 +43,28 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
     <div className="app-shell">
       <aside className={`sidebar ${open ? "is-open" : ""}`}>
         <div className="sidebar-head"><Brand /><button className="icon-button mobile-only" onClick={() => setOpen(false)} aria-label="ปิดเมนู"><X /></button></div>
+        <div className="mobile-drawer-label mobile-only">เมนูเพิ่มเติม</div>
         <nav className="side-nav" aria-label="เมนูหลัก">
-          {navItems.map(({ href, label, icon: Icon }) => (
-            <Link key={href} href={href} onClick={() => setOpen(false)} className={active(href) ? "active" : ""}>
+          {navItems.map(({ href, label, icon: Icon, inBottomBar }) => (
+            <Link
+              key={href}
+              href={href}
+              onClick={() => setOpen(false)}
+              className={`${active(href) ? "active" : ""} ${inBottomBar ? "hide-in-mobile-drawer" : ""}`}
+            >
               <Icon size={20} strokeWidth={2} /><span>{label}</span>
             </Link>
           ))}
+          <button
+            type="button"
+            className="side-nav-logout"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            aria-label="ออกจากระบบ"
+          >
+            <LogOut size={20} strokeWidth={2} />
+            <span>{loggingOut ? "กำลังออกจากระบบ…" : "ออกจากระบบ"}</span>
+          </button>
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">{initial}</div>
@@ -46,7 +81,10 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
           <div className="topbar-spacer" />
           {demoMode && <span className="demo-pill">ยังไม่เชื่อมฐานข้อมูล</span>}
           <span className="topbar-shop">{shopName || displayName}</span>
-          <Link href="/settings" className="avatar small" aria-label="ตั้งค่าบัญชี">{initial}</Link>
+          <Link href="/settings" className="avatar small desktop-only" aria-label="ตั้งค่าบัญชี">{initial}</Link>
+          <button type="button" className="topbar-menu-btn mobile-only" onClick={() => setOpen(true)} aria-label="เปิดเมนู">
+            <Menu size={20} />
+          </button>
         </header>
         {demoMode && <div className="demo-banner">ยังไม่ได้เชื่อม Supabase — ตั้งค่า .env.local แล้วรีสตาร์ตเซิร์ฟเวอร์เพื่อบันทึกข้อมูลจริง</div>}
         <main className="page-content">{children}</main>
@@ -57,7 +95,10 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
             <Icon size={accent ? 25 : 21} /><span>{label}</span>
           </Link>
         ))}
-        <button type="button" onClick={() => setOpen(true)} aria-label="เมนูเพิ่มเติม"><Menu size={21} /><span>เพิ่มเติม</span></button>
+        <Link href="/settings" className={`nav-profile-tab ${active("/settings") ? "active" : ""}`} aria-label="โปรไฟล์">
+          <span className="nav-avatar">{initial}</span>
+          <span>โปรไฟล์</span>
+        </Link>
       </nav>
     </div>
   );

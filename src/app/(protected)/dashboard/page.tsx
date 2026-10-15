@@ -37,7 +37,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const netCash = current.revenue - totalExpenses;
 
   return <>
-    <section className="page-heading"><div><p className="eyebrow">{formatThaiLongDate(now)}</p><h1>สวัสดี วันนี้ร้านเป็นอย่างไรบ้าง?</h1><p>ตัวเลขจากรายการขายและค่าใช้จ่ายที่บันทึกไว้</p></div><Link href="/sales/new" className="primary-button">+ เพิ่มยอดขาย</Link></section>
+    <section className="page-heading"><div><p className="eyebrow">{formatThaiLongDate(now)}</p><h1>สวัสดี วันนี้ร้านเป็นอย่างไรบ้าง?</h1><p>ตัวเลขจากรายการขายและค่าใช้จ่ายที่บันทึกไว้</p></div><Link href="/sales/new" className="primary-button">+ เปิดบิล</Link></section>
     <RangeTabs basePath="/dashboard" options={[...RANGES]} active={key} />
     <section className="stat-grid main-stats">
       <StatCard label={`ยอดขาย${label}`} value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), COMPARE_LABEL[key]) ?? `${current.saleCount.toLocaleString("th-TH")} รายการ`} tone="blue" icon={TrendingUp} />

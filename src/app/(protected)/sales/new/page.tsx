@@ -34,7 +34,7 @@ export default async function NewSalePage() {
       };
     });
   return <>
-    <PageTitle eyebrow="บันทึกรายการ" title="เพิ่มยอดขาย" description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก" action={<Link className="secondary-button" href="/sales">ประวัติการขาย</Link>} />
+    <PageTitle eyebrow="บันทึกรายการ" title="เปิดบิล" description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก" action={<Link className="secondary-button" href="/sales">ประวัติการขาย</Link>} />
     <SaleComposer
       menus={menus}
       packaging={packaging}

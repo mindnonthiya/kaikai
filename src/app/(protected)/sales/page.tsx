@@ -32,7 +32,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const total = summarize(sales, []);
 
   return <>
-    <PageTitle eyebrow="รายการทั้งหมด" title="ประวัติการขาย" description="ตรวจสอบรายการ สถานะการรับเงิน และยกเลิกรายการที่บันทึกผิด" action={<Link className="primary-button" href="/sales/new">+ เพิ่มยอดขาย</Link>} />
+    <PageTitle eyebrow="รายการทั้งหมด" title="ประวัติการขาย" description="ตรวจสอบรายการ สถานะการรับเงิน และยกเลิกรายการที่บันทึกผิด" action={<Link className="primary-button" href="/sales/new">+ เปิดบิล</Link>} />
     <RangeTabs basePath="/sales" options={[...RANGES]} active={key} extraParams={{ q }} />
     {uncalculatedCount > 0 && (
       <div className="warning-card" style={{ marginBottom: 16 }}>
