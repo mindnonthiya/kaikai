@@ -12,6 +12,13 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
   const [open, setOpen] = useState(false);
   const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
   const initial = Array.from((displayName || shopName || "ก").trim())[0] ?? "ก";
+  const itemByHref = new Map(navItems.map((item) => [item.href, item]));
+  const bottomNavItems = [
+    itemByHref.get("/dashboard")!,
+    itemByHref.get("/sales")!,
+    { ...itemByHref.get("/sales/new")!, label: "เปิดบิล" },
+    { ...itemByHref.get("/menus")!, label: "เมนู" },
+  ].filter(Boolean);
 
   return (
     <div className="app-shell">
@@ -35,8 +42,7 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
       {open && <button className="scrim" onClick={() => setOpen(false)} aria-label="ปิดเมนู" />}
       <div className="main-column">
         <header className="topbar">
-          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-label="เปิดเมนู"><Menu /></button>
-          <div className="mobile-only"><Brand compact /></div>
+          <div className="mobile-only"><Link href="/dashboard" aria-label="หน้าหลัก"><Brand compact /></Link></div>
           <div className="topbar-spacer" />
           {demoMode && <span className="demo-pill">ยังไม่เชื่อมฐานข้อมูล</span>}
           <span className="topbar-shop">{shopName || displayName}</span>
@@ -46,12 +52,12 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
         <main className="page-content">{children}</main>
       </div>
       <nav className="bottom-nav" aria-label="เมนูมือถือ">
-        {navItems.slice(0, 4).map(({ href, label, icon: Icon, accent }) => (
+        {bottomNavItems.map(({ href, label, icon: Icon, accent }) => (
           <Link key={href} href={href} className={`${active(href) ? "active" : ""} ${accent ? "accent" : ""}`}>
-            <Icon size={accent ? 25 : 21} /><span>{label === "เพิ่มยอดขาย" ? "เพิ่มขาย" : label}</span>
+            <Icon size={accent ? 25 : 21} /><span>{label}</span>
           </Link>
         ))}
-        <button onClick={() => setOpen(true)}><Menu size={21} /><span>เพิ่มเติม</span></button>
+        <button type="button" onClick={() => setOpen(true)} aria-label="เมนูเพิ่มเติม"><Menu size={21} /><span>เพิ่มเติม</span></button>
       </nav>
     </div>
   );
