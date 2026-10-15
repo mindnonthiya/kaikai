@@ -1,15 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { LogOut, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Brand } from "./brand";
 import { navItems } from "./icons";
+import { hasSupabaseEnv } from "@/lib/env";
+import { createClient } from "@/lib/supabase/client";
 
 export function AppShell({ children, demoMode, shopName, displayName }: { children: React.ReactNode; demoMode: boolean; shopName: string; displayName: string }) {
+  const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (!window.confirm("คุณต้องการออกจากระบบใช่หรือไม่?")) return;
+    setLoggingOut(true);
+    setOpen(false);
+    try {
+      if (hasSupabaseEnv) {
+        await createClient().auth.signOut();
+      }
+    } finally {
+      router.push("/login");
+      router.refresh();
+    }
+  }
+
   const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
   const initial = Array.from((displayName || shopName || "ก").trim())[0] ?? "ก";
   const itemByHref = new Map(navItems.map((item) => [item.href, item]));
@@ -36,6 +55,16 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
               <Icon size={20} strokeWidth={2} /><span>{label}</span>
             </Link>
           ))}
+          <button
+            type="button"
+            className="side-nav-logout"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            aria-label="ออกจากระบบ"
+          >
+            <LogOut size={20} strokeWidth={2} />
+            <span>{loggingOut ? "กำลังออกจากระบบ…" : "ออกจากระบบ"}</span>
+          </button>
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">{initial}</div>
