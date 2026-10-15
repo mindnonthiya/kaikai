@@ -21,7 +21,51 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
     const name = text(form, "name", "ชื่อเมนู", { max: 120 });
     const category = oneOf(form, "category", [DISH_CATEGORY, ADDON_CATEGORY] as const, "ประเภทเมนู");
     const price = money(form, "price", "ราคาขาย", { required: true, positive: true });
-    const fields = { name, category, selling_price_satang: price, updated_at: new Date().toISOString() };
+    const removeImage = form.get("remove_image") === "true";
+    const imageFile = form.get("image") as File | null;
+
+    const fields: Record<string, unknown> = {
+      name,
+      category,
+      selling_price_satang: price,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (removeImage) {
+      fields.image_path = null;
+    } else if (imageFile && imageFile.size > 0) {
+      if (imageFile.size > 5 * 1024 * 1024) {
+        throw new InputError("รูปภาพต้องมีขนาดไม่เกิน 5 MB");
+      }
+      const buffer = Buffer.from(await imageFile.arrayBuffer());
+      const ext = imageFile.name.split(".").pop()?.toLowerCase() || "jpg";
+      const cleanExt = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
+      const randomPart = Math.random().toString(36).substring(2, 8);
+      const filePath = `${user.id}/${Date.now()}_${randomPart}.${cleanExt}`;
+
+      try {
+        const { error: uploadError } = await supabase.storage
+          .from("menu-images")
+          .upload(filePath, buffer, {
+            contentType: imageFile.type || "image/jpeg",
+            upsert: true,
+          });
+
+        if (!uploadError) {
+          const { data: { publicUrl } } = supabase.storage.from("menu-images").getPublicUrl(filePath);
+          fields.image_path = publicUrl;
+        } else {
+          if (buffer.length <= 2 * 1024 * 1024) {
+            fields.image_path = `data:${imageFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
+          }
+        }
+      } catch {
+        if (buffer.length <= 2 * 1024 * 1024) {
+          fields.image_path = `data:${imageFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
+        }
+      }
+    }
+
     const unique = { unique: `มีเมนูชื่อ “${name}” อยู่แล้ว` };
 
     let savedId = menuId;

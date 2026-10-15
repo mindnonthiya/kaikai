@@ -64,6 +64,7 @@ export type MenuRecord = {
   id: string;
   name: string;
   category: string;
+  imagePath?: string | null;
   price: number;
   /** Default packaging cost per dish from the recipe (included in `cost`). */
   packagingCost: number;
@@ -126,6 +127,8 @@ export type SaleSettings = {
   defaultDeliveryFee: number;
   /** Pooled-ingredient rate (basis points of food sales) used until there is enough real data. */
   initialPooledBps: number;
+  /** Whether to display food images across the system (default true). When false, displays compact text-only layout. */
+  showMenuImages?: boolean;
 };
 
 export type PurchaseRecord = {

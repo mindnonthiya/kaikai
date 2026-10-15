@@ -20,7 +20,7 @@ export type CustomItem = {
   quantity: number;
 };
 export type MenuOption = {
-  id: string; name: string; price: number; emoji: string; category: string; isAddon: boolean;
+  id: string; name: string; price: number; imagePath?: string | null; category: string; isAddon: boolean;
   /** Cost per dish without packaging, including the pooled-ingredient %. */
   foodCost: number;
   /** Default packaging per dish (from the menu's recipe). */
@@ -45,7 +45,9 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }: { menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number }) {
+export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, showMenuImages = true }: {
+  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number; showMenuImages?: boolean;
+}) {
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
   const [cart, setCart] = useState<Cart>({});
@@ -270,12 +272,12 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
     <section className="composer-main">
       <div className="step-head"><span>{step++}</span><div><h2>เลือกเมนู</h2><p>กด + ตามจำนวนที่สั่ง หรือเพิ่มรายการพิเศษ/จ็อบวิ่งส่ง</p></div></div>
       <div className="menu-rows">
-        {mainMenus.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}
+        {mainMenus.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />)}
         {!menus.length && <div className="empty-state">ยังไม่มีเมนูพร้อมขาย — <Link href="/menus" className="text-link">สร้างเมนูก่อน</Link></div>}
       </div>
       {addons.length > 0 && <>
         <h3 className="picker-subhead">ของเพิ่ม</h3>
-        <div className="menu-rows is-addon">{addons.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} onChange={change} />)}</div>
+        <div className="menu-rows is-addon">{addons.map((menu) => <MenuRow key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />)}</div>
       </>}
 
       {customItems.length > 0 && <>
@@ -283,7 +285,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
         <div className="menu-rows">
           {customItems.map((item) => (
             <div key={item.id} className="menu-row is-custom selected">
-              <span className="menu-row-emoji" aria-hidden>{item.name.includes("ส่ง") || item.name.includes("ไรเดอร์") ? "🛵" : "⚡"}</span>
+              <span className="custom-item-badge">พิเศษ</span>
               <span className="menu-row-name">
                 <strong>{item.name}</strong>
                 <small>{formatBaht(item.price)}{item.cost > 0 ? ` · ทุน ${formatBaht(item.cost)}` : ""}</small>
@@ -389,10 +391,14 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps }
   </div>;
 }
 
-/** One menu as a row: emoji, name, price and a − count + control (starts at 0). */
-function MenuRow({ menu, count, onChange }: { menu: MenuOption; count: number; onChange: (id: string, delta: number) => void }) {
-  return <div className={`menu-row ${count ? "selected" : ""}`}>
-    <span className="menu-row-emoji" aria-hidden>{menu.emoji}</span>
+/** One menu as a row: photo thumbnail (if enabled), name, price and a − count + control (starts at 0). */
+function MenuRow({ menu, count, showImages = true, onChange }: { menu: MenuOption; count: number; showImages?: boolean; onChange: (id: string, delta: number) => void }) {
+  const hasImage = Boolean(showImages && menu.imagePath);
+  return <div className={`menu-row ${count ? "selected" : ""} ${!hasImage ? "no-image" : ""}`}>
+    {hasImage ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={menu.imagePath!} alt="" className="menu-row-thumb" aria-hidden />
+    ) : null}
     <span className="menu-row-name"><strong>{menu.name}</strong><small>{formatBaht(menu.price)}</small></span>
     <div className="menu-row-qty">
       <button type="button" onClick={() => onChange(menu.id, -1)} disabled={!count} aria-label={`ลด ${menu.name}`}><Minus size={16} /></button>

@@ -114,6 +114,7 @@ export function mapMenu(row: Row): MenuRecord {
     id: str(row.id),
     name: str(row.name),
     category: str(row.category),
+    imagePath: strOrNull(row.image_path),
     price: num(row.selling_price_satang),
     packagingCost: num(row.packaging_cost_satang),
     cost: num(row.current_cost_satang),
@@ -126,7 +127,7 @@ export async function fetchMenus(): Promise<MenuRecord[]> {
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
   const data = await fetchAll("เมนู", (from, to) =>
-    supabase.from("menus").select("id,name,category,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
+    supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
       .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to));
   return data.map(mapMenu);
 }
@@ -234,7 +235,7 @@ export async function fetchRecipeItems(): Promise<RecipeItemRecord[]> {
 }
 
 export async function fetchSaleSettings(): Promise<SaleSettings> {
-  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS };
+  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true };
   if (!hasSupabaseEnv) return fallback;
   const supabase = await createClient();
   const { data, error } = await supabase.from("settings").select("value").eq("key", SALE_SETTINGS_KEY).maybeSingle();
@@ -242,9 +243,11 @@ export async function fetchSaleSettings(): Promise<SaleSettings> {
   const value = (data?.value ?? {}) as Row;
   const fee = Number(value.default_delivery_fee_satang);
   const bps = Number(value.initial_pooled_bps);
+  const showMenuImages = value.show_menu_images !== undefined ? Boolean(value.show_menu_images) : true;
   return {
     defaultDeliveryFee: Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee,
     initialPooledBps: Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000 ? bps : fallback.initialPooledBps,
+    showMenuImages,
   };
 }
 

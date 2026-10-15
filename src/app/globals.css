@@ -419,3 +419,205 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 .skeleton-card.large { height: 260px; }
 
+/* ---- Menu Images & Toggle Styles ---- */
+.menu-card-photo-wrap {
+  width: calc(100% + 34px);
+  margin: -17px -17px 14px -17px;
+  height: 155px;
+  overflow: hidden;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: #f7f3ee;
+  border-bottom: 1px solid var(--line);
+}
+.menu-card-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform .25s ease;
+}
+.menu-card:hover .menu-card-photo {
+  transform: scale(1.03);
+}
+.menu-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.category-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: #fff0e6;
+  color: var(--primary-dark);
+}
+.menu-row.no-image {
+  grid-template-columns: 1fr auto;
+}
+.menu-row-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #f5ebe2;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.menu-rows.is-addon .menu-row-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+.custom-item-badge {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #e8f5ed;
+  color: #1e6b3e;
+  font-size: 12px;
+  font-weight: 800;
+}
+.menu-image-field {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  margin: 6px 0 2px;
+}
+.field-label-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4d554f;
+}
+.menu-image-upload-drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1px dashed var(--primary);
+  border-radius: 13px;
+  background: #fff8f4;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s ease, border-color .15s ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+.menu-image-upload-drop:hover {
+  background: #fff0e6;
+}
+.upload-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: white;
+  color: var(--primary);
+  box-shadow: 0 2px 6px rgba(230, 103, 41, .15);
+  flex-shrink: 0;
+}
+.upload-drop-text strong {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+.upload-drop-text small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.menu-image-preview-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.menu-image-preview-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 11px;
+  object-fit: cover;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+.menu-image-meta {
+  flex: 1;
+  min-width: 0;
+}
+.menu-image-meta strong {
+  display: block;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-image-actions {
+  display: flex;
+  gap: 6px;
+}
+.btn-subtle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ink);
+  transition: all .12s ease;
+}
+.btn-subtle:hover {
+  background: #f7f5f0;
+}
+.btn-subtle.danger {
+  color: #c93b2b;
+  border-color: #f7d2cf;
+  background: #fef5f4;
+}
+.btn-subtle.danger:hover {
+  background: #fce8e6;
+}
+.checkbox-toggle-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  padding: 14px 16px;
+  border-radius: 13px;
+  background: #fbf9f6;
+  border: 1px solid var(--line);
+  user-select: none;
+  transition: background .15s ease;
+  margin-top: 6px;
+}
+.checkbox-toggle-wrap:hover {
+  background: #f5f1eb;
+}
+.checkbox-toggle-wrap input[type="checkbox"] {
+  width: 19px;
+  height: 19px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.checkbox-toggle-wrap strong {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+
