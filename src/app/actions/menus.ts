@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { ADDON_CATEGORY, DISH_CATEGORY } from "@/lib/data/types";
+import { ADDON_CATEGORY, DISH_CATEGORY, SERVICE_CATEGORY } from "@/lib/data/types";
 import { recalculateMenuCosts } from "@/lib/menu-cost";
 import { InputError, amountOrZero, dbError, id, money, oneOf, runAction, text } from "@/lib/server-action";
 
@@ -19,7 +19,7 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const menuId = String(form.get("id") ?? "") || null;
     const name = text(form, "name", "ชื่อเมนู", { max: 120 });
-    const category = oneOf(form, "category", [DISH_CATEGORY, ADDON_CATEGORY] as const, "ประเภทเมนู");
+    const category = oneOf(form, "category", [DISH_CATEGORY, ADDON_CATEGORY, SERVICE_CATEGORY] as const, "ประเภทเมนู");
     const price = money(form, "price", "ราคาขาย", { required: true, positive: true });
     const removeImage = form.get("remove_image") === "true";
     const imageFile = form.get("image") as File | null;
