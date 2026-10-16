@@ -210,7 +210,9 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       if (json.isDuplicate) {
         setResult({
           ok: false,
-          text: `สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? ""}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
+          text: json.duplicateReason
+            ? `${json.duplicateReason} — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`
+            : `สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? "เดิม"}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
         });
         return;
       }

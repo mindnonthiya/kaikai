@@ -1408,6 +1408,11 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   background: #fef2f2;
   border-color: #fecaca;
 }
+.batch-slip-row.is-duplicate.is-selected {
+  opacity: 1;
+  background: #fffdfa;
+  border-color: #f59e0b;
+}
 .col-select input[type="checkbox"] {
   width: 18px;
   height: 18px;

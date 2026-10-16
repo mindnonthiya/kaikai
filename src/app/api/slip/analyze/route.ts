@@ -5,7 +5,6 @@ import { GeminiOcrProvider } from "@/lib/ocr/gemini";
 import { createClient } from "@/lib/supabase/server";
 
 function getActiveOcrProvider() {
-  let provider = (process.env.OCR_PROVIDER ?? "").toLowerCase().trim();
   let apiKey = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
 
   // If empty in process.env, read directly from .env.local / .env.cloud on disk
@@ -18,12 +17,8 @@ function getActiveOcrProvider() {
         if (fs.existsSync(fullPath)) {
           const content = fs.readFileSync(fullPath, "utf-8");
           const mKey = content.match(/OCR_API_KEY\s*=\s*([^\r\n]+)/);
-          const mProv = content.match(/OCR_PROVIDER\s*=\s*([^\r\n]+)/);
           if (mKey && mKey[1]?.trim()) {
             apiKey = mKey[1].trim().replace(/^["']|["']$/g, "");
-            if (mProv && mProv[1]?.trim()) {
-              provider = mProv[1].trim().replace(/^["']|["']$/g, "").toLowerCase();
-            }
             if (apiKey) break;
           }
         }
@@ -63,25 +58,39 @@ export async function POST(req: Request) {
       hash = [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
     }
 
-    // Check duplicate slip in database
-    let isDuplicate = false;
-    let duplicateSaleNumber: number | null = null;
-    let duplicateSoldAt: string | null = null;
+    // 1. Initial file hash check (owner-scoped)
+    let hashDuplicate: { saleNumber?: number; soldAt?: string } | null = null;
+    if (hash) {
+      const { data: existingSlip } = await supabase
+        .from("slip_uploads")
+        .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+        .eq("owner_id", user.id)
+        .eq("file_hash_sha256", hash)
+        .maybeSingle();
 
-    const { data: existingSlip } = await supabase
-      .from("slip_uploads")
-      .select("id, sale_id, created_at, sales(sale_number, sold_at)")
-      .eq("file_hash_sha256", hash)
-      .maybeSingle();
-
-    if (existingSlip) {
-      isDuplicate = true;
-      const sale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string } | null })?.sales;
-      if (sale) {
-        duplicateSaleNumber = sale.sale_number;
-        duplicateSoldAt = sale.sold_at;
+      if (existingSlip) {
+        const rawSale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+        const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
+        if (sale?.sale_number) {
+          hashDuplicate = {
+            saleNumber: sale.sale_number,
+            soldAt: sale.sold_at,
+          };
+        } else {
+          hashDuplicate = {
+            saleNumber: undefined,
+            soldAt: existingSlip.created_at,
+          };
+        }
       }
     }
+
+    let isDuplicate = Boolean(hashDuplicate);
+    let duplicateReason = isDuplicate
+      ? `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate?.saleNumber ?? "เดิม"}`
+      : undefined;
+    let duplicateSaleNumber = hashDuplicate?.saleNumber;
+    let duplicateSoldAt = hashDuplicate?.soldAt;
 
     const ocrProvider = getActiveOcrProvider();
     if (!ocrProvider) {
@@ -90,6 +99,7 @@ export async function POST(req: Request) {
         hasProvider: false,
         hash,
         isDuplicate,
+        duplicateReason,
         duplicateSaleNumber,
         duplicateSoldAt,
         message: "ยังไม่ได้ตั้งค่า OCR API Key (สามารถกรอกตัวเลขเองได้)",
@@ -98,11 +108,92 @@ export async function POST(req: Request) {
 
     try {
       const ocrResult = await ocrProvider.readSlip(buffer, file.type || "image/webp");
+
+      // 2. Reference Number check (Unique per banking transaction)
+      let refDuplicate: { saleNumber?: number; soldAt?: string; ref: string } | null = null;
+      const cleanRef = ocrResult?.referenceNumber?.trim();
+
+      if (cleanRef && cleanRef.length >= 6) {
+        // A. Check in payments table by reference_number
+        const { data: paymentMatch } = await supabase
+          .from("payments")
+          .select("sale_id, sales(sale_number, sold_at)")
+          .eq("owner_id", user.id)
+          .eq("reference_number", cleanRef)
+          .maybeSingle();
+
+        if (paymentMatch) {
+          const rawSale = (paymentMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+          const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
+          if (sale?.sale_number) {
+            refDuplicate = {
+              saleNumber: sale.sale_number,
+              soldAt: sale.sold_at,
+              ref: cleanRef,
+            };
+          }
+        }
+
+        // B. Check in slip_uploads table by ocr_reference_number
+        if (!refDuplicate) {
+          const { data: slipRefMatch } = await supabase
+            .from("slip_uploads")
+            .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+            .eq("owner_id", user.id)
+            .eq("ocr_reference_number", cleanRef)
+            .maybeSingle();
+
+          if (slipRefMatch) {
+            const rawSale = (slipRefMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+            const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
+            if (sale?.sale_number) {
+              refDuplicate = {
+                saleNumber: sale.sale_number,
+                soldAt: sale.sold_at,
+                ref: cleanRef,
+              };
+            }
+          }
+        }
+
+        // C. Check in sales.notes if payments/slip_uploads didn't have it
+        if (!refDuplicate) {
+          const { data: noteMatch } = await supabase
+            .from("sales")
+            .select("id, sale_number, sold_at")
+            .eq("owner_id", user.id)
+            .ilike("notes", `%${cleanRef}%`)
+            .maybeSingle();
+
+          if (noteMatch) {
+            refDuplicate = {
+              saleNumber: noteMatch.sale_number,
+              soldAt: noteMatch.sold_at,
+              ref: cleanRef,
+            };
+          }
+        }
+      }
+
+      // If reference duplicate found, it takes highest precedence (more descriptive than file hash)
+      if (refDuplicate) {
+        isDuplicate = true;
+        duplicateSaleNumber = refDuplicate.saleNumber;
+        duplicateSoldAt = refDuplicate.soldAt;
+        duplicateReason = `เลขอ้างอิง Ref: ${cleanRef} ตรงกับบิล #${refDuplicate.saleNumber ?? "เดิม"}`;
+      } else if (hashDuplicate) {
+        isDuplicate = true;
+        duplicateSaleNumber = hashDuplicate.saleNumber;
+        duplicateSoldAt = hashDuplicate.soldAt;
+        duplicateReason = `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate.saleNumber ?? "เดิม"}`;
+      }
+
       return NextResponse.json({
         ok: true,
         hasProvider: true,
         hash,
         isDuplicate,
+        duplicateReason,
         duplicateSaleNumber,
         duplicateSoldAt,
         result: ocrResult,
@@ -117,6 +208,7 @@ export async function POST(req: Request) {
           hasProvider: true,
           hash,
           isDuplicate,
+          duplicateReason,
           duplicateSaleNumber,
           duplicateSoldAt,
           isRateLimit,
