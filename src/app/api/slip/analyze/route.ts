@@ -110,15 +110,22 @@ export async function POST(req: Request) {
     } catch (ocrErr: unknown) {
       console.error("OCR reading failed:", ocrErr);
       const msg = ocrErr instanceof Error ? ocrErr.message : "อ่านสลิปไม่สำเร็จ กรุณากรอกยอดเงินด้วยตนเอง";
-      return NextResponse.json({
-        ok: true,
-        hasProvider: true,
-        hash,
-        isDuplicate,
-        duplicateSaleNumber,
-        duplicateSoldAt,
-        ocrError: msg,
-      });
+      const isRateLimit = /429|resource_exhausted|quota|exceeded/i.test(msg);
+      return NextResponse.json(
+        {
+          ok: false,
+          hasProvider: true,
+          hash,
+          isDuplicate,
+          duplicateSaleNumber,
+          duplicateSoldAt,
+          isRateLimit,
+          error: isRateLimit
+            ? "ระบบกำลังรอคิวอ่านสลิปจาก Google AI (โควตาชั่วคราว)"
+            : msg,
+        },
+        { status: isRateLimit ? 429 : 200 }
+      );
     }
   } catch (err: unknown) {
     console.error("Analyze slip route error:", err);

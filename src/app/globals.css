@@ -1667,6 +1667,25 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   color: #0f172a;
 }
 
+.slip-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.slip-retry-btn:hover {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .slip-item-editor {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
