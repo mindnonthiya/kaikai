@@ -85,10 +85,112 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   const menuMap = new Map(menus.map((m) => [m.id, m]));
   const presetMap = new Map(presets.map((p) => [p.id, p]));
 
-  // Find matching preset by amount
-  function matchPresetByAmount(amountSatang: number): PricePreset | null {
-    if (!amountSatang) return null;
-    return presets.find((p) => p.amountSatang === amountSatang) ?? null;
+  type SmartMatch = {
+    presetId: string | null;
+    name: string;
+    fulfillment: Fulfillment;
+    deliveryChargedSatang: number;
+    items: Array<{ menuId: string; quantity: number }>;
+  };
+
+  // Smart Matching: Matches presets, delivery/pickup variants, or direct menu pricing
+  function findSmartMatch(amountSatang: number): SmartMatch | null {
+    if (!amountSatang || amountSatang <= 0) return null;
+
+    // 1. Exact match with an existing Price Preset
+    const exactPreset = presets.find((p) => p.amountSatang === amountSatang);
+    if (exactPreset) {
+      return {
+        presetId: exactPreset.id,
+        name: exactPreset.name,
+        fulfillment: exactPreset.fulfillment,
+        deliveryChargedSatang: exactPreset.deliveryChargedSatang,
+        items: [...exactPreset.items],
+      };
+    }
+
+    // 2. Delivery preset matched as Pickup (food price only, e.g. 193 - 15 = 178)
+    for (const preset of presets) {
+      if (preset.fulfillment === "delivery" && preset.deliveryChargedSatang > 0) {
+        const foodOnly = preset.amountSatang - preset.deliveryChargedSatang;
+        if (foodOnly === amountSatang) {
+          return {
+            presetId: preset.id,
+            name: `${preset.name} (รับเอง)`,
+            fulfillment: "pickup",
+            deliveryChargedSatang: 0,
+            items: [...preset.items],
+          };
+        }
+      }
+    }
+
+    // 3. Pickup preset matched as Delivery (food price + default delivery)
+    if (defaultDeliveryFee > 0) {
+      for (const preset of presets) {
+        if (preset.fulfillment === "pickup") {
+          const withDelivery = preset.amountSatang + defaultDeliveryFee;
+          if (withDelivery === amountSatang) {
+            return {
+              presetId: preset.id,
+              name: `${preset.name} (ส่ง)`,
+              fulfillment: "delivery",
+              deliveryChargedSatang: defaultDeliveryFee,
+              items: [...preset.items],
+            };
+          }
+        }
+      }
+    }
+
+    // 4. Exact match with a single Menu item (pickup)
+    const exactMenu = menus.find((m) => m.price === amountSatang);
+    if (exactMenu) {
+      return {
+        presetId: null,
+        name: `${exactMenu.name} × 1`,
+        fulfillment: "pickup",
+        deliveryChargedSatang: 0,
+        items: [{ menuId: exactMenu.id, quantity: 1 }],
+      };
+    }
+
+    // 5. Multiple of a single Menu item (e.g. 89 x 2 = 178)
+    for (const menu of menus) {
+      if (menu.price > 0 && amountSatang % menu.price === 0) {
+        const qty = Math.round(amountSatang / menu.price);
+        if (qty >= 2 && qty <= 20) {
+          return {
+            presetId: null,
+            name: `${menu.name} × ${qty}`,
+            fulfillment: "pickup",
+            deliveryChargedSatang: 0,
+            items: [{ menuId: menu.id, quantity: qty }],
+          };
+        }
+      }
+    }
+
+    // 6. Single or multiple Menu items with default delivery fee
+    if (defaultDeliveryFee > 0 && amountSatang > defaultDeliveryFee) {
+      const food = amountSatang - defaultDeliveryFee;
+      for (const menu of menus) {
+        if (menu.price > 0 && food % menu.price === 0) {
+          const qty = Math.round(food / menu.price);
+          if (qty >= 1 && qty <= 20) {
+            return {
+              presetId: null,
+              name: `${menu.name}${qty > 1 ? ` × ${qty}` : ""} (ส่ง)`,
+              fulfillment: "delivery",
+              deliveryChargedSatang: defaultDeliveryFee,
+              items: [{ menuId: menu.id, quantity: qty }],
+            };
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   // Handle file selection (multiple)
@@ -180,8 +282,8 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         }
       }
 
-      // 3. Match with Presets
-      const matched = matchPresetByAmount(amountSatang);
+      // 3. Smart Match with Presets, Variations, or Menus
+      const matched = findSmartMatch(amountSatang);
 
       setRows((prev) =>
         prev.map((row) => {
@@ -212,7 +314,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             referenceNumber: ref,
             amountSatang,
             soldAt,
-            matchedPresetId: matched?.id ?? null,
+            matchedPresetId: matched?.presetId ?? null,
             fulfillment,
             deliveryChargedSatang: deliveryFee,
             items,
@@ -240,15 +342,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
     }
   }
 
-  // Handle direct amount edit (e.g. typing 84 auto-matches the preset)
+  // Handle direct amount edit (e.g. typing 84 or 178 auto-matches)
   function handleAmountChange(rowId: string, newBahtStr: string) {
     const parsedSatang = tryBahtToSatang(newBahtStr);
     const amountSatang = parsedSatang ?? 0;
-    const matched = matchPresetByAmount(amountSatang);
+    const matched = findSmartMatch(amountSatang);
 
     updateRow(rowId, {
       amountSatang,
-      matchedPresetId: matched?.id ?? null,
+      matchedPresetId: matched?.presetId ?? null,
       fulfillment: matched ? matched.fulfillment : "delivery",
       deliveryChargedSatang: matched ? matched.deliveryChargedSatang : defaultDeliveryFee,
       items: matched ? [...matched.items] : [],
@@ -556,9 +658,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                         </div>
                       </div>
 
-                      {matchedPreset && (
+                      {(matchedPreset || (row.statusText?.startsWith("ตรงสูตร:") && row.items.length > 0)) && (
                         <span className="badge-preset-matched">
-                          <Check size={12} /> ตรงสูตร: {matchedPreset.name}
+                          <Check size={12} /> {matchedPreset ? `ตรงสูตร: ${matchedPreset.name}` : row.statusText}
                         </span>
                       )}
 
@@ -593,9 +695,13 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                       <select
                         value={row.matchedPresetId ?? ""}
                         onChange={(e) => handlePresetChange(row.id, e.target.value)}
-                        className={`preset-select ${matchedPreset ? "has-preset" : "no-preset"}`}
+                        className={`preset-select ${matchedPreset || hasItems ? "has-preset" : "no-preset"}`}
                       >
-                        <option value="">— เลือกสูตรเปิดบิลด่วน —</option>
+                        <option value="">
+                          {hasItems && !matchedPreset
+                            ? `— จับคู่อัตโนมัติ: ${row.statusText?.replace("ตรงสูตร: ", "") || "ตามยอดเงิน"} —`
+                            : "— เลือกสูตรเปิดบิลด่วน —"}
+                        </option>
                         {presets.map((p) => (
                           <option key={p.id} value={p.id}>
                             {formatBaht(p.amountSatang)} · {p.name}
