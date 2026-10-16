@@ -22,6 +22,7 @@ import type { Fulfillment, MenuRecord, PricePreset } from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
 import { formatBaht, tryBahtToSatang } from "@/lib/money";
 import { matchPresetStrictly } from "@/lib/preset-matcher";
+import { checkIntraBatchDuplicate } from "@/lib/slip-duplicate";
 import { createClient } from "@/lib/supabase/client";
 
 export type BatchSlipRow = {
@@ -54,7 +55,9 @@ export type BatchSlipRow = {
 
   // Duplicate detection
   isDuplicate: boolean;
+  duplicateReason?: string;
   duplicateSaleNumber?: number;
+  duplicateSoldAt?: string;
 
   selected: boolean;
 
@@ -243,13 +246,17 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       let amountSatang = 0;
       let soldAt = new Date().toISOString();
       let isDuplicate = false;
+      let duplicateReason: string | undefined;
       let duplicateSaleNumber: number | undefined;
+      let duplicateSoldAt: string | undefined;
       let bank: string | undefined;
       let ref: string | undefined;
 
       if (json.ok && json.result) {
         isDuplicate = Boolean(json.isDuplicate);
+        duplicateReason = json.duplicateReason;
         duplicateSaleNumber = json.duplicateSaleNumber ?? undefined;
+        duplicateSoldAt = json.duplicateSoldAt ?? undefined;
 
         amountSatang = json.result.amountSatang ?? 0;
         if (json.result.transferredAt) {
@@ -259,7 +266,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         ref = json.result.referenceNumber;
       } else if (json.isDuplicate) {
         isDuplicate = true;
+        duplicateReason = json.duplicateReason;
         duplicateSaleNumber = json.duplicateSaleNumber ?? undefined;
+        duplicateSoldAt = json.duplicateSoldAt ?? undefined;
       }
 
       // 3. Strict Match with Presets ONLY (Strict 1:1, no fuzzy substitutions)
@@ -268,6 +277,20 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       setRows((prev) =>
         prev.map((row) => {
           if (row.id !== rowId) return row;
+
+          // Check intra-batch duplicate against other already-processed slips in this batch
+          let finalIsDuplicate = isDuplicate;
+          let finalDuplicateReason = duplicateReason;
+          if (!finalIsDuplicate) {
+            const intraCheck = checkIntraBatchDuplicate(
+              { id: rowId, hash: compressed.hash, referenceNumber: ref },
+              prev.filter((r) => r.id !== rowId && r.status !== "processing")
+            );
+            if (intraCheck.isDuplicate) {
+              finalIsDuplicate = true;
+              finalDuplicateReason = intraCheck.reason;
+            }
+          }
 
           const fulfillment = matched ? matched.fulfillment : "delivery";
           const deliveryFee = matched ? matched.deliveryChargedSatang : defaultDeliveryFee;
@@ -280,9 +303,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             previewUrl: compressed.previewUrl,
             hash: compressed.hash,
             compressedBytes: compressed.compressedBytes,
-            status: isDuplicate ? "duplicate" : "ready",
-            statusText: isDuplicate
-              ? `สลิปซ้ำ (เคยลงในบิล #${duplicateSaleNumber ?? "เดิม"})`
+            status: finalIsDuplicate ? "duplicate" : "ready",
+            statusText: finalIsDuplicate
+              ? finalDuplicateReason || `สลิปซ้ำ (เคยลงในบิล #${duplicateSaleNumber ?? "เดิม"})`
               : matched
               ? `ตรงสูตร: ${matched.name}`
               : amountSatang > 0
@@ -298,9 +321,12 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             fulfillment,
             deliveryChargedSatang: deliveryFee,
             items,
-            isDuplicate,
-            selected: !isDuplicate, // auto-uncheck duplicate slips
-            isEditingItems: !matched && amountSatang > 0 && !isDuplicate,
+            isDuplicate: finalIsDuplicate,
+            duplicateReason: finalDuplicateReason,
+            duplicateSaleNumber,
+            duplicateSoldAt,
+            selected: !finalIsDuplicate, // auto-uncheck suspected duplicates, merchant can check to confirm
+            isEditingItems: !matched && amountSatang > 0 && !finalIsDuplicate,
           };
         })
       );
@@ -378,7 +404,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   }
 
   function toggleAll(checked: boolean) {
-    setRows((prev) => prev.map((r) => (r.isDuplicate ? r : { ...r, selected: checked })));
+    setRows((prev) => prev.map((r) => ({ ...r, selected: checked })));
   }
 
   function toggleEditItems(rowId: string) {
@@ -563,7 +589,8 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               storage_path: uploadedPath,
               mime_type: "image/webp",
               size_bytes: row.compressedBytes || row.sourceFile.size,
-              file_hash_sha256: row.hash,
+              // If merchant confirmed to save a duplicate slip, append salt so DB unique constraint doesn't reject
+              file_hash_sha256: row.isDuplicate ? `${row.hash}-ov-${crypto.randomUUID().slice(0, 8)}` : row.hash,
             }
           : undefined;
 
@@ -586,12 +613,16 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             customer_name: row.customerName.trim() || null,
             sold_at: row.soldAt,
             notes: row.referenceNumber ? `เลขอ้างอิง: ${row.referenceNumber}` : null,
+            reference_number: row.referenceNumber || null,
             ...(slipPayload ? { slip: slipPayload } : {}),
           },
         });
 
         if (saleError) {
           if (uploadedPath) await supabase.storage.from("sale-slips").remove([uploadedPath]);
+          if (saleError.message.includes("slip_uploads_owner_id_file_hash_sha256_key")) {
+            throw new Error("ไฟล์รูปสลิปนี้เคยบันทึกในระบบแล้ว");
+          }
           throw new Error(saleError.message);
         }
 
@@ -745,7 +776,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                     <input
                       type="checkbox"
                       checked={row.selected}
-                      disabled={row.isDuplicate || row.status === "processing"}
+                      disabled={row.status === "processing"}
                       onChange={(e) => updateRow(row.id, { selected: e.target.checked })}
                     />
                   </div>
@@ -793,8 +824,8 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
 
                       {row.bank && <span className="slip-bank-badge">{row.bank}</span>}
                       {row.isDuplicate && (
-                        <span className="badge-duplicate">
-                          สลิปซ้ำ (บิล #{row.duplicateSaleNumber ?? "เดิม"})
+                        <span className="badge-duplicate" title={row.duplicateReason}>
+                          {row.duplicateReason || `สลิปซ้ำ (บิล #${row.duplicateSaleNumber ?? "เดิม"})`}
                         </span>
                       )}
                     </div>
@@ -999,9 +1030,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                           </button>
                         </div>
                       ) : row.isDuplicate ? (
-                        <span className="status-badge duplicate">
-                          <AlertCircle size={13} /> ข้ามรายการนี้ (ซ้ำ)
-                        </span>
+                        row.selected ? (
+                          <span className="status-badge ready">
+                            <CheckCircle2 size={13} /> {isReady ? "พร้อมบันทึก (ยืนยันว่าไม่ซ้ำ)" : "เลือกบันทึกแล้ว (รอเลือกเมนู)"}
+                          </span>
+                        ) : (
+                          <span className="status-badge duplicate">
+                            <AlertCircle size={13} /> ไม่ได้เลือก (สงสัยว่าซ้ำ)
+                          </span>
+                        )
                       ) : isReady ? (
                         <span className="status-badge ready">
                           <CheckCircle2 size={13} /> พร้อมบันทึก
