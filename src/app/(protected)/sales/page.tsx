@@ -64,7 +64,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
             <td><strong>{formatTime(sale.soldAt)}</strong> <small className="muted">{formatThaiShortDate(sale.soldAt)}</small><br />#{sale.saleNumber}</td>
             <td>{sale.customerName ?? "ลูกค้าทั่วไป"}</td>
             <td>{sale.items.map((i) => `${i.name} ×${i.quantity}`).join(" · ")}
-              {(sale.fulfillment === "delivery" || sale.packagingCost > 0) && <><br /><small className="muted">{sale.fulfillment === "delivery" ? `🛵 ส่ง ${formatBaht(sale.delivery)}` : "รับเอง"}{sale.packagingCost > 0 ? ` · บรรจุภัณฑ์ ${formatBaht(sale.packagingCost)}` : ""}</small></>}
+              {(sale.fulfillment === "delivery" || sale.packagingCost > 0) && <><br /><small className="muted">{sale.fulfillment === "delivery" ? `ส่ง ${formatBaht(sale.delivery)}` : "รับเอง"}{sale.packagingCost > 0 ? ` · บรรจุภัณฑ์ ${formatBaht(sale.packagingCost)}` : ""}</small></>}
             </td>
             <td>{sale.payments.length ? [...new Set(sale.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", ") : "—"}</td>
             <td>{statusBadge(sale)}</td>

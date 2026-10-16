@@ -65,7 +65,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <div className="summary-row"><span>กำไรสุทธิ (ต้นทุนประมาณ)</span><strong>{formatBaht(current.netProfit)}</strong></div>
       <div className="summary-row"><span>{foodGap >= 0 ? "ซื้อจริงน้อยกว่าประมาณ" : "ซื้อจริงมากกว่าประมาณ"}</span><strong>{foodGap >= 0 ? "+" : "−"}{formatBaht(Math.abs(foodGap))}</strong></div>
       <div className="summary-total"><span>กำไรสุทธิจากยอดซื้อจริง</span><strong>{formatBaht(netFromPurchases)}</strong></div>
-      {missingUtilities.length > 0 && <p className="muted-note">⚠️ ช่วงนี้ยังไม่มี {missingUtilities.join(" / ")} — บิลมาแล้วลงในหน้าค่าใช้จ่าย กำไรสุทธิจะลดลงตามจริง</p>}
+      {missingUtilities.length > 0 && <p className="muted-note">ช่วงนี้ยังไม่มี {missingUtilities.join(" / ")} — บิลมาแล้วลงในหน้าค่าใช้จ่าย กำไรสุทธิจะลดลงตามจริง</p>}
     </section>
 
     <section className="panel table-panel spaced">
