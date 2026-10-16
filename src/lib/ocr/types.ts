@@ -5,15 +5,28 @@ export type OcrResult = {
   transferredAt?: string;
   bank?: string;
   referenceNumber?: string;
+  senderName?: string;
+  receiverName?: string;
   confidence?: number;
 };
 
 export interface OcrProvider {
   readonly name: string;
-  readSlip(file: ArrayBuffer): Promise<OcrResult>;
+  readSlip(file: ArrayBuffer, mimeType?: string): Promise<OcrResult>;
 }
 
+import { GeminiOcrProvider } from "./gemini";
+
 export function getOcrProvider(): OcrProvider | null {
-  // MVP deliberately has no fake OCR. Add a server-only adapter after selecting a provider.
+  const provider = (process.env.OCR_PROVIDER ?? "").toLowerCase().trim();
+  const apiKey = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
+
+  if (!apiKey) return null;
+
+  if (provider === "gemini" || !provider || apiKey.startsWith("AIza")) {
+    return new GeminiOcrProvider(apiKey);
+  }
+
   return null;
 }
+

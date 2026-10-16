@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DAY_MS } from "@/lib/time";
 import type {
   ExpenseKind, ExpenseRecord, Fulfillment, IngredientCosting, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
-  ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
+  PricePreset, ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
 } from "./types";
 
 type Row = Record<string, unknown>;
@@ -18,7 +18,8 @@ const PAGE_SIZE = 1000; // matches the Data API max_rows default
 export const DEFAULT_DELIVERY_FEE_SATANG = 1500;
 /** Starting guess for other ingredients (rice, herbs, sauce) = 10% of food sales, until there is real data. */
 export const DEFAULT_INITIAL_POOLED_BPS = 1000;
-const SALE_SETTINGS_KEY = "sales";
+export const SALE_SETTINGS_KEY = "sales";
+export const PRICE_PRESETS_SETTINGS_KEY = "price_presets";
 
 const num = (value: unknown) => (value === null || value === undefined ? 0 : Number(value));
 const str = (value: unknown) => (value === null || value === undefined ? "" : String(value));
@@ -250,6 +251,37 @@ export async function fetchSaleSettings(): Promise<SaleSettings> {
     showMenuImages,
   };
 }
+
+export async function fetchPricePresets(): Promise<PricePreset[]> {
+  if (!hasSupabaseEnv) return [];
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("settings").select("value").eq("key", PRICE_PRESETS_SETTINGS_KEY).maybeSingle();
+  if (error) fail("สูตรเปิดบิลด่วน", error);
+  const value = data?.value;
+  if (!value) return [];
+  const list = Array.isArray(value)
+    ? value
+    : Array.isArray((value as Record<string, unknown>).presets)
+    ? ((value as Record<string, unknown>).presets as unknown[])
+    : [];
+  return list.map((item: unknown) => {
+    const p = (item ?? {}) as Record<string, unknown>;
+    const rawItems = Array.isArray(p.items) ? (p.items as Record<string, unknown>[]) : [];
+    return {
+      id: str(p.id) || crypto.randomUUID(),
+      name: str(p.name),
+      amountSatang: num(p.amountSatang ?? p.amount_satang),
+      fulfillment: p.fulfillment === "delivery" ? "delivery" : "pickup",
+      deliveryChargedSatang: num(p.deliveryChargedSatang ?? p.delivery_charged_satang),
+      items: rawItems.map((it) => ({
+        menuId: str(it.menuId ?? it.menu_id),
+        quantity: num(it.quantity) || 1,
+      })),
+      notes: strOrNull(p.notes) ?? undefined,
+    };
+  });
+}
+
 
 export type PooledRate = ReturnType<typeof pooledIngredientBps> & { pooledPurchases: number; foodRevenue: number; historyDays: number; initialBps: number };
 

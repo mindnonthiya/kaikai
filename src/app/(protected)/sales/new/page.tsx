@@ -1,12 +1,19 @@
 import Link from "next/link";
+import { Sparkles } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { SaleComposer, type MenuOption, type PackagingOption } from "./sale-composer";
-import { fetchMenus, fetchPackaging, fetchPooledRate, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
+import { fetchMenus, fetchPackaging, fetchPooledRate, fetchPricePresets, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
 import { pooledCost } from "@/lib/analytics";
 import { isAddonCategory, isServiceCategory } from "@/lib/data/types";
 
 export default async function NewSalePage() {
-  const [allMenus, recipeItems, allPackaging, settings] = await Promise.all([fetchMenus(), fetchRecipeItems(), fetchPackaging(), fetchSaleSettings()]);
+  const [allMenus, recipeItems, allPackaging, settings, presets] = await Promise.all([
+    fetchMenus(),
+    fetchRecipeItems(),
+    fetchPackaging(),
+    fetchSaleSettings(),
+    fetchPricePresets(),
+  ]);
   const pooled = await fetchPooledRate(settings);
   const packaging: PackagingOption[] = allPackaging
     .filter((p) => p.perOrder && p.isActive)
@@ -34,13 +41,27 @@ export default async function NewSalePage() {
       };
     });
   return <>
-    <PageTitle eyebrow="บันทึกรายการ" title="เปิดบิล" description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก" action={<Link className="secondary-button" href="/sales">ประวัติการขาย</Link>} />
+    <PageTitle
+      eyebrow="บันทึกรายการ"
+      title="เปิดบิล"
+      description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก"
+      action={
+        <div style={{ display: "flex", gap: "8px" }}>
+          <Link className="primary-button" href="/sales/import-slips" style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)", borderColor: "transparent", color: "#fff" }}>
+            <Sparkles size={16} /> นำเข้าสลิปเป็นชุด ⚡
+          </Link>
+          <Link className="secondary-button" href="/sales">ประวัติการขาย</Link>
+        </div>
+      }
+    />
     <SaleComposer
       menus={menus}
       packaging={packaging}
       defaultDeliveryFee={settings.defaultDeliveryFee}
       pooledBps={pooled.bps}
       showMenuImages={settings.showMenuImages ?? true}
+      presets={presets}
     />
   </>;
 }
+
