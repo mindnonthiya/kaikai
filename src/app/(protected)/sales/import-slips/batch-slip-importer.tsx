@@ -571,7 +571,19 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                     </div>
 
                     <div className="slip-meta-line">
-                      <span>เวลาโอน: {new Date(row.soldAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} น.</span>
+                      <span>
+                        โอนเมื่อ:{" "}
+                        {new Date(row.soldAt).toLocaleDateString("th-TH", {
+                          day: "numeric",
+                          month: "short",
+                          year: "2-digit",
+                        })}{" "}
+                        {new Date(row.soldAt).toLocaleTimeString("th-TH", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        น.
+                      </span>
                       {row.referenceNumber && <span> · Ref: {row.referenceNumber}</span>}
                     </div>
 
