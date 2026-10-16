@@ -10,7 +10,6 @@ import {
   Eye,
   Loader2,
   Plus,
-  Sparkles,
   Trash2,
   UploadCloud,
   X,
@@ -384,10 +383,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       {/* Sub navigation between single and batch mode */}
       <div className="sales-mode-tabs">
         <Link href="/sales/new" className="sales-mode-tab">
-          เปิดบิลเดี่ยว (ทีละใบ)
+          เปิดบิลเดี่ยว
         </Link>
         <Link href="/sales/import-slips" className="sales-mode-tab active">
-          <Sparkles size={16} /> นำเข้าสลิปเป็นชุด (Batch) ⚡
+          นำเข้าสลิปเป็นชุด
         </Link>
       </div>
 
@@ -407,7 +406,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             <UploadCloud size={36} />
           </div>
           <div className="batch-dropzone-text">
-            <strong>แตะเลือกรูปสลิปหลายๆ รูปพร้อมกัน (Batch Import)</strong>
+            <strong>แตะเลือกรูปสลิปหลายๆ รูปพร้อมกัน</strong>
             <span>รองรับ JPG, PNG, WebP — ระบบบีบอัดรูปจิ๋ว ~30 KB และอ่านยอดเงินออโต้</span>
           </div>
           <div className="batch-dropzone-btn">

@@ -19,12 +19,12 @@ export default async function BatchSlipImportPage() {
     <>
       <PageTitle
         eyebrow="บันทึกรายการ"
-        title="นำเข้าสลิปเป็นชุด (Batch Import)"
+        title="นำเข้าสลิปเป็นชุด"
         description="เลือกรูปสลิปหลายๆ รูปพร้อมกัน ระบบบีบอัดรูปจิ๋ว อ่านยอดเงิน และจับคู่สูตรเมนูให้อัตโนมัติ"
         action={
           <div style={{ display: "flex", gap: "8px" }}>
             <Link className="secondary-button" href="/settings">
-              ⚙️ ตั้งค่าสูตรราคา
+              ตั้งค่าสูตรราคา
             </Link>
             <Link className="secondary-button" href="/sales">
               ประวัติการขาย

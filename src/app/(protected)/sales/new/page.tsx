@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Sparkles } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { SaleComposer, type MenuOption, type PackagingOption } from "./sale-composer";
 import { fetchMenus, fetchPackaging, fetchPooledRate, fetchPricePresets, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
@@ -48,7 +47,7 @@ export default async function NewSalePage() {
       action={
         <div style={{ display: "flex", gap: "8px" }}>
           <Link className="primary-button" href="/sales/import-slips" style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)", borderColor: "transparent", color: "#fff" }}>
-            <Sparkles size={16} /> นำเข้าสลิปเป็นชุด ⚡
+            นำเข้าสลิปเป็นชุด
           </Link>
           <Link className="secondary-button" href="/sales">ประวัติการขาย</Link>
         </div>

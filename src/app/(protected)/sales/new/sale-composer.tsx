@@ -330,10 +330,10 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   return <div className="sale-composer">
     <div className="sales-mode-tabs" style={{ gridColumn: "1 / -1", marginBottom: "8px" }}>
       <span className="sales-mode-tab active">
-        เปิดบิลเดี่ยว (ทีละใบ)
+        เปิดบิลเดี่ยว
       </span>
       <Link href="/sales/import-slips" className="sales-mode-tab">
-        <Sparkles size={16} /> นำเข้าสลิปเป็นชุด (Batch) ⚡
+        นำเข้าสลิปเป็นชุด
       </Link>
     </div>
     <section className="composer-main">
