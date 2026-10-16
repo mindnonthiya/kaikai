@@ -5,18 +5,22 @@ import { useRouter } from "next/navigation";
 import { useId, useRef, useState } from "react";
 import {
   AlertCircle,
+  BookmarkPlus,
   Check,
   CheckCircle2,
   Eye,
   Loader2,
+  Pencil,
   Plus,
   Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
+import { saveAllPricePresets } from "@/app/actions/presets";
 import type { Fulfillment, MenuRecord, PricePreset } from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
 import { formatBaht, tryBahtToSatang } from "@/lib/money";
+import { matchPresetStrictly } from "@/lib/preset-matcher";
 import { createClient } from "@/lib/supabase/client";
 
 export type BatchSlipRow = {
@@ -52,6 +56,9 @@ export type BatchSlipRow = {
   duplicateSaleNumber?: number;
 
   selected: boolean;
+
+  // Inline order item editor toggle
+  isEditingItems?: boolean;
 };
 
 type Props = {
@@ -65,6 +72,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   const router = useRouter();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [currentPresets, setCurrentPresets] = useState<PricePreset[]>(presets);
+  const [savingPresetForRowId, setSavingPresetForRowId] = useState<string | null>(null);
 
   const [rows, setRows] = useState<BatchSlipRow[]>([]);
   const [analyzingRemaining, setAnalyzingRemaining] = useState(0);
@@ -83,115 +93,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   const [previewingImageUrl, setPreviewingImageUrl] = useState<string | null>(null);
 
   const menuMap = new Map(menus.map((m) => [m.id, m]));
-  const presetMap = new Map(presets.map((p) => [p.id, p]));
-
-  type SmartMatch = {
-    presetId: string | null;
-    name: string;
-    fulfillment: Fulfillment;
-    deliveryChargedSatang: number;
-    items: Array<{ menuId: string; quantity: number }>;
-  };
-
-  // Smart Matching: Matches presets, delivery/pickup variants, or direct menu pricing
-  function findSmartMatch(amountSatang: number): SmartMatch | null {
-    if (!amountSatang || amountSatang <= 0) return null;
-
-    // 1. Exact match with an existing Price Preset
-    const exactPreset = presets.find((p) => p.amountSatang === amountSatang);
-    if (exactPreset) {
-      return {
-        presetId: exactPreset.id,
-        name: exactPreset.name,
-        fulfillment: exactPreset.fulfillment,
-        deliveryChargedSatang: exactPreset.deliveryChargedSatang,
-        items: [...exactPreset.items],
-      };
-    }
-
-    // 2. Delivery preset matched as Pickup (food price only, e.g. 193 - 15 = 178)
-    for (const preset of presets) {
-      if (preset.fulfillment === "delivery" && preset.deliveryChargedSatang > 0) {
-        const foodOnly = preset.amountSatang - preset.deliveryChargedSatang;
-        if (foodOnly === amountSatang) {
-          return {
-            presetId: preset.id,
-            name: `${preset.name} (รับเอง)`,
-            fulfillment: "pickup",
-            deliveryChargedSatang: 0,
-            items: [...preset.items],
-          };
-        }
-      }
-    }
-
-    // 3. Pickup preset matched as Delivery (food price + default delivery)
-    if (defaultDeliveryFee > 0) {
-      for (const preset of presets) {
-        if (preset.fulfillment === "pickup") {
-          const withDelivery = preset.amountSatang + defaultDeliveryFee;
-          if (withDelivery === amountSatang) {
-            return {
-              presetId: preset.id,
-              name: `${preset.name} (ส่ง)`,
-              fulfillment: "delivery",
-              deliveryChargedSatang: defaultDeliveryFee,
-              items: [...preset.items],
-            };
-          }
-        }
-      }
-    }
-
-    // 4. Exact match with a single Menu item (pickup)
-    const exactMenu = menus.find((m) => m.price === amountSatang);
-    if (exactMenu) {
-      return {
-        presetId: null,
-        name: `${exactMenu.name} × 1`,
-        fulfillment: "pickup",
-        deliveryChargedSatang: 0,
-        items: [{ menuId: exactMenu.id, quantity: 1 }],
-      };
-    }
-
-    // 5. Multiple of a single Menu item (e.g. 89 x 2 = 178)
-    for (const menu of menus) {
-      if (menu.price > 0 && amountSatang % menu.price === 0) {
-        const qty = Math.round(amountSatang / menu.price);
-        if (qty >= 2 && qty <= 20) {
-          return {
-            presetId: null,
-            name: `${menu.name} × ${qty}`,
-            fulfillment: "pickup",
-            deliveryChargedSatang: 0,
-            items: [{ menuId: menu.id, quantity: qty }],
-          };
-        }
-      }
-    }
-
-    // 6. Single or multiple Menu items with default delivery fee
-    if (defaultDeliveryFee > 0 && amountSatang > defaultDeliveryFee) {
-      const food = amountSatang - defaultDeliveryFee;
-      for (const menu of menus) {
-        if (menu.price > 0 && food % menu.price === 0) {
-          const qty = Math.round(food / menu.price);
-          if (qty >= 1 && qty <= 20) {
-            return {
-              presetId: null,
-              name: `${menu.name}${qty > 1 ? ` × ${qty}` : ""} (ส่ง)`,
-              fulfillment: "delivery",
-              deliveryChargedSatang: defaultDeliveryFee,
-              items: [{ menuId: menu.id, quantity: qty }],
-            };
-          }
-        }
-      }
-    }
-
-    return null;
-  }
+  const presetMap = new Map(currentPresets.map((p) => [p.id, p]));
 
   // Handle file selection (multiple)
   async function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
@@ -231,6 +133,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         customerName: "",
         isDuplicate: false,
         selected: true,
+        isEditingItems: false,
       };
 
       setRows((prev) => [initialRow, ...prev]);
@@ -282,8 +185,8 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         }
       }
 
-      // 3. Smart Match with Presets, Variations, or Menus
-      const matched = findSmartMatch(amountSatang);
+      // 3. Strict Match with Presets ONLY (Strict 1:1, no fuzzy substitutions)
+      const matched = matchPresetStrictly(amountSatang, currentPresets);
 
       setRows((prev) =>
         prev.map((row) => {
@@ -306,7 +209,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               : matched
               ? `ตรงสูตร: ${matched.name}`
               : amountSatang > 0
-              ? "อ่านยอดเงินสำเร็จ (กรุณาเลือกเมนู)"
+              ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
               : "กรุณาระบุยอดเงินและเมนู",
             extractedAmountSatang: amountSatang > 0 ? amountSatang : undefined,
             extractedTransferredAt: soldAt,
@@ -314,12 +217,13 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             referenceNumber: ref,
             amountSatang,
             soldAt,
-            matchedPresetId: matched?.presetId ?? null,
+            matchedPresetId: matched?.id ?? null,
             fulfillment,
             deliveryChargedSatang: deliveryFee,
             items,
             isDuplicate,
             selected: !isDuplicate, // auto-uncheck duplicate slips
+            isEditingItems: !matched && amountSatang > 0 && !isDuplicate,
           };
         })
       );
@@ -342,15 +246,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
     }
   }
 
-  // Handle direct amount edit (e.g. typing 84 or 178 auto-matches)
+  // Handle direct amount edit (strict matching only, never substitute different numbers)
   function handleAmountChange(rowId: string, newBahtStr: string) {
     const parsedSatang = tryBahtToSatang(newBahtStr);
     const amountSatang = parsedSatang ?? 0;
-    const matched = findSmartMatch(amountSatang);
+    const matched = matchPresetStrictly(amountSatang, currentPresets);
 
     updateRow(rowId, {
       amountSatang,
-      matchedPresetId: matched?.presetId ?? null,
+      matchedPresetId: matched?.id ?? null,
       fulfillment: matched ? matched.fulfillment : "delivery",
       deliveryChargedSatang: matched ? matched.deliveryChargedSatang : defaultDeliveryFee,
       items: matched ? [...matched.items] : [],
@@ -358,8 +262,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       statusText: matched
         ? `ตรงสูตร: ${matched.name}`
         : amountSatang > 0
-        ? "กรุณาเลือกสูตรเมนู"
+        ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
         : "ยังไม่มียอดเงิน",
+      isEditingItems: !matched && amountSatang > 0,
     });
   }
 
@@ -369,20 +274,37 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   }
 
   function handlePresetChange(rowId: string, presetId: string) {
-    const preset = presetMap.get(presetId);
-    if (!preset) {
-      updateRow(rowId, { matchedPresetId: null });
+    const row = rows.find((r) => r.id === rowId);
+    if (!row) return;
+
+    if (!presetId) {
+      updateRow(rowId, {
+        matchedPresetId: null,
+        items: [],
+        statusText:
+          row.amountSatang > 0
+            ? `ไม่ตรงสูตรใด (฿${(row.amountSatang / 100).toFixed(0)})`
+            : "ยังไม่มียอดเงิน",
+        isEditingItems: true,
+      });
       return;
     }
 
+    const preset = presetMap.get(presetId);
+    if (!preset) return;
+
+    const newAmount = row.amountSatang > 0 ? row.amountSatang : preset.amountSatang;
+    const isExact = preset.amountSatang === newAmount;
+
     updateRow(rowId, {
-      matchedPresetId: preset.id,
-      amountSatang: preset.amountSatang,
+      amountSatang: newAmount,
+      matchedPresetId: isExact ? preset.id : null,
       fulfillment: preset.fulfillment,
       deliveryChargedSatang: preset.deliveryChargedSatang,
       items: [...preset.items],
       status: "ready",
-      statusText: `ตรงสูตร: ${preset.name}`,
+      statusText: isExact ? `ตรงสูตร: ${preset.name}` : `ใช้รายการจาก: ${preset.name}`,
+      isEditingItems: false,
     });
   }
 
@@ -392,6 +314,134 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
 
   function toggleAll(checked: boolean) {
     setRows((prev) => prev.map((r) => (r.isDuplicate ? r : { ...r, selected: checked })));
+  }
+
+  function toggleEditItems(rowId: string) {
+    setRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, isEditingItems: !r.isEditingItems } : r))
+    );
+  }
+
+  function handleAddItem(rowId: string, menuId: string) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const existing = r.items.find((it) => it.menuId === menuId);
+        let updatedItems: Array<{ menuId: string; quantity: number }>;
+        if (existing) {
+          updatedItems = r.items.map((it) =>
+            it.menuId === menuId ? { ...it, quantity: it.quantity + 1 } : it
+          );
+        } else {
+          updatedItems = [...r.items, { menuId, quantity: 1 }];
+        }
+        return {
+          ...r,
+          items: updatedItems,
+          matchedPresetId: null, // user customized items
+        };
+      })
+    );
+  }
+
+  function handleUpdateItemQty(rowId: string, menuId: string, qty: number) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        let updatedItems: Array<{ menuId: string; quantity: number }>;
+        if (qty <= 0) {
+          updatedItems = r.items.filter((it) => it.menuId !== menuId);
+        } else {
+          updatedItems = r.items.map((it) =>
+            it.menuId === menuId ? { ...it, quantity: qty } : it
+          );
+        }
+        return {
+          ...r,
+          items: updatedItems,
+          matchedPresetId: null,
+        };
+      })
+    );
+  }
+
+  function handleRemoveItem(rowId: string, menuId: string) {
+    handleUpdateItemQty(rowId, menuId, 0);
+  }
+
+  function handleFulfillmentChange(rowId: string, fulfillment: Fulfillment) {
+    updateRow(rowId, {
+      fulfillment,
+      deliveryChargedSatang: fulfillment === "delivery" ? defaultDeliveryFee : 0,
+      matchedPresetId: null,
+    });
+  }
+
+  async function handleQuickSaveAsPreset(row: BatchSlipRow) {
+    if (row.items.length === 0) {
+      alert("กรุณาเลือกรายการเมนูอย่างน้อย 1 รายการก่อนบันทึกเป็นสูตร");
+      return;
+    }
+    if (row.amountSatang <= 0) {
+      alert("กรุณาระบุยอดเงินของสูตร");
+      return;
+    }
+
+    const itemsSummary = row.items
+      .map((it) => {
+        const m = menuMap.get(it.menuId);
+        return m ? `${m.name}${it.quantity > 1 ? ` × ${it.quantity}` : ""}` : "";
+      })
+      .filter(Boolean)
+      .join(" + ");
+    const defaultName = `${itemsSummary} (${row.fulfillment === "delivery" ? "ส่ง" : "รับเอง"})`;
+
+    const inputName = window.prompt("ตั้งชื่อสูตรเปิดบิลใหม่นี้:", defaultName);
+    if (!inputName || !inputName.trim()) return;
+
+    const newPreset: PricePreset = {
+      id: crypto.randomUUID(),
+      name: inputName.trim(),
+      amountSatang: row.amountSatang,
+      fulfillment: row.fulfillment,
+      deliveryChargedSatang: row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0,
+      items: [...row.items],
+    };
+
+    const updatedPresets = [...currentPresets, newPreset];
+    setSavingPresetForRowId(row.id);
+
+    try {
+      const res = await saveAllPricePresets(updatedPresets);
+      if (!res.ok) {
+        alert(res.message || "บันทึกสูตรไม่สำเร็จ");
+        return;
+      }
+      setCurrentPresets(updatedPresets);
+
+      // Auto-match all rows that have this exact amount
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.amountSatang === newPreset.amountSatang) {
+            return {
+              ...r,
+              matchedPresetId: newPreset.id,
+              fulfillment: newPreset.fulfillment,
+              deliveryChargedSatang: newPreset.deliveryChargedSatang,
+              items: [...newPreset.items],
+              statusText: `ตรงสูตร: ${newPreset.name}`,
+              isEditingItems: false,
+            };
+          }
+          return r;
+        })
+      );
+    } catch (err) {
+      console.error("Save preset error:", err);
+      alert("เกิดข้อผิดพลาดในการบันทึกสูตร");
+    } finally {
+      setSavingPresetForRowId(null);
+    }
   }
 
   // Calculated totals
@@ -610,6 +660,14 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               const hasItems = row.items.length > 0;
               const isReady = row.status === "ready" && row.amountSatang > 0 && hasItems;
 
+              const itemsFoodTotalSatang = row.items.reduce((sum, it) => {
+                const m = menuMap.get(it.menuId);
+                return sum + (m ? m.price * it.quantity : 0);
+              }, 0);
+              const orderTotalSatang =
+                itemsFoodTotalSatang + (row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0);
+              const isAmountMatchingFood = row.amountSatang > 0 && orderTotalSatang === row.amountSatang;
+
               return (
                 <div
                   key={row.id}
@@ -658,11 +716,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                         </div>
                       </div>
 
-                      {(matchedPreset || (row.statusText?.startsWith("ตรงสูตร:") && row.items.length > 0)) && (
+                      {matchedPreset ? (
                         <span className="badge-preset-matched">
-                          <Check size={12} /> {matchedPreset ? `ตรงสูตร: ${matchedPreset.name}` : row.statusText}
+                          <Check size={12} /> ตรงสูตร: {matchedPreset.name}
                         </span>
-                      )}
+                      ) : row.amountSatang > 0 ? (
+                        <span className="badge-preset-unmatched">
+                          <AlertCircle size={12} /> ไม่ตรงสูตรใด ({formatBaht(row.amountSatang)})
+                        </span>
+                      ) : null}
 
                       {row.bank && <span className="slip-bank-badge">{row.bank}</span>}
                       {row.isDuplicate && (
@@ -695,23 +757,33 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                       <select
                         value={row.matchedPresetId ?? ""}
                         onChange={(e) => handlePresetChange(row.id, e.target.value)}
-                        className={`preset-select ${matchedPreset || hasItems ? "has-preset" : "no-preset"}`}
+                        className={`preset-select ${matchedPreset ? "has-preset" : "no-preset"}`}
                       >
                         <option value="">
-                          {hasItems && !matchedPreset
-                            ? `— จับคู่อัตโนมัติ: ${row.statusText?.replace("ตรงสูตร: ", "") || "ตามยอดเงิน"} —`
+                          {matchedPreset
+                            ? "— เลือกสูตรอื่น —"
+                            : row.amountSatang > 0
+                            ? "— ไม่ตรงสูตรใด (เลือกสูตรเปิดบิล) —"
                             : "— เลือกสูตรเปิดบิลด่วน —"}
                         </option>
-                        {presets.map((p) => (
+                        {currentPresets.map((p) => (
                           <option key={p.id} value={p.id}>
                             {formatBaht(p.amountSatang)} · {p.name}
                           </option>
                         ))}
                       </select>
+
+                      <button
+                        type="button"
+                        className="slip-edit-toggle-btn"
+                        onClick={() => toggleEditItems(row.id)}
+                      >
+                        <Pencil size={12} /> {row.isEditingItems ? "ซ่อนเมนู" : hasItems ? "แก้ไขรายการ" : "เลือกเมนู"}
+                      </button>
                     </div>
 
-                    {/* Items display */}
-                    {hasItems && (
+                    {/* Items summary when not editing */}
+                    {!row.isEditingItems && hasItems && (
                       <div className="slip-items-summary">
                         <span>
                           {row.fulfillment === "delivery" ? "🛵 ส่ง" : "🏪 รับเอง"}
@@ -727,23 +799,138 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                       </div>
                     )}
 
+                    {/* Inline Item & Order Editor */}
+                    {row.isEditingItems && (
+                      <div className="slip-item-editor">
+                        {/* Quick add menu chips */}
+                        <div className="slip-editor-menus">
+                          <span className="slip-editor-subhead">แตะเพื่อเพิ่มเมนู:</span>
+                          <div className="slip-menu-chips">
+                            {menus.map((m) => (
+                              <button
+                                key={m.id}
+                                type="button"
+                                className="slip-menu-chip-btn"
+                                onClick={() => handleAddItem(row.id, m.id)}
+                              >
+                                <Plus size={12} /> {m.name} <span className="chip-price">฿{m.price / 100}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Selected Items List */}
+                        {hasItems && (
+                          <div className="slip-editor-items-table">
+                            {row.items.map((it) => {
+                              const m = menuMap.get(it.menuId);
+                              if (!m) return null;
+                              return (
+                                <div key={it.menuId} className="slip-editor-item-row">
+                                  <span className="slip-item-name">{m.name}</span>
+                                  <span className="slip-item-unit-price">@{m.price / 100}฿</span>
+                                  <div className="slip-item-qty-stepper">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateItemQty(row.id, it.menuId, it.quantity - 1)}
+                                      className="stepper-btn"
+                                      aria-label="ลดจำนวน"
+                                    >
+                                      -
+                                    </button>
+                                    <span className="stepper-val">{it.quantity}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateItemQty(row.id, it.menuId, it.quantity + 1)}
+                                      className="stepper-btn"
+                                      aria-label="เพิ่มจำนวน"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span className="slip-item-total">฿{(m.price * it.quantity) / 100}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveItem(row.id, it.menuId)}
+                                    className="slip-item-del-btn"
+                                    title="ลบเมนูนี้"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Delivery / Fulfillment Toggle */}
+                        <div className="slip-editor-fulfillment">
+                          <label className="picker-label">การจัดส่ง:</label>
+                          <div className="fulfillment-segmented">
+                            <button
+                              type="button"
+                              className={`seg-btn ${row.fulfillment === "pickup" ? "active" : ""}`}
+                              onClick={() => handleFulfillmentChange(row.id, "pickup")}
+                            >
+                              🏪 รับเอง (฿0)
+                            </button>
+                            <button
+                              type="button"
+                              className={`seg-btn ${row.fulfillment === "delivery" ? "active" : ""}`}
+                              onClick={() => handleFulfillmentChange(row.id, "delivery")}
+                            >
+                              🛵 ส่ง (+฿{defaultDeliveryFee / 100})
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Calculation Comparison Banner */}
+                        {hasItems && (
+                          <div className={`slip-calc-banner ${isAmountMatchingFood ? "match" : "diff"}`}>
+                            {isAmountMatchingFood ? (
+                              <>✓ ยอดอาหารรวมค่าส่งตรงกับสลิปพอดี ({formatBaht(orderTotalSatang)})</>
+                            ) : (
+                              <>
+                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ต่างกัน {formatBaht(Math.abs(orderTotalSatang - row.amountSatang))})
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Quick Save as Preset Button */}
+                        {hasItems && row.amountSatang > 0 && !matchedPreset && (
+                          <button
+                            type="button"
+                            className="slip-save-preset-btn"
+                            disabled={savingPresetForRowId === row.id}
+                            onClick={() => handleQuickSaveAsPreset(row)}
+                          >
+                            <BookmarkPlus size={13} />
+                            {savingPresetForRowId === row.id
+                              ? "กำลังบันทึกสูตร…"
+                              : `บันทึกเป็นสูตรใหม่สำหรับยอด ${formatBaht(row.amountSatang)}`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     {/* Status Badge */}
                     <div className="slip-status-line">
                       {row.status === "processing" ? (
                         <span className="status-badge processing">
                           <Loader2 size={12} className="spin-icon" /> กำลังอ่าน…
                         </span>
-                      ) : isReady ? (
-                        <span className="status-badge ready">
-                          <CheckCircle2 size={13} /> พร้อมบันทึก
-                        </span>
                       ) : row.isDuplicate ? (
                         <span className="status-badge duplicate">
                           <AlertCircle size={13} /> ข้ามรายการนี้ (ซ้ำ)
                         </span>
+                      ) : isReady ? (
+                        <span className="status-badge ready">
+                          <CheckCircle2 size={13} /> พร้อมบันทึก
+                        </span>
                       ) : (
                         <span className="status-badge warn">
-                          <AlertCircle size={13} /> รอเลือกสูตรเมนู
+                          <AlertCircle size={13} /> {row.amountSatang > 0 ? "รอระบุรายการอาหาร" : "ยังไม่มียอดเงิน"}
                         </span>
                       )}
                     </div>
