@@ -210,7 +210,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
       if (json.isDuplicate) {
         setResult({
           ok: false,
-          text: `⚠️ สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? ""}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
+          text: `สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? ""}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
         });
         return;
       }
@@ -231,12 +231,12 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
           }
           setResult({
             ok: true,
-            text: `✨ ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+            text: `ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         } else {
           setResult({
             ok: true,
-            text: `🔍 ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+            text: `ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         }
       } else {

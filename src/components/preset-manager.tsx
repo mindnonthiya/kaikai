@@ -401,7 +401,7 @@ export function PresetManager({ initialPresets, menus, defaultDeliveryFee }: Pro
                   </span>
                 ) : (
                   <span className="tag-warn">
-                    ⚠️ ยอดรวม ({formatBaht(calculatedTotalSatang)}) ต่างจากยอดสลิป ({formatBaht(targetSatang)})
+                    ยอดรวม ({formatBaht(calculatedTotalSatang)}) ต่างจากยอดสลิป ({formatBaht(targetSatang)})
                   </span>
                 )}
               </small>

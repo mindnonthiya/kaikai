@@ -621,7 +621,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         <div className={saveResult.ok ? "success-toast" : "error-toast"} style={{ marginBottom: "16px" }}>
           {saveResult.ok ? (
             <>
-              🎉 บันทึกออเดอร์สำเร็จแล้ว <strong>{saveResult.savedCount} รายการ</strong> (ยอดรวม{" "}
+              บันทึกออเดอร์สำเร็จแล้ว <strong>{saveResult.savedCount} รายการ</strong> (ยอดรวม{" "}
               {formatBaht(saveResult.totalAmount)}) ·{" "}
               <Link href="/sales" className="text-link" style={{ textDecoration: "underline" }}>
                 ดูประวัติการขาย
@@ -786,7 +786,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                     {!row.isEditingItems && hasItems && (
                       <div className="slip-items-summary">
                         <span>
-                          {row.fulfillment === "delivery" ? "🛵 ส่ง" : "🏪 รับเอง"}
+                          {row.fulfillment === "delivery" ? "ส่ง" : "รับเอง"}
                           {row.fulfillment === "delivery" ? ` (${formatBaht(row.deliveryChargedSatang)})` : ""} ·{" "}
                           {row.items
                             .map((it) => {
@@ -872,14 +872,14 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                               className={`seg-btn ${row.fulfillment === "pickup" ? "active" : ""}`}
                               onClick={() => handleFulfillmentChange(row.id, "pickup")}
                             >
-                              🏪 รับเอง (฿0)
+                              รับเอง (0฿)
                             </button>
                             <button
                               type="button"
                               className={`seg-btn ${row.fulfillment === "delivery" ? "active" : ""}`}
                               onClick={() => handleFulfillmentChange(row.id, "delivery")}
                             >
-                              🛵 ส่ง (+฿{defaultDeliveryFee / 100})
+                              ส่ง (+฿{defaultDeliveryFee / 100})
                             </button>
                           </div>
                         </div>
@@ -888,7 +888,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                         {hasItems && (
                           <div className={`slip-calc-banner ${isAmountMatchingFood ? "match" : "diff"}`}>
                             {isAmountMatchingFood ? (
-                              <>✓ ยอดอาหารรวมค่าส่งตรงกับสลิปพอดี ({formatBaht(orderTotalSatang)})</>
+                              <>ยอดอาหารรวมค่าส่งตรงกับสลิปพอดี ({formatBaht(orderTotalSatang)})</>
                             ) : (
                               <>
                                 ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ต่างกัน {formatBaht(Math.abs(orderTotalSatang - row.amountSatang))})
