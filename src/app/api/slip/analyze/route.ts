@@ -1,6 +1,41 @@
+import fs from "fs";
+import path from "path";
 import { NextResponse } from "next/server";
-import { getOcrProvider } from "@/lib/ocr/types";
+import { GeminiOcrProvider } from "@/lib/ocr/gemini";
 import { createClient } from "@/lib/supabase/server";
+
+function getActiveOcrProvider() {
+  let provider = (process.env.OCR_PROVIDER ?? "").toLowerCase().trim();
+  let apiKey = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
+
+  // If empty in process.env, read directly from .env.local / .env.cloud on disk
+  if (!apiKey) {
+    try {
+      const cwd = process.cwd();
+      const envFiles = [".env.local", ".env.cloud", ".env"];
+      for (const f of envFiles) {
+        const fullPath = path.join(cwd, f);
+        if (fs.existsSync(fullPath)) {
+          const content = fs.readFileSync(fullPath, "utf-8");
+          const mKey = content.match(/OCR_API_KEY\s*=\s*([^\r\n]+)/);
+          const mProv = content.match(/OCR_PROVIDER\s*=\s*([^\r\n]+)/);
+          if (mKey && mKey[1]?.trim()) {
+            apiKey = mKey[1].trim().replace(/^["']|["']$/g, "");
+            if (mProv && mProv[1]?.trim()) {
+              provider = mProv[1].trim().replace(/^["']|["']$/g, "").toLowerCase();
+            }
+            if (apiKey) break;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[analyze/route] Error reading env file:", err);
+    }
+  }
+
+  if (!apiKey) return null;
+  return new GeminiOcrProvider(apiKey);
+}
 
 export async function POST(req: Request) {
   try {
@@ -48,7 +83,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const ocrProvider = getOcrProvider();
+    const ocrProvider = getActiveOcrProvider();
     if (!ocrProvider) {
       return NextResponse.json({
         ok: true,
