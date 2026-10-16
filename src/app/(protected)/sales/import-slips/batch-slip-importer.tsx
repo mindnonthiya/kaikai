@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import type { Fulfillment, MenuRecord, PricePreset } from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
-import { formatBaht } from "@/lib/money";
+import { formatBaht, tryBahtToSatang } from "@/lib/money";
 import { createClient } from "@/lib/supabase/client";
 
 export type BatchSlipRow = {
@@ -67,8 +67,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [rows, setRows] = useState<BatchSlipRow[]>([]);
-  const [analyzingCount, setAnalyzingCount] = useState(0);
+  const [analyzingRemaining, setAnalyzingRemaining] = useState(0);
   const [totalAnalyzing, setTotalAnalyzing] = useState(0);
+  const [hasOcrProvider, setHasOcrProvider] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveProgress, setSaveProgress] = useState<{ current: number; total: number } | null>(null);
   const [saveResult, setSaveResult] = useState<{
@@ -97,7 +98,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
 
     const fileList = Array.from(files);
     setTotalAnalyzing(fileList.length);
-    setAnalyzingCount(0);
+    setAnalyzingRemaining(fileList.length);
     setSaveResult(null);
 
     // Reset input so user can choose same files again if needed
@@ -105,7 +106,6 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
-      setAnalyzingCount(i + 1);
 
       const rowId = crypto.randomUUID();
       const tempPreview = URL.createObjectURL(file);
@@ -154,6 +154,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       });
 
       const json = await res.json();
+
+      if (typeof json.hasProvider === "boolean") {
+        setHasOcrProvider(json.hasProvider);
+      }
 
       let amountSatang = 0;
       let soldAt = new Date().toISOString();
@@ -231,7 +235,30 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
           };
         })
       );
+    } finally {
+      setAnalyzingRemaining((prev) => Math.max(0, prev - 1));
     }
+  }
+
+  // Handle direct amount edit (e.g. typing 84 auto-matches the preset)
+  function handleAmountChange(rowId: string, newBahtStr: string) {
+    const parsedSatang = tryBahtToSatang(newBahtStr);
+    const amountSatang = parsedSatang ?? 0;
+    const matched = matchPresetByAmount(amountSatang);
+
+    updateRow(rowId, {
+      amountSatang,
+      matchedPresetId: matched?.id ?? null,
+      fulfillment: matched ? matched.fulfillment : "delivery",
+      deliveryChargedSatang: matched ? matched.deliveryChargedSatang : defaultDeliveryFee,
+      items: matched ? [...matched.items] : [],
+      status: "ready",
+      statusText: matched
+        ? `ตรงสูตร: ${matched.name}`
+        : amountSatang > 0
+        ? "กรุณาเลือกสูตรเมนู"
+        : "ยังไม่มียอดเงิน",
+    });
   }
 
   // Update row helpers
@@ -415,12 +442,24 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         </label>
       </div>
 
+      {/* Missing OCR API Key Warning Banner */}
+      {hasOcrProvider === false && (
+        <div className="batch-ocr-missing-notice" style={{ marginTop: "16px" }}>
+          <div>
+            <strong>ระบบยังไม่ได้เปิดใช้งานอ่านสลิปอัตโนมัติ (OCR_API_KEY)</strong>
+            <span>
+              ยังไม่ได้ระบุ <code>OCR_API_KEY</code> ในไฟล์ <code>.env.local</code> (ใช้ Gemini API ฟรี) ระบบจึงยังไม่สามารถอ่านยอดเงินจากรูปได้อัตโนมัติ — สามารถพิมพ์ยอดเงิน เช่น 84 ที่ช่องสลิปเพื่อจับคู่สูตรได้ทันที หรือใส่ API Key ใน <code>.env.local</code> เพื่อให้อ่านอัตโนมัติ 100%
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Progress banner when analyzing */}
-      {analyzingCount > 0 && analyzingCount <= totalAnalyzing && (
+      {analyzingRemaining > 0 && (
         <div className="batch-analyzing-banner">
           <Loader2 size={18} className="spin-icon" />
           <span>
-            กำลังบีบอัดและอ่านข้อมูลสลิป {analyzingCount} จาก {totalAnalyzing} รูป…
+            กำลังบีบอัดและอ่านข้อมูลสลิป (เหลือ {analyzingRemaining} จาก {totalAnalyzing} รูป)…
           </span>
         </div>
       )}
@@ -501,13 +540,32 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                   {/* Info & Extracted Details */}
                   <div className="col-info">
                     <div className="slip-amount-row">
-                      <strong className="slip-amount-display">
-                        {row.amountSatang > 0 ? formatBaht(row.amountSatang) : "ยังไม่มียอด"}
-                      </strong>
+                      <div className="slip-amount-box">
+                        <label>ยอดเงิน:</label>
+                        <div className="amount-input-badge">
+                          <span>฿</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={row.amountSatang > 0 ? (row.amountSatang / 100).toString() : ""}
+                            onChange={(e) => handleAmountChange(row.id, e.target.value)}
+                            className="slip-amount-editable"
+                            aria-label="ยอดเงินในสลิป"
+                          />
+                        </div>
+                      </div>
+
+                      {matchedPreset && (
+                        <span className="badge-preset-matched">
+                          <Check size={12} /> ตรงสูตร: {matchedPreset.name}
+                        </span>
+                      )}
+
                       {row.bank && <span className="slip-bank-badge">{row.bank}</span>}
                       {row.isDuplicate && (
                         <span className="badge-duplicate">
-                          ⚠️ สลิปซ้ำ (บิล #{row.duplicateSaleNumber ?? "เดิม"})
+                          สลิปซ้ำ (บิล #{row.duplicateSaleNumber ?? "เดิม"})
                         </span>
                       )}
                     </div>
