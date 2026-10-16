@@ -2,14 +2,14 @@ import type { OcrProvider, OcrResult } from "./types";
 
 /**
  * Google Gemini Multimodal OCR provider for Thai bank transfer slips.
- * Works with Gemini 2.0 Flash or Gemini 1.5 Flash.
+ * Uses fast and high-quota gemini-3.5-flash-lite by default with exponential backoff retry.
  */
 export class GeminiOcrProvider implements OcrProvider {
   readonly name = "gemini";
   private apiKey: string;
   private model: string;
 
-  constructor(apiKey: string, model: string = "gemini-3.5-flash") {
+  constructor(apiKey: string, model: string = "gemini-3.5-flash-lite") {
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -60,20 +60,39 @@ If any field cannot be determined, set it to null. Return strictly JSON, no mark
       },
     };
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-    });
+    let res: Response | null = null;
+    let attempt = 0;
+    const maxRetries = 2;
 
-    if (!res.ok) {
-      const errText = await res.text();
-      // Try fallback to gemini-3.5-flash-lite if 3.5-flash is unavailable or busy
-      if (this.model !== "gemini-3.5-flash-lite" && (res.status === 404 || res.status === 400 || res.status === 503)) {
-        const fallback = new GeminiOcrProvider(this.apiKey, "gemini-3.5-flash-lite");
+    while (attempt <= maxRetries) {
+      res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      // Handle 429 (rate limit) or 503 (high demand) with backoff
+      if ((res.status === 429 || res.status === 503) && attempt < maxRetries) {
+        attempt++;
+        const backoffMs = attempt * 1500;
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      break;
+    }
+
+    if (!res || !res.ok) {
+      const status = res?.status ?? 500;
+      const errText = res ? await res.text() : "Network error";
+
+      // Fallback model if current model is unavailable
+      if (this.model === "gemini-3.5-flash-lite" && (status === 404 || status === 503)) {
+        const fallback = new GeminiOcrProvider(this.apiKey, "gemini-flash-lite-latest");
         return fallback.readSlip(buffer, mimeType);
       }
-      throw new Error(`Gemini API error (${res.status}): ${errText}`);
+
+      throw new Error(`Gemini API error (${status}): ${errText}`);
     }
 
     const json = await res.json();

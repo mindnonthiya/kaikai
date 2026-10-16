@@ -12,6 +12,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RotateCw,
   Trash2,
   UploadCloud,
   X,
@@ -95,7 +96,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   const menuMap = new Map(menus.map((m) => [m.id, m]));
   const presetMap = new Map(currentPresets.map((p) => [p.id, p]));
 
-  // Handle file selection (multiple)
+  // Handle file selection (multiple) with Concurrency Queue (3 concurrent workers)
   async function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -108,14 +109,16 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
     // Reset input so user can choose same files again if needed
     if (fileInputRef.current) fileInputRef.current.value = "";
 
+    const newItems: Array<{ id: string; file: File }> = [];
+    const initialRows: BatchSlipRow[] = [];
+
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
-
       const rowId = crypto.randomUUID();
       const tempPreview = URL.createObjectURL(file);
 
-      // Create placeholder row immediately
-      const initialRow: BatchSlipRow = {
+      newItems.push({ id: rowId, file });
+      initialRows.push({
         id: rowId,
         sourceFile: file,
         previewUrl: tempPreview,
@@ -123,7 +126,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         originalBytes: file.size,
         compressedBytes: 0,
         status: "processing",
-        statusText: "กำลังบีบอัดและวิเคราะห์…",
+        statusText: i < 3 ? "กำลังวิเคราะห์…" : "รอคิววิเคราะห์…",
         amountSatang: 0,
         soldAt: new Date().toISOString(),
         matchedPresetId: null,
@@ -134,16 +137,85 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         isDuplicate: false,
         selected: true,
         isEditingItems: false,
-      };
-
-      setRows((prev) => [initialRow, ...prev]);
-
-      // Process in background
-      processSlipRow(rowId, file);
+      });
     }
+
+    setRows((prev) => [...initialRows, ...prev]);
+
+    // Concurrency queue worker (Concurrency = 3)
+    const CONCURRENCY = 3;
+    let nextIndex = 0;
+
+    async function queueWorker() {
+      while (nextIndex < newItems.length) {
+        const item = newItems[nextIndex++];
+        if (!item) break;
+        await processSlipRowWithRetry(item.id, item.file);
+      }
+    }
+
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, newItems.length) },
+      () => queueWorker()
+    );
+    await Promise.all(workers);
   }
 
-  async function processSlipRow(rowId: string, file: File) {
+  async function handleRetryRow(rowId: string) {
+    const row = rows.find((r) => r.id === rowId);
+    if (!row) return;
+
+    setTotalAnalyzing((prev) => prev + 1);
+    setAnalyzingRemaining((prev) => prev + 1);
+    updateRow(rowId, {
+      status: "processing",
+      statusText: "กำลังลองอ่านใหม่…",
+    });
+
+    await processSlipRowWithRetry(rowId, row.sourceFile);
+  }
+
+  async function processSlipRowWithRetry(rowId: string, file: File, maxRetries = 2) {
+    let attempt = 0;
+    let success = false;
+
+    while (attempt <= maxRetries && !success) {
+      if (attempt > 0) {
+        updateRow(rowId, {
+          status: "processing",
+          statusText: `รอจังหวะส่งใหม่ (ครั้งที่ ${attempt})…`,
+        });
+        await new Promise((r) => setTimeout(r, attempt * 1500));
+      }
+
+      updateRow(rowId, {
+        status: "processing",
+        statusText: "กำลังบีบอัดและอ่านข้อมูล…",
+      });
+
+      success = await processSlipRow(rowId, file);
+      if (success) break;
+      attempt++;
+    }
+
+    if (!success) {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
+          return {
+            ...r,
+            status: "error",
+            statusText: "อ่านไม่สำเร็จ",
+            selected: false,
+          };
+        })
+      );
+    }
+
+    setAnalyzingRemaining((prev) => Math.max(0, prev - 1));
+  }
+
+  async function processSlipRow(rowId: string, file: File): Promise<boolean> {
     try {
       // 1. Client-side compression to WebP (~30 KB)
       const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
@@ -164,6 +236,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         setHasOcrProvider(json.hasProvider);
       }
 
+      if (res.status === 429 || json.isRateLimit) {
+        return false;
+      }
+
       let amountSatang = 0;
       let soldAt = new Date().toISOString();
       let isDuplicate = false;
@@ -171,18 +247,19 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
       let bank: string | undefined;
       let ref: string | undefined;
 
-      if (json.ok) {
+      if (json.ok && json.result) {
         isDuplicate = Boolean(json.isDuplicate);
         duplicateSaleNumber = json.duplicateSaleNumber ?? undefined;
 
-        if (json.result) {
-          amountSatang = json.result.amountSatang ?? 0;
-          if (json.result.transferredAt) {
-            soldAt = json.result.transferredAt;
-          }
-          bank = json.result.bank;
-          ref = json.result.referenceNumber;
+        amountSatang = json.result.amountSatang ?? 0;
+        if (json.result.transferredAt) {
+          soldAt = json.result.transferredAt;
         }
+        bank = json.result.bank;
+        ref = json.result.referenceNumber;
+      } else if (json.isDuplicate) {
+        isDuplicate = true;
+        duplicateSaleNumber = json.duplicateSaleNumber ?? undefined;
       }
 
       // 3. Strict Match with Presets ONLY (Strict 1:1, no fuzzy substitutions)
@@ -210,7 +287,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               ? `ตรงสูตร: ${matched.name}`
               : amountSatang > 0
               ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
-              : "กรุณาระบุยอดเงินและเมนู",
+              : json.error || "ไม่พบยอดเงินในรูป",
             extractedAmountSatang: amountSatang > 0 ? amountSatang : undefined,
             extractedTransferredAt: soldAt,
             bank,
@@ -227,22 +304,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
           };
         })
       );
+      return true;
     } catch (err: unknown) {
       console.error("Row processing error:", err);
-      const msg = err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการอ่านรูป";
-      setRows((prev) =>
-        prev.map((row) => {
-          if (row.id !== rowId) return row;
-          return {
-            ...row,
-            status: "error",
-            statusText: msg,
-            selected: false,
-          };
-        })
-      );
-    } finally {
-      setAnalyzingRemaining((prev) => Math.max(0, prev - 1));
+      return false;
     }
   }
 
@@ -611,7 +676,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
         <div className="batch-analyzing-banner">
           <Loader2 size={18} className="spin-icon" />
           <span>
-            กำลังบีบอัดและอ่านข้อมูลสลิป (เหลือ {analyzingRemaining} จาก {totalAnalyzing} รูป)…
+            กำลังอ่านข้อมูลสลิป (เสร็จแล้ว {totalAnalyzing - analyzingRemaining} จาก {totalAnalyzing} รูป)…
           </span>
         </div>
       )}
@@ -918,8 +983,21 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                     <div className="slip-status-line">
                       {row.status === "processing" ? (
                         <span className="status-badge processing">
-                          <Loader2 size={12} className="spin-icon" /> กำลังอ่าน…
+                          <Loader2 size={12} className="spin-icon" /> {row.statusText || "กำลังอ่าน…"}
                         </span>
+                      ) : row.status === "error" ? (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                          <span className="status-badge warn">
+                            <AlertCircle size={13} /> {row.statusText || "อ่านไม่สำเร็จ"}
+                          </span>
+                          <button
+                            type="button"
+                            className="slip-retry-btn"
+                            onClick={() => handleRetryRow(row.id)}
+                          >
+                            <RotateCw size={11} /> กดอ่านใหม่
+                          </button>
+                        </div>
                       ) : row.isDuplicate ? (
                         <span className="status-badge duplicate">
                           <AlertCircle size={13} /> ข้ามรายการนี้ (ซ้ำ)
