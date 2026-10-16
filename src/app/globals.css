@@ -1453,6 +1453,37 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   padding: 1px 5px;
 }
 
+.batch-ocr-missing-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 14px;
+  padding: 14px 18px;
+  color: #92400e;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.batch-ocr-missing-notice .notice-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.batch-ocr-missing-notice strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: #78350f;
+  margin-bottom: 2px;
+}
+.batch-ocr-missing-notice code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* Info Column */
 .col-info {
   display: flex;
@@ -1470,6 +1501,59 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   font-size: 18px;
   font-weight: 800;
   color: #0f172a;
+}
+.slip-amount-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.slip-amount-box label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0;
+}
+.amount-input-badge {
+  display: inline-flex;
+  align-items: center;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 2px 8px;
+  gap: 4px;
+  transition: border-color 0.15s;
+}
+.amount-input-badge:focus-within {
+  border-color: #059669;
+  background: #ffffff;
+}
+.slip-amount-editable {
+  width: 70px;
+  border: none !important;
+  padding: 2px 0 !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  background: transparent !important;
+  outline: none !important;
+  min-height: unset !important;
+  height: auto !important;
+}
+.amount-input-badge span {
+  font-size: 14px;
+  font-weight: 700;
+  color: #64748b;
+}
+.badge-preset-matched {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #dcfce7;
+  color: #15803d;
+  padding: 3px 8px;
+  border-radius: 6px;
 }
 .slip-bank-badge {
   font-size: 11.5px;
