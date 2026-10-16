@@ -23,7 +23,7 @@ export function getOcrProvider(): OcrProvider | null {
 
   if (!apiKey) return null;
 
-  if (provider === "gemini" || !provider || apiKey.startsWith("AIza")) {
+  if (provider === "gemini" || !provider || apiKey.startsWith("AIza") || apiKey.startsWith("AQ.")) {
     return new GeminiOcrProvider(apiKey);
   }
 

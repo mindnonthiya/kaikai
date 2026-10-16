@@ -9,7 +9,7 @@ export class GeminiOcrProvider implements OcrProvider {
   private apiKey: string;
   private model: string;
 
-  constructor(apiKey: string, model: string = "gemini-2.0-flash") {
+  constructor(apiKey: string, model: string = "gemini-3.5-flash") {
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -68,9 +68,9 @@ If any field cannot be determined, set it to null. Return strictly JSON, no mark
 
     if (!res.ok) {
       const errText = await res.text();
-      // Try fallback to gemini-1.5-flash if 2.0-flash is unavailable
-      if (this.model !== "gemini-1.5-flash" && (res.status === 404 || res.status === 400)) {
-        const fallback = new GeminiOcrProvider(this.apiKey, "gemini-1.5-flash");
+      // Try fallback to gemini-3.5-flash-lite if 3.5-flash is unavailable or busy
+      if (this.model !== "gemini-3.5-flash-lite" && (res.status === 404 || res.status === 400 || res.status === 503)) {
+        const fallback = new GeminiOcrProvider(this.apiKey, "gemini-3.5-flash-lite");
         return fallback.readSlip(buffer, mimeType);
       }
       throw new Error(`Gemini API error (${res.status}): ${errText}`);
