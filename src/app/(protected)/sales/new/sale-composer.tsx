@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
-import type { Fulfillment } from "@/lib/data/types";
+import type { Fulfillment, PricePreset } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
+import { compressSlipImage } from "@/lib/image-compression";
 
 type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
@@ -45,11 +46,12 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, showMenuImages = true }: {
-  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number; showMenuImages?: boolean;
+export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, showMenuImages = true, presets = [] }: {
+  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number; showMenuImages?: boolean; presets?: PricePreset[];
 }) {
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
+
   const [cart, setCart] = useState<Cart>({});
   const [customItems, setCustomItems] = useState<CustomItem[]>([]);
   const [showCustomForm, setShowCustomForm] = useState(false);
@@ -185,15 +187,71 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
     setCustomItems((prev) => prev.filter((item) => item.id !== id));
   }
 
-  function chooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
+  async function chooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
     if (!file) return;
     if (!SLIP_TYPES[file.type]) return setResult({ ok: false, text: "รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP" });
     if (file.size > MAX_SLIP_BYTES) return setResult({ ok: false, text: "ไฟล์สลิปต้องไม่เกิน 10 MB" });
-    setResult(null);
-    setSlip(file);
+
+    try {
+      setResult({ ok: true, text: "กำลังบีบอัดรูปและอ่านข้อมูลสลิป…" });
+      const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
+      setSlip(compressed.file);
+
+      // Analyze slip via API
+      const formData = new FormData();
+      formData.append("file", compressed.file);
+      formData.append("hash", compressed.hash);
+
+      const res = await fetch("/api/slip/analyze", { method: "POST", body: formData });
+      const json = await res.json();
+
+      if (json.isDuplicate) {
+        setResult({
+          ok: false,
+          text: `⚠️ สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? ""}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
+        });
+        return;
+      }
+
+      if (json.ok && json.result?.amountSatang) {
+        const amtSatang = json.result.amountSatang;
+        const matched = presets.find((p) => p.amountSatang === amtSatang);
+
+        if (matched) {
+          const newCart: Cart = {};
+          for (const it of matched.items) {
+            newCart[it.menuId] = it.quantity;
+          }
+          setCart(newCart);
+          setFulfillment(matched.fulfillment);
+          if (matched.fulfillment === "delivery") {
+            setDelivery(formatBaht(matched.deliveryChargedSatang, false));
+          }
+          setResult({
+            ok: true,
+            text: `✨ ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+          });
+        } else {
+          setResult({
+            ok: true,
+            text: `🔍 ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+          });
+        }
+      } else {
+        setResult({
+          ok: true,
+          text: `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB · บีบอัดเพื่อประหยัดพื้นที่)`,
+        });
+      }
+    } catch (err: unknown) {
+      console.error("Slip compression/analysis error:", err);
+      setSlip(file);
+      setResult(null);
+    }
   }
+
 
   function resetForm() {
     setCart({}); setAdjust({}); setCustomItems([]); setShowCustomForm(false);
@@ -270,6 +328,14 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   const hasItemsOrService = items.length > 0 || (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0);
   let step = 1;
   return <div className="sale-composer">
+    <div className="sales-mode-tabs" style={{ gridColumn: "1 / -1", marginBottom: "8px" }}>
+      <span className="sales-mode-tab active">
+        เปิดบิลเดี่ยว
+      </span>
+      <Link href="/sales/import-slips" className="sales-mode-tab">
+        นำเข้าสลิปเป็นชุด
+      </Link>
+    </div>
     <section className="composer-main">
       <div className="step-head">
         <span>{step++}</span>

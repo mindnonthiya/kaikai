@@ -143,6 +143,22 @@ export type SaleSettings = {
   showMenuImages?: boolean;
 };
 
+export type PricePresetItem = {
+  menuId: string;
+  quantity: number;
+};
+
+export type PricePreset = {
+  id: string;
+  name: string;
+  amountSatang: number;
+  fulfillment: Fulfillment;
+  deliveryChargedSatang: number;
+  items: PricePresetItem[];
+  notes?: string;
+};
+
+
 export type PurchaseRecord = {
   id: string;
   ingredientId: string;

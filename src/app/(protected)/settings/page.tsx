@@ -2,15 +2,24 @@ import { ShieldCheck } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
+import { PresetManager } from "@/components/preset-manager";
 import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
-import { fetchPooledRate, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
+import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatBaht, satangToBahtInput } from "@/lib/money";
+import { getOcrProvider } from "@/lib/ocr/types";
 
 export default async function SettingsPage() {
-  const [profile, saleSettings] = await Promise.all([fetchProfile(), fetchSaleSettings()]);
+  const [profile, saleSettings, menus, presets] = await Promise.all([
+    fetchProfile(),
+    fetchSaleSettings(),
+    fetchMenus(),
+    fetchPricePresets(),
+  ]);
   const pooled = await fetchPooledRate(saleSettings);
+  const ocrProvider = getOcrProvider();
+
   return <>
     <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
     <div className="settings-grid">
@@ -22,6 +31,14 @@ export default async function SettingsPage() {
           <label>เขตเวลา<input value="Asia/Bangkok (UTC+7)" readOnly /></label>
         </ActionForm>
       </section>
+
+      {/* Preset Manager: สูตรเปิดบิลด่วนตามยอดเงิน */}
+      <PresetManager
+        initialPresets={presets}
+        menus={menus.filter((m) => m.isAvailable)}
+        defaultDeliveryFee={saleSettings.defaultDeliveryFee}
+      />
+
       <section className="panel settings-card">
         <h2>การขายและการแสดงผล</h2>
         <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
@@ -41,6 +58,7 @@ export default async function SettingsPage() {
           </label>
         </ActionForm>
       </section>
+
       <section className="panel settings-card">
         <h2>ออเดอร์และต้นทุนย้อนหลัง</h2>
         <p className="field-hint">หากคุณมีออเดอร์ในอดีตที่เคยบันทึกไว้ก่อนผูกสูตรต้นทุน สามารถกดปุ่มนี้เพื่อให้ระบบนำต้นทุนปัจจุบันไปคำนวณกำไรต่อกล่องย้อนหลังให้ได้</p>
@@ -48,6 +66,7 @@ export default async function SettingsPage() {
           <div className="connection-row"><span>ต้นทุนออเดอร์เก่า</span><strong>อัปเดตตามสูตรปัจจุบัน</strong></div>
         </ActionForm>
       </section>
+
       <section className="panel settings-card">
         <h2>บัญชี</h2>
         <div className="connection-row"><span>อีเมล</span><strong>{profile.email ?? "—"}</strong></div>
@@ -57,10 +76,14 @@ export default async function SettingsPage() {
         </ActionForm>
         <LogoutButton />
       </section>
+
       <section className="panel settings-card">
         <h2>สถานะระบบ</h2>
         <div className="connection-row"><span><i className={hasSupabaseEnv ? "ok" : "warn"} />Supabase</span><strong>{hasSupabaseEnv ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</strong></div>
-        <div className="connection-row"><span><i className="warn" />OCR อ่านสลิป</span><strong>ยังไม่เปิดใช้</strong></div>
+        <div className="connection-row">
+          <span><i className={ocrProvider ? "ok" : "warn"} />OCR อ่านสลิป</span>
+          <strong>{ocrProvider ? `เปิดใช้แล้ว (${ocrProvider.name})` : "ยังไม่เปิดใช้ (กรอก API Key ใน .env)"}</strong>
+        </div>
         <p className="privacy-note"><ShieldCheck size={17} />ข้อมูลของแต่ละบัญชีแยกกันด้วย Row Level Security และสลิปเก็บใน Private Storage</p>
       </section>
     </div>
