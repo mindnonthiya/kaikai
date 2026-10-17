@@ -27,9 +27,22 @@ const strOrNull = (value: unknown) => (value === null || value === undefined || 
 const rows = (value: unknown): Row[] => (Array.isArray(value) ? (value as Row[]) : []);
 const one = (value: unknown) => (Array.isArray(value) ? value[0] : value) as Row | null | undefined;
 
+export class QueryError extends Error {
+  code?: string;
+  originalMessage?: string;
+  constructor(message: string, code?: string, originalMessage?: string) {
+    super(message);
+    this.name = "QueryError";
+    this.code = code;
+    this.originalMessage = originalMessage;
+  }
+}
+
 function fail(what: string, error: { message: string; code?: string }): never {
-  if (error.code && SCHEMA_OUTDATED_CODES.has(error.code)) throw new Error(`โหลด${what}ไม่สำเร็จ: ${SCHEMA_OUTDATED_MESSAGE}`);
-  throw new Error(`โหลด${what}ไม่สำเร็จ: ${error.message}`);
+  const outMsg = error.code && SCHEMA_OUTDATED_CODES.has(error.code)
+    ? `โหลด${what}ไม่สำเร็จ: ${SCHEMA_OUTDATED_MESSAGE}`
+    : `โหลด${what}ไม่สำเร็จ: ${error.message}`;
+  throw new QueryError(outMsg, error.code, error.message);
 }
 
 /** Reads every page of a query (the Data API returns at most 1000 rows per request). */
@@ -44,9 +57,23 @@ async function fetchAll(what: string, build: (from: number, to: number) => Promi
   }
 }
 
-const SALE_COLUMNS = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang)";
+const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang)";
+const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang)";
+
+let cachedHasTipColumn: boolean | null = null;
 
 function mapSale(row: Row): SaleRecord {
+  const productRev = num(row.product_revenue_satang);
+  const discount = num(row.discount_satang);
+  const delivery = num(row.delivery_charged_satang);
+  const fee = num(row.payment_fee_satang);
+  const netRevenue = num(row.net_revenue_satang);
+
+  // If tip_satang exists in the database row, use it.
+  // In unmigrated databases, infer tip from netRevenue if net exceeds expected product revenue:
+  const computedTip = Math.max(0, netRevenue - (productRev - discount + delivery - fee));
+  const tip = row.tip_satang !== undefined && row.tip_satang !== null ? num(row.tip_satang) : computedTip;
+
   return {
     id: str(row.id),
     saleNumber: num(row.sale_number),
@@ -56,13 +83,13 @@ function mapSale(row: Row): SaleRecord {
     customerName: strOrNull(row.customer_name),
     notes: strOrNull(row.notes),
     fulfillment: (str(row.fulfillment) || "pickup") as Fulfillment,
-    productRevenue: num(row.product_revenue_satang),
-    discount: num(row.discount_satang),
-    delivery: num(row.delivery_charged_satang),
-    tip: num(row.tip_satang),
-    fee: num(row.payment_fee_satang),
+    productRevenue: productRev,
+    discount,
+    delivery,
+    tip,
+    fee,
     packagingCost: num(row.packaging_cost_satang),
-    netRevenue: num(row.net_revenue_satang),
+    netRevenue,
     cogs: num(row.cogs_satang),
     grossProfit: num(row.gross_profit_satang),
     items: rows(row.sale_items).map((item) => ({
@@ -81,10 +108,32 @@ function mapSale(row: Row): SaleRecord {
 export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> {
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
-  const data = await fetchAll("ข้อมูลการขาย", (from, to) =>
-    supabase.from("sales").select(SALE_COLUMNS).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
-      .order("sold_at", { ascending: false }).range(from, to));
-  return data.map(mapSale);
+
+  const querySales = (cols: string) =>
+    fetchAll("ข้อมูลการขาย", (from, to) =>
+      supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
+        .order("sold_at", { ascending: false }).range(from, to));
+
+  if (cachedHasTipColumn === false) {
+    const data = await querySales(SALE_COLUMNS_LEGACY);
+    return data.map(mapSale);
+  }
+
+  try {
+    const data = await querySales(SALE_COLUMNS_WITH_TIP);
+    cachedHasTipColumn = true;
+    return data.map(mapSale);
+  } catch (err: unknown) {
+    const isMissingColumn =
+      (err instanceof QueryError && (err.code === "42703" || err.originalMessage?.includes("tip_satang"))) ||
+      (err instanceof Error && err.message.includes("tip_satang"));
+    if (isMissingColumn) {
+      cachedHasTipColumn = false;
+      const data = await querySales(SALE_COLUMNS_LEGACY);
+      return data.map(mapSale);
+    }
+    throw err;
+  }
 }
 
 function mapExpense(row: Row): ExpenseRecord {
