@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { PageTitle } from "@/components/page-title";
 import { RangeTabs } from "@/components/range-tabs";
-import { ActionButton, ActionForm } from "@/components/action-form";
+import { ActionButton } from "@/components/action-form";
 import { cancelSale } from "@/app/actions/sales";
 import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
@@ -42,7 +42,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
         </div>
         <ActionButton
           action={syncHistoricalSalesCosts}
-          fields={{}}
+          fields={{ force_all: "true" }}
           label="คำนวณต้นทุนให้ออเดอร์เก่าทันที"
           pendingLabel="กำลังคำนวณ…"
           className="primary-button"
@@ -56,7 +56,20 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
         <button className="secondary-button">ค้นหา</button>
         {q && <Link className="link-button" href={`/sales?range=${key}`}>ล้าง</Link>}
       </form>
-      <div className="table-summary">{total.saleCount.toLocaleString("th-TH")} รายการ · ยอดขาย {formatBaht(total.revenue)} · กำไรขั้นต้น {formatBaht(total.grossProfit)}{sales.length !== total.saleCount ? ` · ยกเลิก ${sales.length - total.saleCount} รายการ` : ""}</div>
+      <div className="table-summary" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+        <span>
+          {total.saleCount.toLocaleString("th-TH")} รายการ · ยอดขาย {formatBaht(total.revenue)} · กำไรขั้นต้น {formatBaht(total.grossProfit)}
+          {total.tipIncome > 0 ? ` · ทิปรวม +${formatBaht(total.tipIncome)}` : ""}
+          {sales.length !== total.saleCount ? ` · ยกเลิก ${sales.length - total.saleCount} รายการ` : ""}
+        </span>
+        <ActionButton
+          action={syncHistoricalSalesCosts}
+          fields={{ force_all: "true" }}
+          label="คำนวณต้นทุนทุกออเดอร์ใหม่ตามสูตรปัจจุบัน"
+          pendingLabel="กำลังคำนวณ…"
+          className="link-button"
+        />
+      </div>
       <table className="data-table">
         <thead><tr><th>เวลา / เลขที่</th><th>ลูกค้า</th><th>รายการ</th><th>ชำระด้วย</th><th>สถานะ</th><th className="num">ยอดรวม</th><th className="num">กำไรขั้นต้น</th><th /></tr></thead>
         <tbody>
@@ -64,7 +77,16 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
             <td><strong>{formatTime(sale.soldAt)}</strong> <small className="muted">{formatThaiShortDate(sale.soldAt)}</small><br />#{sale.saleNumber}</td>
             <td>{sale.customerName ?? "ลูกค้าทั่วไป"}</td>
             <td>{sale.items.map((i) => `${i.name} ×${i.quantity}`).join(" · ")}
-              {(sale.fulfillment === "delivery" || sale.packagingCost > 0) && <><br /><small className="muted">{sale.fulfillment === "delivery" ? `ส่ง ${formatBaht(sale.delivery)}` : "รับเอง"}{sale.packagingCost > 0 ? ` · บรรจุภัณฑ์ ${formatBaht(sale.packagingCost)}` : ""}</small></>}
+              {(sale.fulfillment === "delivery" || sale.packagingCost > 0 || (sale.tip !== undefined && sale.tip > 0)) && (
+                <>
+                  <br />
+                  <small className="muted">
+                    {sale.fulfillment === "delivery" ? `ส่ง ${formatBaht(sale.delivery)}` : "รับเอง"}
+                    {sale.packagingCost > 0 ? ` · บรรจุภัณฑ์ ${formatBaht(sale.packagingCost)}` : ""}
+                    {sale.tip !== undefined && sale.tip > 0 ? ` · ทิป/โอนเกิน +${formatBaht(sale.tip)}` : ""}
+                  </small>
+                </>
+              )}
             </td>
             <td>{sale.payments.length ? [...new Set(sale.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", ") : "—"}</td>
             <td>{statusBadge(sale)}</td>

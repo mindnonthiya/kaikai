@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CircleAlert, PackageCheck, TrendingUp, Wallet, WalletCards } from "lucide-react";
+import { ArrowRight, CircleAlert, TrendingUp, Wallet, WalletCards } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";

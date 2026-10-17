@@ -38,6 +38,8 @@ export type Summary = {
   /** Delivery fees charged to customers (kept by the shop). */
   deliveryIncome: number;
   deliveryCount: number;
+  /** Tip / overtransferred amount from customers. */
+  tipIncome: number;
   /** Expenses in the “ค่าน้ำมัน” category. */
   fuelExpenses: number;
   /** Packaging handed out with orders (already inside cogs). */
@@ -48,7 +50,7 @@ export type Summary = {
 
 export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summary {
   const active = sales.filter(countsAsRevenue);
-  let revenue = 0, cogs = 0, grossProfit = 0, boxes = 0, addons = 0, paid = 0, deliveryIncome = 0, deliveryCount = 0, packagingCost = 0;
+  let revenue = 0, cogs = 0, grossProfit = 0, boxes = 0, addons = 0, paid = 0, deliveryIncome = 0, deliveryCount = 0, tipIncome = 0, packagingCost = 0;
   const payments = { cash: 0, transfer: 0, other: 0 };
   for (const sale of active) {
     revenue += sale.netRevenue;
@@ -56,6 +58,7 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     grossProfit += sale.grossProfit;
     deliveryIncome += sale.delivery;
     if (sale.fulfillment === "delivery") deliveryCount += 1;
+    tipIncome += (sale.tip ?? 0);
     packagingCost += sale.packagingCost;
     for (const item of sale.items) {
       if (isAddonCategory(item.category)) addons += item.quantity;
@@ -78,7 +81,7 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     grossMarginBps: revenue ? Math.round((grossProfit * 10_000) / revenue) : 0,
     payments,
     outstanding: Math.max(0, revenue - paid),
-    deliveryIncome, deliveryCount, fuelExpenses, packagingCost,
+    deliveryIncome, deliveryCount, tipIncome, fuelExpenses, packagingCost,
     foodCost: Math.max(0, cogs - packagingCost),
   };
 }

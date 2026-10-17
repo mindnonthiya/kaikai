@@ -231,14 +231,35 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
           if (matched.fulfillment === "delivery") {
             setDelivery(formatBaht(matched.deliveryChargedSatang, false));
           }
+          let presetItemsTotal = 0;
+          for (const it of matched.items) {
+            const m = menus.find((menu) => menu.id === it.menuId);
+            if (m) presetItemsTotal += m.price * it.quantity;
+          }
+          const deliveryFee = matched.fulfillment === "delivery" ? matched.deliveryChargedSatang : 0;
+          const diff = amtSatang - (presetItemsTotal + deliveryFee);
+          if (diff > 0) {
+            setTip(formatBaht(diff, false));
+          } else {
+            setTip("0");
+          }
           setResult({
             ok: true,
-            text: `ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+            text: `ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ${diff > 0 ? ` (ทิป/โอนเกิน +${formatBaht(diff)})` : ""} (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         } else {
+          let cartFoodTotal = 0;
+          for (const m of selected) {
+            cartFoodTotal += m.price * (cart[m.id] ?? 0);
+          }
+          const delFee = fulfillment === "delivery" ? (tryBahtToSatang(delivery) ?? 0) : 0;
+          const diff = amtSatang - (cartFoodTotal + delFee);
+          if (cartFoodTotal > 0 && diff > 0) {
+            setTip(formatBaht(diff, false));
+          }
           setResult({
             ok: true,
-            text: `ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
+            text: `ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป${cartFoodTotal > 0 && diff > 0 ? ` (คำนวณทิปให้อัตโนมัติ +${formatBaht(diff)})` : ""} (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         }
       } else {
