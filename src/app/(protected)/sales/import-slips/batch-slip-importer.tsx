@@ -594,6 +594,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             }
           : undefined;
 
+        // Calculate items food total + delivery and tip
+        const itemsFoodTotalSatang = row.items.reduce((sum, it) => {
+          const m = menuMap.get(it.menuId);
+          return sum + (m ? m.price * it.quantity : 0);
+        }, 0);
+        const deliveryChargedSatang = row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0;
+        const expectedOrderTotalSatang = itemsFoodTotalSatang + deliveryChargedSatang;
+        const rowTipSatang = Math.max(0, row.amountSatang - expectedOrderTotalSatang);
+
         // 2. Call create_sale RPC
         const { error: saleError } = await supabase.rpc("create_sale", {
           payload: {
@@ -603,16 +612,19 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
             })),
             fulfillment: row.fulfillment,
             pooled_ingredient_bps: pooledBps,
-            delivery_charged_satang: row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0,
+            delivery_charged_satang: deliveryChargedSatang,
             discount_satang: 0,
-            tip_satang: 0,
+            tip_satang: rowTipSatang,
             payment_fee_satang: 0,
             payment_amount_satang: row.amountSatang,
             payment_method: "transfer",
             payment_status: "paid",
             customer_name: row.customerName.trim() || null,
             sold_at: row.soldAt,
-            notes: row.referenceNumber ? `เลขอ้างอิง: ${row.referenceNumber}` : null,
+            notes: [
+              row.referenceNumber ? `เลขอ้างอิง: ${row.referenceNumber}` : null,
+              rowTipSatang > 0 ? `ทิป/โอนเกิน: ${formatBaht(rowTipSatang)}` : null,
+            ].filter(Boolean).join(" · ") || null,
             reference_number: row.referenceNumber || null,
             ...(slipPayload ? { slip: slipPayload } : {}),
           },
@@ -763,6 +775,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               const orderTotalSatang =
                 itemsFoodTotalSatang + (row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0);
               const isAmountMatchingFood = row.amountSatang > 0 && orderTotalSatang === row.amountSatang;
+              const rowTipSatang = Math.max(0, row.amountSatang - orderTotalSatang);
 
               return (
                 <div
@@ -815,10 +828,12 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                       {matchedPreset ? (
                         <span className="badge-preset-matched">
                           <Check size={12} /> ตรงสูตร: {matchedPreset.name}
+                          {rowTipSatang > 0 ? ` (ทิป/โอนเกิน +${formatBaht(rowTipSatang)})` : ""}
                         </span>
                       ) : row.amountSatang > 0 ? (
                         <span className="badge-preset-unmatched">
                           <AlertCircle size={12} /> ไม่ตรงสูตรใด ({formatBaht(row.amountSatang)})
+                          {hasItems && rowTipSatang > 0 ? ` (ทิป +${formatBaht(rowTipSatang)})` : ""}
                         </span>
                       ) : null}
 
@@ -891,6 +906,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                             })
                             .filter(Boolean)
                             .join(", ")}
+                          {rowTipSatang > 0 ? ` · ทิป/โอนเกิน +${formatBaht(rowTipSatang)}` : ""}
                         </span>
                       </div>
                     )}
@@ -923,7 +939,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                               if (!m) return null;
                               return (
                                 <div key={it.menuId} className="slip-editor-item-row">
-                                  <span className="slip-item-name">{m.name}</span>
+                                   <span className="slip-item-name">{m.name}</span>
                                   <span className="slip-item-unit-price">@{m.price / 100}฿</span>
                                   <div className="slip-item-qty-stepper">
                                     <button
@@ -982,12 +998,16 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
 
                         {/* Calculation Comparison Banner */}
                         {hasItems && (
-                          <div className={`slip-calc-banner ${isAmountMatchingFood ? "match" : "diff"}`}>
+                          <div className={`slip-calc-banner ${isAmountMatchingFood || rowTipSatang > 0 ? "match" : "diff"}`}>
                             {isAmountMatchingFood ? (
                               <>ยอดอาหารรวมค่าส่งตรงกับสลิปพอดี ({formatBaht(orderTotalSatang)})</>
+                            ) : rowTipSatang > 0 ? (
+                              <>
+                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (มีทิป/โอนเกิน +{formatBaht(rowTipSatang)})
+                              </>
                             ) : (
                               <>
-                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ต่างกัน {formatBaht(Math.abs(orderTotalSatang - row.amountSatang))})
+                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ยอดในสลิปน้อยกว่า {formatBaht(orderTotalSatang - row.amountSatang)})
                               </>
                             )}
                           </div>

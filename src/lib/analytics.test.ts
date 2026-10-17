@@ -45,6 +45,10 @@ describe("summarize", () => {
     );
     expect(s).toMatchObject({ deliveryIncome: 1500, deliveryCount: 1, fuelExpenses: 4000, packagingCost: 940, operatingExpenses: 6000 });
   });
+  it("totals tips and overtransferred amounts", () => {
+    const s = summarize([sale({ tip: 1000 }), sale({ id: "s2", tip: 2500 })], []);
+    expect(s.tipIncome).toBe(3500);
+  });
 });
 
 describe("rankings and breakdowns", () => {
