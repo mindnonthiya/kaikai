@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { ADDON_CATEGORY, DISH_CATEGORY, SERVICE_CATEGORY } from "@/lib/data/types";
 import { recalculateMenuCosts } from "@/lib/menu-cost";
+import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { InputError, amountOrZero, dbError, id, money, oneOf, runAction, text } from "@/lib/server-action";
 
 type Row = Record<string, unknown>;
@@ -131,8 +132,28 @@ export async function saveMenuRecipe(form: FormData): Promise<ActionState> {
       if (error) dbError(error);
     }
     await recalculateMenuCosts(supabase, [menuId]);
+
+    const syncPastSales = form.get("sync_past_sales") === "true" || form.get("sync_past_sales") === "on";
+    let syncedMessage = "";
+    if (syncPastSales) {
+      try {
+        const syncResult = await syncHistoricalCosts(supabase, {
+          ownerId: user.id,
+          menuId,
+          forceAll: true,
+        });
+        revalidatePath("/sales");
+        revalidatePath("/reports");
+        if (syncResult.affectedSalesCount > 0) {
+          syncedMessage = ` และอัปเดตต้นทุนให้ออเดอร์เก่า ${syncResult.affectedSalesCount} รายการ`;
+        }
+      } catch (err) {
+        console.warn("Failed to sync historical sales costs for menu:", err);
+      }
+    }
+
     revalidateMenus();
-    return { ok: true, message: "บันทึกสูตรและคำนวณต้นทุนใหม่แล้ว" };
+    return { ok: true, message: `บันทึกสูตรและคำนวณต้นทุนใหม่แล้ว${syncedMessage}` };
   });
 }
 

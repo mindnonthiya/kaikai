@@ -64,6 +64,10 @@ function RecipeEditor({ menu, items, ingredients, packaging }: { menu: MenuRecor
             {packRows.length > 0 && <p className="recipe-group">บรรจุภัณฑ์</p>}
             {packRows.map((row) => <RecipeRow key={row.key} row={row} />)}
           </div>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.875rem", margin: "6px 0", cursor: "pointer" }}>
+            <input type="checkbox" name="sync_past_sales" value="true" defaultChecked />
+            <span>คำนวณต้นทุนย้อนหลังให้ออเดอร์เก่าที่เคยขายไปแล้วด้วย</span>
+          </label>
           <p className="field-hint wide">{isAddonCategory(menu.category)
             ? "ของเพิ่ม: ไก่เพิ่ม = ไก่ 1 ชิ้น · ข้าวเปล่า = ช้อน 1 (ตอนขาย ช้อนคิดเป็น max(จำนวนกล่อง, ข้าวเปล่า))"
             : "เช่น เมนู 69 = ไก่ 5 ชิ้น · เมนู 89 = ไก่ 7 ชิ้น · กล่อง ช้อน ถ้วยน้ำจิ้ม อย่างละ 1"}</p>
