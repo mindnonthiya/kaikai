@@ -3,6 +3,7 @@ import { PageTitle } from "@/components/page-title";
 import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
 import { PresetManager } from "@/components/preset-manager";
+import { ProfileAvatarField } from "@/components/profile-avatar-field";
 import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
 import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
@@ -26,8 +27,11 @@ export default async function SettingsPage() {
       <section className="panel settings-card">
         <h2>ข้อมูลร้านและบัญชี</h2>
         <ActionForm action={saveProfile} submitLabel="บันทึกการเปลี่ยนแปลง" className="settings-form" resetOnSuccess={false}>
-          <label>ชื่อร้าน (ชื่อบัญชีร้าน)<input id="settings-shop" name="shop_name" defaultValue={profile.shopName} maxLength={80} required /></label>
-          <label>ชื่อเจ้าของร้าน / ผู้ติดต่อ <span className="muted-hint">(ไม่บังคับ — หากเว้นว่างจะใช้ชื่อร้าน)</span><input id="settings-name" name="display_name" defaultValue={profile.displayName === profile.shopName ? "" : profile.displayName} placeholder={profile.shopName} maxLength={80} /></label>
+          <ProfileAvatarField
+            currentAvatar={profile.avatarUrl}
+            initialShopName={profile.shopName}
+            initialDisplayName={profile.displayName === profile.shopName ? "" : profile.displayName}
+          />
           <label>เขตเวลา<input value="Asia/Bangkok (UTC+7)" readOnly /></label>
         </ActionForm>
       </section>

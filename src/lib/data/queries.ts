@@ -455,7 +455,7 @@ export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<Po
 });
 
 export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
-  const fallback = { displayName: "เจ้าของร้าน", shopName: "kaikai", email: null };
+  const fallback = { displayName: "เจ้าของร้าน", shopName: "kaikai", email: null, avatarUrl: null };
   if (!hasSupabaseEnv) return fallback;
   const userId = await getRequestUserId();
   if (userId === "anon") return fallback;
@@ -466,12 +466,30 @@ export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return fallback;
-  const { data } = await supabase.from("profiles").select("display_name,shop_name").eq("id", user.id).maybeSingle();
   const meta = (user.user_metadata ?? {}) as Row;
-  const res = {
-    displayName: str(data?.display_name) || str(meta.display_name) || fallback.displayName,
-    shopName: str(data?.shop_name) || str(meta.shop_name) || fallback.shopName,
+  let avatarUrl: string | null = str(meta.avatar_url) || str(meta.picture) || null;
+  let displayName = str(meta.display_name);
+  let shopName = str(meta.shop_name);
+
+  // Attempt to load from profiles table, gracefully handling if avatar_url is not yet migrated
+  const { data, error } = await supabase.from("profiles").select("display_name,shop_name,avatar_url").eq("id", user.id).maybeSingle();
+  if (!error && data) {
+    if (str(data.avatar_url)) avatarUrl = str(data.avatar_url);
+    if (str(data.display_name)) displayName = str(data.display_name);
+    if (str(data.shop_name)) shopName = str(data.shop_name);
+  } else if (error) {
+    const { data: dataFallback } = await supabase.from("profiles").select("display_name,shop_name").eq("id", user.id).maybeSingle();
+    if (dataFallback) {
+      if (str(dataFallback.display_name)) displayName = str(dataFallback.display_name);
+      if (str(dataFallback.shop_name)) shopName = str(dataFallback.shop_name);
+    }
+  }
+
+  const res: ProfileRecord = {
+    displayName: displayName || fallback.displayName,
+    shopName: shopName || fallback.shopName,
     email: user.email ?? null,
+    avatarUrl: avatarUrl || null,
   };
   return setCached(cacheKey, res, 60_000);
 });

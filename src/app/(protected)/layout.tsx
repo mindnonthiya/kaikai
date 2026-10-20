@@ -7,5 +7,5 @@ export const dynamic = "force-dynamic";
 
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const profile = await fetchProfile();
-  return <AppShell demoMode={!hasSupabaseEnv} shopName={profile.shopName} displayName={profile.displayName}>{children}</AppShell>;
+  return <AppShell demoMode={!hasSupabaseEnv} shopName={profile.shopName} displayName={profile.displayName} avatarUrl={profile.avatarUrl}>{children}</AppShell>;
 }
