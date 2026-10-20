@@ -4,6 +4,7 @@
 export function safeNextPath(value: string | string[] | null | undefined, fallback = "/dashboard") {
   const raw = Array.isArray(value) ? value[0] : value;
   if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return fallback;
+  if (raw === "/") return fallback;
   return raw;
 }
 
