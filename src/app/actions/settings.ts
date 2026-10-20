@@ -96,7 +96,12 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
       }
     }
 
-    const updatePayload: Record<string, any> = {
+    const updatePayload: {
+      shop_name: string;
+      display_name: string;
+      updated_at: string;
+      avatar_url?: string | null;
+    } = {
       shop_name: shopName,
       display_name: displayName,
       updated_at: new Date().toISOString(),
@@ -120,7 +125,10 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
     if (error) dbError(error);
     if (!data?.length) throw new InputError("ไม่พบโปรไฟล์ของบัญชีนี้ — กรุณาติดต่อผู้ดูแลระบบ");
 
-    const authMeta: Record<string, any> = { shop_name: shopName, display_name: displayName };
+    const authMeta: { shop_name: string; display_name: string; avatar_url?: string | null } = {
+      shop_name: shopName,
+      display_name: displayName,
+    };
     if (avatarUrl !== undefined) {
       authMeta.avatar_url = avatarUrl;
     }
