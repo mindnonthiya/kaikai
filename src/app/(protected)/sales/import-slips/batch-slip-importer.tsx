@@ -13,6 +13,7 @@ import {
   Pencil,
   Plus,
   RotateCw,
+  SlidersHorizontal,
   Trash2,
   UploadCloud,
   X,
@@ -668,12 +669,17 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
   return (
     <div className="batch-slip-importer">
       {/* Sub navigation between single and batch mode */}
-      <div className="sales-mode-tabs">
-        <Link href="/sales/new" className="sales-mode-tab">
-          เปิดบิลเดี่ยว
-        </Link>
-        <Link href="/sales/import-slips" className="sales-mode-tab active">
-          นำเข้าสลิปเป็นชุด
+      <div className="sales-mode-bar">
+        <div className="sales-mode-tabs">
+          <Link href="/sales/new" className="sales-mode-tab">
+            เปิดบิลเดี่ยว
+          </Link>
+          <span className="sales-mode-tab active">
+            นำเข้าสลิปเป็นชุด
+          </span>
+        </div>
+        <Link href="/settings" className="sales-mode-settings-link">
+          <SlidersHorizontal size={13} /> ตั้งค่าสูตรราคา
         </Link>
       </div>
 
@@ -1111,12 +1117,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               >
                 {saving ? (
                   <>
-                    <Loader2 size={18} className="spin-icon" />
-                    กำลังบันทึก ({saveProgress?.current}/{saveProgress?.total})…
+                    <Loader2 size={16} className="spin-icon" />
+                    <span className="desktop-only">กำลังบันทึก ({saveProgress?.current}/{saveProgress?.total})…</span>
+                    <span className="mobile-only-inline">บันทึก ({saveProgress?.current}/{saveProgress?.total})…</span>
                   </>
                 ) : (
                   <>
-                    <Check size={18} /> ยืนยันและบันทึกออเดอร์ ({readyToSaveCount} รายการ)
+                    <Check size={16} />
+                    <span className="desktop-only">ยืนยันและบันทึกออเดอร์ ({readyToSaveCount} รายการ)</span>
+                    <span className="mobile-only-inline">บันทึก ({readyToSaveCount})</span>
                   </>
                 )}
               </button>

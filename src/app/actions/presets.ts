@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { PRICE_PRESETS_SETTINGS_KEY } from "@/lib/data/queries";
+import { PRICE_PRESETS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
 import type { PricePreset } from "@/lib/data/types";
 import { InputError, dbError, runAction } from "@/lib/server-action";
 
@@ -35,6 +35,7 @@ export async function saveAllPricePresets(presets: PricePreset[]): Promise<Actio
 
     if (error) dbError(error);
 
+    invalidateQueryCache("settings:presets");
     revalidatePath("/settings");
     revalidatePath("/sales/new");
     revalidatePath("/sales/import-slips");
@@ -73,6 +74,7 @@ export async function deletePricePreset(presetId: string): Promise<ActionState> 
 
     if (upsertErr) dbError(upsertErr);
 
+    invalidateQueryCache("settings:presets");
     revalidatePath("/settings");
     revalidatePath("/sales/new");
     revalidatePath("/sales/import-slips");

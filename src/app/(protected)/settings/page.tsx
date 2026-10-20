@@ -62,7 +62,13 @@ export default async function SettingsPage() {
       <section className="panel settings-card">
         <h2>ออเดอร์และต้นทุนย้อนหลัง</h2>
         <p className="field-hint">หากคุณมีออเดอร์ในอดีตที่เคยบันทึกไว้ก่อนผูกสูตรต้นทุน หรือเพิ่งเพิ่มบรรจุภัณฑ์และส่วนผสมในสูตรอาหาร สามารถกดปุ่มนี้เพื่อให้ระบบนำสูตรปัจจุบันไปคำนวณต้นทุนและกำไรย้อนหลังให้อัตโนมัติ</p>
-        <ActionForm action={syncHistoricalSalesCosts} submitLabel="คำนวณต้นทุนออเดอร์เก่าทั้งหมดใหม่" className="settings-form" resetOnSuccess={false}>
+        <ActionForm
+          action={syncHistoricalSalesCosts}
+          submitLabel="คำนวณต้นทุนออเดอร์เก่าทั้งหมดใหม่"
+          pendingLabel="กำลังคำนวณต้นทุนย้อนหลัง…"
+          className="settings-form"
+          resetOnSuccess={false}
+        >
           <input type="hidden" name="force_all" value="true" />
           <div className="connection-row"><span>ต้นทุนออเดอร์เก่า</span><strong>อัปเดตตามสูตรปัจจุบัน</strong></div>
         </ActionForm>

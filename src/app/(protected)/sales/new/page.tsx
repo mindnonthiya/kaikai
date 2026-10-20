@@ -6,14 +6,14 @@ import { pooledCost } from "@/lib/analytics";
 import { isAddonCategory, isServiceCategory } from "@/lib/data/types";
 
 export default async function NewSalePage() {
-  const [allMenus, recipeItems, allPackaging, settings, presets] = await Promise.all([
+  const [allMenus, recipeItems, allPackaging, settings, presets, pooled] = await Promise.all([
     fetchMenus(),
     fetchRecipeItems(),
     fetchPackaging(),
     fetchSaleSettings(),
     fetchPricePresets(),
+    fetchPooledRate(),
   ]);
-  const pooled = await fetchPooledRate(settings);
   const packaging: PackagingOption[] = allPackaging
     .filter((p) => p.perOrder && p.isActive)
     .map((p) => ({ id: p.id, name: p.name, unit: p.unit, unitCost: p.unitCost }));
@@ -44,14 +44,7 @@ export default async function NewSalePage() {
       eyebrow="บันทึกรายการ"
       title="เปิดบิล"
       description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก"
-      action={
-        <div style={{ display: "flex", gap: "8px" }}>
-          <Link className="primary-button" href="/sales/import-slips" style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)", borderColor: "transparent", color: "#fff" }}>
-            นำเข้าสลิปเป็นชุด
-          </Link>
-          <Link className="secondary-button" href="/sales">ประวัติการขาย</Link>
-        </div>
-      }
+      action={<Link className="secondary-button" href="/sales">ประวัติการขาย</Link>}
     />
     <SaleComposer
       menus={menus}

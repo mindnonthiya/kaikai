@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
+import { invalidateQueryCache } from "@/lib/data/queries";
 import { ADDON_CATEGORY, DISH_CATEGORY, SERVICE_CATEGORY } from "@/lib/data/types";
 import { recalculateMenuCosts } from "@/lib/menu-cost";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
@@ -11,6 +12,9 @@ type Row = Record<string, unknown>;
 const UUID = /^[0-9a-f-]{36}$/i;
 
 function revalidateMenus() {
+  invalidateQueryCache("menus");
+  invalidateQueryCache("recipes");
+  invalidateQueryCache("pooled_rate");
   revalidatePath("/menus");
   revalidatePath("/sales/new");
   revalidatePath("/dashboard");

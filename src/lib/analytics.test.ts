@@ -4,7 +4,15 @@ import {
   pooledCost, pooledIngredientBps, recipeCostParts, recipeMaterialCost, summarize, weightedPricePerUnit, yieldWindow,
 } from "./analytics";
 import type { ExpenseRecord, MenuRecord, SaleRecord } from "./data/types";
-import { bangkokDayKey, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "./time";
+import {
+  bangkokDayKey,
+  fromBangkokDateTimeInput,
+  previousRange,
+  resolveRange,
+  startOfBangkokDay,
+  startOfBangkokMonth,
+  toBangkokDateTimeInput,
+} from "./time";
 
 const sale = (over: Partial<SaleRecord> = {}): SaleRecord => ({
   id: "s", saleNumber: 1, soldAt: "2026-10-13T05:00:00.000Z", status: "confirmed", paymentStatus: "paid", customerName: null, notes: null,
@@ -208,5 +216,12 @@ describe("Bangkok time ranges", () => {
     const prev = previousRange(resolveRange("month", now));
     expect(bangkokDayKey(prev.start)).toBe("2026-09-01");
     expect(bangkokDayKey(prev.end)).toBe("2026-09-14");
+  });
+  it("formats Bangkok datetime-local string correctly", () => {
+    expect(toBangkokDateTimeInput(now)).toBe("2026-10-13T09:00");
+  });
+  it("parses Bangkok datetime-local input back into UTC ISO string", () => {
+    const iso = fromBangkokDateTimeInput("2026-10-13T09:00");
+    expect(iso).toBe("2026-10-13T02:00:00.000Z");
   });
 });

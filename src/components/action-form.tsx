@@ -10,8 +10,8 @@ type Action = (form: FormData) => Promise<ActionState>;
  * Form that calls a server action and shows its Thai success/error message.
  * Submits via onSubmit (not the `action` prop) so inputs are kept when validation fails.
  */
-export function ActionForm({ action, children, submitLabel, className = "form-grid", resetOnSuccess = true, id }: {
-  action: Action; children: React.ReactNode; submitLabel: string; className?: string; resetOnSuccess?: boolean; id?: string;
+export function ActionForm({ action, children, submitLabel, pendingLabel, className = "form-grid", resetOnSuccess = true, id }: {
+  action: Action; children: React.ReactNode; submitLabel: string; pendingLabel?: string; className?: string; resetOnSuccess?: boolean; id?: string;
 }) {
   const [state, setState] = useState<ActionState>({});
   const [pending, startTransition] = useTransition();
@@ -38,7 +38,7 @@ export function ActionForm({ action, children, submitLabel, className = "form-gr
     <div className="form-footer">
       {state.error && <p className="form-error" role="alert">{state.error}</p>}
       {state.ok && state.message && <p className="form-success" role="status">{state.message}</p>}
-      <button className="primary-button" disabled={pending}>{pending ? "กำลังบันทึก…" : submitLabel}</button>
+      <button className="primary-button" disabled={pending}>{pending ? (pendingLabel ?? "กำลังบันทึก…") : submitLabel}</button>
     </div>
   </form>;
 }

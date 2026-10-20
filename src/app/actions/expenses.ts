@@ -2,12 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
+import { invalidateQueryCache } from "@/lib/data/queries";
 import { dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
 
 const KINDS = ["direct", "operating", "one_time", "recurring"] as const;
 const METHODS = ["cash", "transfer", "other"] as const;
 
 function revalidateExpenses() {
+  invalidateQueryCache("pooled_rate");
   revalidatePath("/expenses");
   revalidatePath("/dashboard");
   revalidatePath("/reports");

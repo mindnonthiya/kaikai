@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
+import { invalidateQueryCache } from "@/lib/data/queries";
 import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 
@@ -37,6 +38,8 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
       { onConflict: "owner_id,key" },
     );
     if (error) dbError(error);
+    invalidateQueryCache("settings");
+    invalidateQueryCache("pooled_rate");
     revalidatePath("/settings");
     revalidatePath("/sales/new");
     revalidatePath("/menus");
@@ -59,6 +62,7 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
     if (error) dbError(error);
     if (!data?.length) throw new InputError("ไม่พบโปรไฟล์ของบัญชีนี้ — กรุณาติดต่อผู้ดูแลระบบ");
     await supabase.auth.updateUser({ data: { shop_name: shopName, display_name: displayName } });
+    invalidateQueryCache("profile");
     revalidatePath("/", "layout");
     return { ok: true, message: "บันทึกข้อมูลร้านแล้ว" };
   });
