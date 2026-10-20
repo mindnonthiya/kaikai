@@ -355,13 +355,15 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   const hasItemsOrService = items.length > 0 || (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0);
   let step = 1;
   return <div className="sale-composer">
-    <div className="sales-mode-tabs" style={{ gridColumn: "1 / -1", marginBottom: "8px" }}>
-      <span className="sales-mode-tab active">
-        เปิดบิลเดี่ยว
-      </span>
-      <Link href="/sales/import-slips" className="sales-mode-tab">
-        นำเข้าสลิปเป็นชุด
-      </Link>
+    <div className="sales-mode-bar" style={{ gridColumn: "1 / -1" }}>
+      <div className="sales-mode-tabs">
+        <span className="sales-mode-tab active">
+          เปิดบิลเดี่ยว
+        </span>
+        <Link href="/sales/import-slips" className="sales-mode-tab">
+          นำเข้าสลิปเป็นชุด
+        </Link>
+      </div>
     </div>
     <section className="composer-main">
       <div className="step-head">

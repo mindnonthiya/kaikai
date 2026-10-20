@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { learnedYield, weightedPricePerUnit, yieldWindow } from "@/lib/analytics";
+import { invalidateQueryCache } from "@/lib/data/queries";
 import { INGREDIENT_COSTING_LABELS, type IngredientCosting } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
@@ -13,6 +14,11 @@ type Row = Record<string, unknown>;
 const POOLED_UNIT = "บาท";
 
 function revalidateCosts() {
+  invalidateQueryCache("ingredients");
+  invalidateQueryCache("packaging");
+  invalidateQueryCache("recipes");
+  invalidateQueryCache("menus");
+  invalidateQueryCache("pooled_rate");
   revalidatePath("/ingredients");
   revalidatePath("/menus");
   revalidatePath("/sales/new");

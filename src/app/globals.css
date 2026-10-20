@@ -99,10 +99,12 @@ a { color: inherit; text-decoration: none; }
   .page-heading .page-heading-action button,
   .page-heading > div:last-child:not(:first-child) a,
   .page-heading > div:last-child:not(:first-child) button {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
-    text-align: center;
-    min-height: 40px;
+    min-height: 36px;
+    padding: 6px 16px;
     font-size: 13px;
   }
 }
@@ -1060,28 +1062,42 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 
 /* ==========================================================================
-   Sales Mode Tabs (Single vs Batch)
+   Sales Mode Bar & Tabs (Single vs Batch)
    ========================================================================== */
-.sales-mode-tabs {
+.sales-mode-bar {
   display: flex;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.04);
-  padding: 5px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.sales-mode-tabs {
+  display: inline-flex;
+  gap: 4px;
+  background: #ede8df;
+  padding: 4px;
   border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
   width: fit-content;
   max-width: 100%;
 }
 .sales-mode-tab {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 7px 18px;
   border-radius: 9px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--muted, #64748b);
   text-decoration: none;
   transition: all 0.15s ease;
+  background: transparent;
+  border: none;
+  cursor: pointer;
 }
 .sales-mode-tab:hover {
   color: var(--text, #1e293b);
@@ -1089,7 +1105,27 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .sales-mode-tab.active {
   background: #ffffff;
   color: var(--text, #0f172a);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  cursor: default;
+}
+.sales-mode-settings-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-dark, #b45309);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  transition: all 0.15s ease;
+}
+.sales-mode-settings-link:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--primary, #e66729);
 }
 
 /* ==========================================================================
@@ -2019,6 +2055,13 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 
 @media (max-width: 640px) {
+  .sales-mode-bar {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
   /* Sales mode switch tabs full width segmented control */
   .sales-mode-tabs {
     width: 100%;
@@ -2032,6 +2075,12 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
     text-align: center;
     padding: 8px 10px;
     font-size: 13px;
+  }
+  .sales-mode-settings-link {
+    justify-content: center;
+    text-align: center;
+    padding: 7px 12px;
+    font-size: 12.5px;
   }
 
   /* Padding at bottom so last slip is not covered by floating bottom bar */
