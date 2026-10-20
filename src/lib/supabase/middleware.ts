@@ -40,11 +40,23 @@ export async function updateSession(request: NextRequest) {
 
     let user = null;
     try {
-      const { data } = await supabase.auth.getUser();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        request.cookies.getAll()
+          .filter((c) => c.name.includes("-auth-token"))
+          .forEach((c) => response.cookies.delete(c.name));
+      }
       user = data?.user ?? null;
     } catch (e) {
       console.error("Middleware auth check failed:", e);
       user = null;
+      try {
+        request.cookies.getAll()
+          .filter((c) => c.name.includes("-auth-token"))
+          .forEach((c) => response.cookies.delete(c.name));
+      } catch {
+        // Ignore
+      }
     }
 
     const { pathname } = request.nextUrl;
@@ -66,6 +78,14 @@ export async function updateSession(request: NextRequest) {
     return response;
   } catch (error) {
     console.error("Middleware execution failed gracefully:", error);
-    return NextResponse.next({ request });
+    const fallbackResponse = NextResponse.next({ request });
+    try {
+      request.cookies.getAll()
+        .filter((c) => c.name.includes("-auth-token"))
+        .forEach((c) => fallbackResponse.cookies.delete(c.name));
+    } catch {
+      // Ignore
+    }
+    return fallbackResponse;
   }
 }
