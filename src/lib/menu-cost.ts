@@ -15,7 +15,7 @@ type Row = Record<string, unknown>;
  */
 export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: string[]) {
   if (menuIds && !menuIds.length) return;
-  let menuQuery = supabase.from("menus").select("id");
+  let menuQuery = supabase.from("menus").select("id, current_cost_satang, packaging_cost_satang");
   let recipeQuery = supabase.from("menu_recipe_items").select("menu_id,ingredient_id,packaging_item_id,quantity");
   if (menuIds) {
     menuQuery = menuQuery.in("id", menuIds);
@@ -43,14 +43,26 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
   }
 
   const now = new Date().toISOString();
+  const updates: Promise<unknown>[] = [];
   for (const menu of menus.data as Row[]) {
     const parts = recipeCostParts(byMenu.get(String(menu.id)) ?? [], ingredientCost, packagingCost);
-    const total = parts.ingredients + parts.packaging;
-    const { error } = await supabase.from("menus")
-      .update({ current_cost_satang: Math.round(total), packaging_cost_satang: Math.round(parts.packaging), cost_calculated_at: now, updated_at: now })
-      .eq("id", String(menu.id));
-    if (error) dbError(error);
+    const total = Math.round(parts.ingredients + parts.packaging);
+    const pack = Math.round(parts.packaging);
+
+    if (Number(menu.current_cost_satang) === total && Number(menu.packaging_cost_satang) === pack) {
+      continue;
+    }
+
+    updates.push(
+      (async () => {
+        const { error } = await supabase.from("menus")
+          .update({ current_cost_satang: total, packaging_cost_satang: pack, cost_calculated_at: now, updated_at: now })
+          .eq("id", String(menu.id));
+        if (error) dbError(error);
+      })()
+    );
   }
+  await Promise.all(updates);
 }
 
 /** Menu ids whose recipe uses the given ingredient or packaging item. */
