@@ -10,6 +10,7 @@ import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/li
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 import { compressSlipImage } from "@/lib/image-compression";
+import { fromBangkokDateTimeInput, toBangkokDateTimeInput } from "@/lib/time";
 
 type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
@@ -70,6 +71,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("paid");
   const [paidAmount, setPaidAmount] = useState("");
   const [customer, setCustomer] = useState("");
+  const [soldAt, setSoldAt] = useState(() => toBangkokDateTimeInput());
   const [slip, setSlip] = useState<File | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string; saleId?: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -280,6 +282,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
     setCart({}); setAdjust({}); setCustomItems([]); setShowCustomForm(false);
     setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setTip("0"); setFee("0");
     setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setSlip(null);
+    setSoldAt(toBangkokDateTimeInput());
   }
 
   async function save() {
@@ -326,6 +329,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
         payment_method: payment,
         payment_status: paymentStatus,
         customer_name: customer.trim() || null,
+        sold_at: fromBangkokDateTimeInput(soldAt),
         notes: notesParts.join(" · ") || null,
         ...(slipPayload ? { slip: slipPayload } : {}),
       } });
@@ -498,6 +502,25 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
             </div>
           </div>
         </div>
+        <label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>วันที่และเวลาที่ขาย</span>
+            <button
+              type="button"
+              className="text-link"
+              style={{ fontSize: "11px", fontWeight: "normal", background: "none", border: "none", cursor: "pointer", color: "var(--primary-dark)" }}
+              onClick={() => setSoldAt(toBangkokDateTimeInput())}
+            >
+              ตอนนี้
+            </button>
+          </div>
+          <input
+            id="sale-sold-at"
+            type="datetime-local"
+            value={soldAt}
+            onChange={(e) => setSoldAt(e.target.value)}
+          />
+        </label>
         <label>ช่องทางชำระ<select id="sale-payment-method" value={payment} onChange={(e) => setPayment(e.target.value)}><option value="transfer">เงินโอน</option><option value="cash">เงินสด</option><option value="other">อื่น ๆ</option></select></label>
         <label>ชื่อลูกค้า (ไม่บังคับ)<input id="sale-customer" value={customer} onChange={(e) => setCustomer(e.target.value)} maxLength={120} placeholder="เช่น คุณเมย์" /></label>
         <label>สถานะการรับเงิน<select id="sale-payment-status" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}><option value="paid">ชำระครบแล้ว</option><option value="partial">ชำระบางส่วน</option><option value="unpaid">ยังไม่ชำระ</option></select></label>

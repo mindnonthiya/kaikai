@@ -1111,12 +1111,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
               >
                 {saving ? (
                   <>
-                    <Loader2 size={18} className="spin-icon" />
-                    กำลังบันทึก ({saveProgress?.current}/{saveProgress?.total})…
+                    <Loader2 size={16} className="spin-icon" />
+                    <span className="desktop-only">กำลังบันทึก ({saveProgress?.current}/{saveProgress?.total})…</span>
+                    <span className="mobile-only-inline">บันทึก ({saveProgress?.current}/{saveProgress?.total})…</span>
                   </>
                 ) : (
                   <>
-                    <Check size={18} /> ยืนยันและบันทึกออเดอร์ ({readyToSaveCount} รายการ)
+                    <Check size={16} />
+                    <span className="desktop-only">ยืนยันและบันทึกออเดอร์ ({readyToSaveCount} รายการ)</span>
+                    <span className="mobile-only-inline">บันทึก ({readyToSaveCount})</span>
                   </>
                 )}
               </button>

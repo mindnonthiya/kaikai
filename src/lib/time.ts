@@ -54,6 +54,21 @@ export function bangkokDayKey(date: Date | string) {
   return new Date(new Date(date).getTime() + OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** Formats Date as "YYYY-MM-DDTHH:mm" for <input type="datetime-local"> in Bangkok timezone. */
+export function toBangkokDateTimeInput(date: Date | string = new Date()): string {
+  const d = new Date(date);
+  const shifted = new Date(d.getTime() + OFFSET_MS);
+  return shifted.toISOString().slice(0, 16);
+}
+
+/** Parses "YYYY-MM-DDTHH:mm" from a datetime-local input as Bangkok timezone into an ISO string. */
+export function fromBangkokDateTimeInput(value: string): string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+    return new Date().toISOString();
+  }
+  return new Date(`${value.slice(0, 16)}:00+07:00`).toISOString();
+}
+
 /** UTC instant of 00:00 Bangkok time on the same Bangkok calendar day. */
 export function startOfBangkokDay(date: Date) {
   const shifted = new Date(date.getTime() + OFFSET_MS);
