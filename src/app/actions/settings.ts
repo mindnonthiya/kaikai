@@ -130,7 +130,12 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
       display_name: displayName,
     };
     if (avatarUrl !== undefined) {
-      authMeta.avatar_url = avatarUrl;
+      // Only set avatar_url in auth metadata if it is null (removed) or a valid HTTP URL.
+      // Base64 strings must NEVER be stored in JWT user_metadata to avoid cookie size overflow (>4KB)
+      // which causes session corruption and "โหลดข้อมูลไม่สำเร็จ".
+      if (avatarUrl === null || avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://")) {
+        authMeta.avatar_url = avatarUrl;
+      }
     }
     await supabase.auth.updateUser({ data: authMeta });
 
