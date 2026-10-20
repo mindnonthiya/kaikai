@@ -20,7 +20,6 @@ export default async function SettingsPage() {
   ]);
   const pooled = await fetchPooledRate(saleSettings);
   const ocrProvider = getOcrProvider();
-  const initial = Array.from((profile.displayName || profile.shopName || "ก").trim())[0] ?? "ก";
 
   return <>
     <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
@@ -28,9 +27,11 @@ export default async function SettingsPage() {
       <section className="panel settings-card">
         <h2>ข้อมูลร้านและบัญชี</h2>
         <ActionForm action={saveProfile} submitLabel="บันทึกการเปลี่ยนแปลง" className="settings-form" resetOnSuccess={false}>
-          <ProfileAvatarField currentAvatar={profile.avatarUrl} initialLetter={initial} />
-          <label>ชื่อร้าน (ชื่อบัญชีร้าน)<input id="settings-shop" name="shop_name" defaultValue={profile.shopName} maxLength={80} required /></label>
-          <label>ชื่อเจ้าของร้าน / ผู้ติดต่อ <span className="muted-hint">(ไม่บังคับ — หากเว้นว่างจะใช้ชื่อร้าน)</span><input id="settings-name" name="display_name" defaultValue={profile.displayName === profile.shopName ? "" : profile.displayName} placeholder={profile.shopName} maxLength={80} /></label>
+          <ProfileAvatarField
+            currentAvatar={profile.avatarUrl}
+            initialShopName={profile.shopName}
+            initialDisplayName={profile.displayName === profile.shopName ? "" : profile.displayName}
+          />
           <label>เขตเวลา<input value="Asia/Bangkok (UTC+7)" readOnly /></label>
         </ActionForm>
       </section>
