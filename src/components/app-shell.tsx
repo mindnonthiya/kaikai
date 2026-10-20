@@ -9,7 +9,19 @@ import { navItems } from "./icons";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 
-export function AppShell({ children, demoMode, shopName, displayName }: { children: React.ReactNode; demoMode: boolean; shopName: string; displayName: string }) {
+export function AppShell({
+  children,
+  demoMode,
+  shopName,
+  displayName,
+  avatarUrl,
+}: {
+  children: React.ReactNode;
+  demoMode: boolean;
+  shopName: string;
+  displayName: string;
+  avatarUrl?: string | null;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -67,7 +79,14 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
           </button>
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar">{initial}</div>
+          <div className="avatar">
+            {avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={avatarUrl} alt="" className="avatar-img" />
+            ) : (
+              initial
+            )}
+          </div>
           <div>
             <strong>{displayName || shopName}</strong>
             <span>{demoMode ? "ยังไม่เชื่อมฐานข้อมูล" : (displayName !== shopName && shopName ? shopName : "ร้านค้าของคุณ")}</span>
@@ -77,11 +96,18 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
       {open && <button className="scrim" onClick={() => setOpen(false)} aria-label="ปิดเมนู" />}
       <div className="main-column">
         <header className="topbar">
-          <div className="mobile-only"><Link href="/dashboard" aria-label="หน้าหลัก"><Brand compact /></Link></div>
-          <div className="topbar-spacer" />
-          {demoMode && <span className="demo-pill">ยังไม่เชื่อมฐานข้อมูล</span>}
-          <span className="topbar-shop">{shopName || displayName}</span>
-          <Link href="/settings" className="avatar small desktop-only" aria-label="ตั้งค่าบัญชี">{initial}</Link>
+          <div className="mobile-only topbar-mobile-logo"><Link href="/dashboard" aria-label="หน้าหลัก"><Brand compact /></Link></div>
+          <div className="topbar-spacer desktop-only" />
+          {demoMode && <span className="demo-pill desktop-only">ยังไม่เชื่อมฐานข้อมูล</span>}
+          <span className="topbar-shop">{shopName || displayName || "kaikai"}</span>
+          <Link href="/settings" className="avatar small desktop-only" aria-label="ตั้งค่าบัญชี">
+            {avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={avatarUrl} alt="" className="avatar-img" />
+            ) : (
+              initial
+            )}
+          </Link>
           <button type="button" className="topbar-menu-btn mobile-only" onClick={() => setOpen(true)} aria-label="เปิดเมนู">
             <Menu size={20} />
           </button>
@@ -96,7 +122,14 @@ export function AppShell({ children, demoMode, shopName, displayName }: { childr
           </Link>
         ))}
         <Link href="/settings" className={`nav-profile-tab ${active("/settings") ? "active" : ""}`} aria-label="โปรไฟล์">
-          <span className="nav-avatar">{initial}</span>
+          <span className="nav-avatar">
+            {avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={avatarUrl} alt="" className="avatar-img" />
+            ) : (
+              initial
+            )}
+          </span>
           <span>โปรไฟล์</span>
         </Link>
       </nav>

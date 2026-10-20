@@ -56,15 +56,79 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
     const displayName = typeof rawDisplayName === "string" && rawDisplayName.trim()
       ? rawDisplayName.trim()
       : shopName;
-    const { data, error } = await supabase.from("profiles")
-      .update({ shop_name: shopName, display_name: displayName, updated_at: new Date().toISOString() })
+
+    const removeAvatar = form.get("remove_avatar") === "true";
+    let avatarUrl: string | null | undefined = undefined;
+
+    if (removeAvatar) {
+      avatarUrl = null;
+    } else {
+      const avatarFile = form.get("avatar") as File | null;
+      if (avatarFile && avatarFile.size > 0 && typeof avatarFile.arrayBuffer === "function") {
+        if (avatarFile.size > 5 * 1024 * 1024) {
+          throw new InputError("รูปโปรไฟล์ต้องมีขนาดไม่เกิน 5 MB");
+        }
+        const buffer = Buffer.from(await avatarFile.arrayBuffer());
+        const ext = avatarFile.name.split(".").pop()?.toLowerCase() || "jpg";
+        const cleanExt = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
+        const randomPart = Math.random().toString(36).substring(2, 8);
+        const filePath = `${user.id}/avatar_${Date.now()}_${randomPart}.${cleanExt}`;
+
+        try {
+          const { error: uploadError } = await supabase.storage
+            .from("menu-images")
+            .upload(filePath, buffer, {
+              contentType: avatarFile.type || "image/jpeg",
+              upsert: true,
+            });
+
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage.from("menu-images").getPublicUrl(filePath);
+            avatarUrl = publicUrl;
+          } else if (buffer.length <= 2 * 1024 * 1024) {
+            avatarUrl = `data:${avatarFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
+          }
+        } catch {
+          if (buffer.length <= 2 * 1024 * 1024) {
+            avatarUrl = `data:${avatarFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
+          }
+        }
+      }
+    }
+
+    const updatePayload: Record<string, any> = {
+      shop_name: shopName,
+      display_name: displayName,
+      updated_at: new Date().toISOString(),
+    };
+    if (avatarUrl !== undefined) {
+      updatePayload.avatar_url = avatarUrl;
+    }
+
+    let { data, error } = await supabase.from("profiles")
+      .update(updatePayload)
       .eq("id", user.id).select("id");
+
+    if (error && avatarUrl !== undefined) {
+      delete updatePayload.avatar_url;
+      const resFallback = await supabase.from("profiles")
+        .update(updatePayload)
+        .eq("id", user.id).select("id");
+      data = resFallback.data;
+      error = resFallback.error;
+    }
     if (error) dbError(error);
     if (!data?.length) throw new InputError("ไม่พบโปรไฟล์ของบัญชีนี้ — กรุณาติดต่อผู้ดูแลระบบ");
-    await supabase.auth.updateUser({ data: { shop_name: shopName, display_name: displayName } });
+
+    const authMeta: Record<string, any> = { shop_name: shopName, display_name: displayName };
+    if (avatarUrl !== undefined) {
+      authMeta.avatar_url = avatarUrl;
+    }
+    await supabase.auth.updateUser({ data: authMeta });
+
     invalidateQueryCache("profile");
     revalidatePath("/", "layout");
-    return { ok: true, message: "บันทึกข้อมูลร้านแล้ว" };
+    return { ok: true, message: "บันทึกข้อมูลร้านและโปรไฟล์แล้ว" };
   });
 }
 

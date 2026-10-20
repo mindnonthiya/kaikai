@@ -180,7 +180,7 @@ export type RecipeItemRecord = {
   quantity: number;
 };
 
-export type ProfileRecord = { displayName: string; shopName: string; email: string | null };
+export type ProfileRecord = { displayName: string; shopName: string; email: string | null; avatarUrl?: string | null };
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = { cash: "เงินสด", transfer: "เงินโอน", other: "อื่น ๆ" };
 export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { paid: "ชำระแล้ว", partial: "ชำระบางส่วน", unpaid: "ค้างชำระ", refunded: "คืนเงินแล้ว" };
