@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Camera, Check, Pencil, Trash2 } from "lucide-react";
+import { ProfileAvatarCropper } from "./profile-avatar-cropper";
 
 export function ProfileAvatarField({
   currentAvatar,
@@ -14,6 +15,7 @@ export function ProfileAvatarField({
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(currentAvatar ?? null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
+  const [rawCropSrc, setRawCropSrc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [shopName, setShopName] = useState(initialShopName || "kaikai");
@@ -25,15 +27,37 @@ export function ProfileAvatarField({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("รูปภาพต้องมีขนาดไม่เกิน 5 MB");
+    if (file.size > 15 * 1024 * 1024) {
+      alert("รูปภาพต้องมีขนาดไม่เกิน 15 MB");
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     const objectUrl = URL.createObjectURL(file);
-    setPreviewUrl(objectUrl);
+    setRawCropSrc(objectUrl);
+  }
+
+  function handleCropComplete(croppedFile: File, croppedPreviewUrl: string) {
+    try {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(croppedFile);
+      if (fileInputRef.current) {
+        fileInputRef.current.files = dataTransfer.files;
+      }
+    } catch {
+      // Fallback if DataTransfer is restricted
+    }
+
+    setPreviewUrl(croppedPreviewUrl);
     setRemoveAvatar(false);
+    setRawCropSrc(null);
+  }
+
+  function handleCropCancel() {
+    setRawCropSrc(null);
+    if (!previewUrl && fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   }
 
   function handleRemove(e: React.MouseEvent) {
@@ -241,6 +265,14 @@ export function ProfileAvatarField({
           )}
         </div>
       </div>
+
+      {rawCropSrc && (
+        <ProfileAvatarCropper
+          imageSrc={rawCropSrc}
+          onCrop={handleCropComplete}
+          onCancel={handleCropCancel}
+        />
+      )}
     </div>
   );
 }
