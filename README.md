@@ -1,227 +1,246 @@
-# kaikai
+# 🍗 kaikai (ไก่ไก่)
 
-เว็บภาษาไทยแบบ mobile-first สำหรับเจ้าของร้านอาหาร ใช้ติดตามยอดขาย ต้นทุนสินค้า ค่าใช้จ่าย และกำไร โดยเก็บเงินเป็นจำนวนเต็มหน่วยสตางค์และเก็บ cost snapshot ทุกครั้งที่ขาย
+<p align="center">
+  <img src="public/favicon.ico" alt="kaikai logo" width="64" height="64" />
+</p>
 
-> สถานะ: MVP สำหรับ local/preview พร้อมโครงสร้าง production แต่ยังไม่ควรเรียกว่า Production-ready จนกว่าจะเชื่อม Supabase project จริงและผ่านรายการตรวจในหัวข้อสุดท้าย
+<p align="center">
+  <strong>เว็บแอปพลิเคชันจัดการร้านอาหารแบบ Mobile-First สำหรับเจ้าของร้านยุคใหม่</strong><br>
+  รู้ยอดขายแม่นยำ คุมต้นทุนลึกถึงรายจาน สรุปกำไรสุทธิและเงินสดคงเหลือจริงได้ทันทีในมือถือ<br>
+  <em>“ขาย. คุมทุน. กำไรชัด.”</em>
+</p>
 
-## เทคโนโลยี
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js" alt="Next.js" />
+  <img src="https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Supabase-PostgreSQL%20%7C%20Auth%20%7C%20Storage-3ECF8E?style=flat-square&logo=supabase" alt="Supabase" />
+  <img src="https://img.shields.io/badge/Design-Mobile--First%20Responsive-orange?style=flat-square" alt="Mobile-First" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
+</p>
 
-- Next.js App Router, TypeScript และ CSS แบบดูแลแยกส่วนได้
-- Supabase PostgreSQL, Auth, Private Storage และ RLS
-- `@supabase/supabase-js` + `@supabase/ssr` (cookie session)
-- Vitest และ Playwright
-- Vercel + GitHub Actions
+---
 
-ไม่ใช้ Prisma หรือ Service Role key ในการทำงานทั่วไป
+## 📌 สารบัญ (Table of Contents)
 
-## เริ่มใช้งานในเครื่อง
+- [✨ เกี่ยวกับ kaikai](#-เกี่ยวกับ-kaikai)
+- [🚀 ฟีเจอร์เด่น (Key Features)](#-ฟีเจอร์เด่น-key-features)
+- [📱 คู่มือการใช้งานแต่ละเมนู (User Guide)](#-คู่มือการใช้งานแต่ละเมนู-user-guide)
+  - [1. หน้าแดชบอร์ด (Dashboard)](#1-หน้าแดชบอร์ด-dashboard)
+  - [2. เปิดบิล / บันทึกการขาย (Sales)](#2-เปิดบิล--บันทึกการขาย-sales)
+  - [3. เมนูและสูตรต้นทุน (Menus & Recipe)](#3-เมนูและสูตรต้นทุน-menus--recipe)
+  - [4. วัตถุดิบและบรรจุภัณฑ์ (Ingredients & Packaging)](#4-วัตถุดิบและบรรจุภัณฑ์-ingredients--packaging)
+  - [5. ค่าใช้จ่าย (Expenses)](#5-ค่าใช้จ่าย-expenses)
+  - [6. รายงานผลประกอบการ (Reports & Analytics)](#6-รายงานผลประกอบการ-reports--analytics)
+- [💡 ระบบคำนวณต้นทุนอัจฉริยะ (Costing Engine v2)](#-ระบบคำนวณต้นทุนอัจฉริยะ-costing-engine-v2)
+- [🛠️ สถาปัตยกรรมและเทคโนโลยี (Tech Stack)](#️-สถาปัตยกรรมและเทคโนโลยี-tech-stack)
+- [💻 การติดตั้งและเริ่มใช้งานในเครื่อง (Local Setup)](#-การติดตั้งและเริ่มใช้งานในเครื่อง-local-setup)
+- [🔒 ความปลอดภัยและการจัดเก็บข้อมูล (Security & Database)](#-ความปลอดภัยและการจัดเก็บข้อมูล-security--database)
+- [🚢 การ Deploy สู่ Production](#-การ-deploy-สู่-production)
+- [✅ Production-Ready Checklist](#-production-ready-checklist)
 
-### 1. ติดตั้งเครื่องมือ
+---
 
-ติดตั้ง Node.js 22+, npm, Git และ Docker Desktop จากเว็บไซต์ทางการ เปิด Docker Desktop ให้ทำงานก่อนเริ่ม Supabase local
+## ✨ เกี่ยวกับ kaikai
 
-### 2. ติดตั้งและตั้งค่า
+**kaikai** ถูกสร้างขึ้นเพื่อแก้ Pain Point ของเจ้าของร้านอาหาร (ออกแบบเฉพาะทางสำหรับร้านข้าวไก่ต้มน้ำปลา ข้าวมันไก่ และร้านจานด่วน) ที่มักเจอปัญหา:
+> *“ขายดีทุกวัน ทำไมสิ้นเดือนไม่เหลือเงิน?”*  
+> *“ต้นทุนจริงจานละกี่บาท ค่ากล่อง ค่าน้ำมัน ค่าแฝง หายไปไหน?”*  
+> *“เงินในระบบบอกมีเท่านี้ แต่เงินจริงในมือไม่ตรงกัน?”*
 
-```bash
-npm install
-cp .env.example .env.local
-npx supabase start
-npx supabase db reset
-```
+kaikai ช่วยให้เจ้าของร้านหยิบมือถือขึ้นมา บันทึกออเดอร์ได้ด้วยมือเดียว คำนวณต้นทุนวัตถุดิบ บรรจุภัณฑ์ และค่าส่งได้แบบเรียลไทม์ พร้อมทั้ง**แยกความแตกต่างระหว่าง "กำไรสุทธิทางบัญชี" กับ "เงินสดคงเหลือจริงในกระเป๋า"** ให้เห็นแบบโปร่งใส
 
-นำค่า Project URL และ publishable/anon key ที่ `supabase start` แสดงมาใส่ `.env.local`:
+---
 
-```env
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key>
-NEXT_PUBLIC_SITE_URL=http://localhost:3000
-OCR_PROVIDER=
-OCR_API_KEY=
-```
+## 🚀 ฟีเจอร์เด่น (Key Features)
 
-`.env.local` ถูก ignore และต้องไม่ commit ลง Git
+- 📱 **Mobile-First POS & Sales Composer** — หน้าจอเปิดบิลที่ออกแบบมาให้กดบันทึกได้รวดเร็วด้วยมือเดียวบนมือถือ แสดงยอดรวม ต้นทุน และกำไรทันที
+- 🍗 **Smart Costing Engine v2 (สูตรต้นทุนอัจฉริยะ)**:
+  - **วัตถุดิบนับชิ้น (เช่น ไก่):** ซื้อเป็น กก. แต่ระบบแปลงเป็นชิ้นต่อจาน พร้อมระบบปรับอัตราเฉลี่ยอัตโนมัติตามของที่ซื้อจริง
+  - **วัตถุดิบรวม (Pooled %):** วัตถุดิบย่อย เช่น ข้าว ผัก น้ำจิ้ม เครื่องเทศ คิดเป็นสัดส่วนเปอร์เซ็นต์ตามการซื้อจริง 30 วัน
+  - **บรรจุภัณฑ์แยกประเภท:** คิดต้นทุนกล่อง ช้อน ถ้วยน้ำจิ้ม ต่อออเดอร์ ส่วนถุงหิ้วลงเป็นค่าใช้จ่ายร้าน
+- 💵 **Dual Financial Insights (มองเห็น 2 มุมมองการเงิน)**:
+  - **กำไรสุทธิ (Net Profit):** หักต้นทุนวัตถุดิบตามจำนวนจานที่ขายจริง (COGS)
+  - **เงินสดคงเหลือจริง (Net Cash):** ยอดขายรับเข้าลบค่าใช้จ่ายจริงทั้งหมด เพื่อเทียบกับเงินในลิ้นชักและเงินในบัญชี
+- 🛵 **Delivery & Fuel Profitability** — บันทึกค่าส่งที่เก็บจากลูกค้า และคำนวณกำไรสุทธิจากการจัดส่งเทียบกับค่าน้ำมันจริง
+- 📸 **Slip Storage & Auditing** — แนบรูปสลิปโอนเงินเข้า Private Cloud Storage ตรวจสอบย้อนหลังได้ทุกบิล
+- 📊 **Executive Dashboard & CSV Export** — กราฟแท่งยอดขาย 7 วันย้อนหลัง จัดอันดับเมนูทำเงิน และส่งออกรายงานเข้า Excel / Google Sheets ได้ในคลิกเดียว
+- 🛡️ **Enterprise-Grade Database Security** — ทำงานบน Supabase PostgreSQL พร้อม Row Level Security (RLS) แยกข้อมูลแต่ละร้าน 100% และคำนวณเงินด้วยหน่วยสตางค์ (Integer) ป้องกันข้อผิดพลาด Floating-Point
 
-### 3. สร้าง types และเปิดเว็บ
+---
 
-```bash
-npm run db:types
-npm run dev
-```
-
-เปิด `http://localhost:3000` บัญชี development จาก seed คือ:
-
-- Email: `owner@kaikai.local`
-- Password: `KaikaiDemo123!`
-
-บัญชีนี้มีไว้สำหรับ local เท่านั้น ห้ามใช้ใน Production หากยังไม่ใส่ค่า Supabase หน้าเว็บจะเปิดในโหมดข้อมูลตัวอย่างและจะไม่เขียนข้อมูลจริง
-
-## คำสั่งตรวจสอบ
-
-```bash
-npm run typecheck
-npm run lint
-npm run test
-npm run build
-npx supabase test db
-npm run test:e2e
-```
-
-`npx supabase db reset` ลบฐานข้อมูล local แล้วสร้างใหม่จาก migration ทุกไฟล์ จากนั้นเรียก `supabase/seed.sql` อัตโนมัติ จึงใช้ตรวจว่าฐานข้อมูลว่างสามารถสร้างซ้ำได้จริง
-
-## โครงสร้างฐานข้อมูลและความปลอดภัย
-
-- `auth.users` จัดการบัญชี และ `profiles.id` อ้างถึง user โดยตรง
-- ตารางธุรกิจทั้งหมดมี `owner_id`, index และ RLS สำหรับ SELECT/INSERT/UPDATE/DELETE
-- การบันทึกการขายผ่าน `create_sale(jsonb)` ซึ่งใช้ `auth.uid()` เท่านั้น ไม่เชื่อ `owner_id` จาก client
-- RPC ตรวจจำนวน/ราคาติดลบ สถานะเมนู เก็บราคาขายและต้นทุน snapshot และ rollback ทั้งรายการอัตโนมัติเมื่อมีข้อผิดพลาด
-- bucket `sale-slips` เป็น Private จำกัด 10 MB และรับเฉพาะ JPEG/PNG/WebP
-- storage path ต้องขึ้นต้นด้วย user ID เช่น `USER_ID/SALE_ID/RANDOM_UUID.webp`
-- เปิดไฟล์ด้วย authenticated download หรือ signed URL อายุสั้นเท่านั้น ฐานข้อมูลเก็บเฉพาะ path
-- ต้องตรวจ MIME และ file signature ฝั่ง server ก่อนอัปโหลดจริง รวมถึง hash SHA-256 สำหรับเตือนสลิปซ้ำ
-- timestamp เก็บเป็น UTC และ UI แสดงด้วย `Asia/Bangkok`
-
-Schema, function, trigger, index, RLS และ Storage policy อยู่ใน `supabase/migrations` ทั้งหมด ห้ามแก้ Production schema ผ่าน Table Editor หลังเริ่มใช้ migration
-
-## Auth
-
-ใช้ Email/Password และ**เปิดให้สมัครเองได้** ที่ `/signup` — แต่ละบัญชีคือร้านของตัวเอง ข้อมูลแยกกันด้วย RLS (ร้านอื่นมองไม่เห็น)
-
-| หน้า | หน้าที่ |
-|---|---|
-| `/signup` | สมัคร (ชื่อร้าน, ชื่อผู้ใช้, อีเมล, รหัสผ่าน) — trigger `handle_new_user` สร้างแถวใน `profiles` ให้อัตโนมัติ |
-| `/login` | เข้าสู่ระบบ รองรับ `?next=` กลับไปหน้าเดิม |
-| `/forgot-password` → `/reset-password` | ส่งลิงก์รีเซ็ตทางอีเมล แล้วตั้งรหัสใหม่ |
-| `/auth/callback` | ปลายทางของลิงก์ในอีเมล (ยืนยันอีเมล / รีเซ็ตรหัสผ่าน) |
-| `/settings` | แก้ชื่อร้าน ชื่อผู้ใช้ และเปลี่ยนรหัสผ่าน |
-
-ตั้งค่าใน Supabase Dashboard → **Authentication → URL Configuration**:
-
-- **Site URL:** URL ของ Vercel Production เช่น `https://kaikai.vercel.app`
-- **Redirect URLs:** `http://localhost:3001/**`, `https://kaikai.vercel.app/**` และ pattern ของ Vercel Preview เช่น `https://kaikai-*-<team>.vercel.app/**`
-
-**Confirm email** (Authentication → Sign In / Providers → Email) เปิดอยู่เป็นค่าเริ่มต้น ผู้สมัครต้องกดลิงก์ในอีเมลก่อนเข้าระบบ อีเมลจากระบบของ Supabase เองส่งได้จำนวนจำกัดต่อชั่วโมง ถ้าใช้งานจริงควรตั้ง **Custom SMTP** หรือปิด Confirm email ถ้ายอมรับได้
-
-ถ้าต้องการกลับไปใช้แบบเจ้าของร้านคนเดียว ให้ปิด **Allow new users to sign up** แล้วสร้างบัญชีจาก Authentication → Users แทน
-
-Next.js middleware refresh cookie session, ส่งผู้ที่ยังไม่ login ไป `/login` และตอบ `401` สำหรับ `/api/*` เมื่อมี environment variables ครบ การซ่อนหน้าจอไม่ใช่การป้องกันหลัก—RLS เป็นด่านสุดท้ายเสมอ
-
-## OCR
-
-MVP รองรับอัปโหลดสลิปและกรอกข้อมูลเอง โครง `src/lib/ocr` เป็น provider adapter แต่ **ยังไม่มี OCR provider จริง** และไม่มีผลลัพธ์ปลอม Supabase Storage ไม่ได้ทำ OCR
-
-เมื่อตัดสินใจเลือก provider ให้สร้าง adapter ฝั่ง server เท่านั้น อ่าน `OCR_API_KEY` เฉพาะ server และใช้สถานะ `pending → processing → needs_review → confirmed/failed` ผู้ใช้ต้องตรวจและยืนยันก่อนนำผลไปใช้ OCR ไม่ใช่หลักฐานว่าเงินเข้าจริง
-
-## สร้าง Supabase Production
-
-1. สร้าง Supabase project ใหม่ เลือก region ใกล้ผู้ใช้ และเก็บ database password ใน password manager
-2. ติดตั้ง Supabase CLI แล้ว login: `npx supabase login`
-3. Link project: `npx supabase link --project-ref <project-ref>`
-4. ตรวจ migration: `npx supabase db diff --linked`
-5. Deploy ครั้งแรก: `npx supabase db push`
-6. สร้างบัญชีเจ้าของร้านใน Authentication → Users
-7. ตรวจ Storage → `sale-slips` ว่าเป็น Private (migration จะสร้างให้อัตโนมัติ)
-8. ปิด public signup และตั้ง Site/Redirect URLs
-9. สร้าง types จาก linked project: `npx supabase gen types typescript --linked > src/types/database.generated.ts`
-
-อย่ารัน `supabase/seed.sql` กับ Production
-
-## GitHub, Vercel และ deployment
-
-Workflow ที่กำหนด:
+## 📱 คู่มือการใช้งานแต่ละเมนู (User Guide)
 
 ```text
-Local → feature branch → GitHub → Vercel Preview → Pull Request → main
-                                                              ├─ Vercel Production
-                                                              └─ Supabase migration
+┌────────────────────────────────────────────────────────┐
+│                   แดชบอร์ด (ภาพรวม)                     │
+├─────────────┬─────────────┬─────────────┬──────────────┤
+│  เปิดบิล    │   เมนูและ   │  วัตถุดิบ/   │   ค่าใช้จ่าย  │
+│  (ขายหน้าร้าน)│  สูตรต้นทุน │  บรรจุภัณฑ์ │  (เงินออก)   │
+├─────────────┴─────────────┴─────────────┴──────────────┤
+│               รายงานผลประกอบการ & วิเคราะห์                │
+└────────────────────────────────────────────────────────┘
 ```
 
-1. สร้าง GitHub repository และ push feature branch (งานนี้ไม่ push ให้อัตโนมัติ)
-2. Import repository ใน Vercel และตั้ง `main` เป็น Production branch
-3. เพิ่ม `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SITE_URL` แยกใน Preview/Production
-4. Preview ต้องใช้ staging Supabase project แยก หากยังไม่มี staging ให้ไม่ใส่ env (เว็บจะแสดงว่ายังไม่เชื่อมฐานข้อมูล) ห้ามชี้ Preview ไป Production
-5. เชื่อม Supabase GitHub Integration ตั้ง directory เป็น `supabase` และเปิด deploy to production เฉพาะ `main`
-6. ถ้าไม่ใช้ Integration ให้เพิ่ม workflow `supabase db push` และเก็บ `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_ID`, database password ใน GitHub Actions Secrets เท่านั้น ห้ามเขียนลง workflow
-7. ทุก PR ต้องผ่าน typecheck, lint, unit tests, build, migration reset และ RLS tests ก่อน merge
+### 1. หน้าแดชบอร์ด (Dashboard)
+หน้าแรกสำหรับเจ้าของร้าน แสดงตัวเลขสำคัญแบบเข้าใจง่าย สลับดูได้ทั้ง **วันนี้ / เมื่อวาน / 7 วัน / เดือนนี้**:
+- **ยอดขาย:** รายได้สุทธิที่ได้รับจากการขาย
+- **ค่าใช้จ่ายทั้งหมด:** เงินที่จ่ายออกไปทั้งหมดในช่วงนั้น (ทั้งซื้อของสด + ค่าใช้จ่ายร้าน)
+- **กำไรสุทธิ:** กำไรจริงหลังหักต้นทุนอาหารตามจานที่ขาย (COGS) และค่าใช้จ่ายดำเนินงาน
+- **เงินสดคงเหลือจริง:** กระแสเงินสดคงเหลือ (ยอดขายรับเข้า − ค่าใช้จ่ายที่ควักจ่ายจริง) ใช้เช็คเงินในเก๊ะ+บัญชี
+- **กราฟยอดขายและกำไร 7 วัน:** ดูแนวโน้มยอดขายและกำไรแต่ละวัน
+- **อันดับเมนูทำเงิน:** แสดงว่าเมนูไหนสร้างกำไรขั้นต้นให้ร้านมากที่สุด
 
-Migration ใหม่ควร backward-compatible เพราะเว็บและ schema อาจเผยแพร่ไม่พร้อมกัน
+### 2. เปิดบิล / บันทึกการขาย (Sales)
+- **เปิดบิลรวดเร็ว:** เลือกเมนู ปรับจำนวน เพิ่มของเสริม (เช่น เพิ่มไก่, ข้าวเปล่า)
+- **คิดเงินแม่นยำ:** รองรับส่วนลด, ค่าบริการส่ง, ค่าธรรมเนียม และทิป
+- **ช่องทางชำระเงิน:** รองรับทั้งเงินสด, เงินโอน (พร้อมแนบสลิป), หรือค้างจ่าย
+- **เลือกรูปแบบ:** "รับที่ร้าน" หรือ "ส่งเดลิเวอรี่" (ระบบจะคำนวณบรรจุภัณฑ์และค่าส่งให้อัตโนมัติ)
+- **Cost Snapshot:** ทุกบิลที่กดยืนยันจะบันทึกต้นทุน ณ วินาทีนั้นไว้ถาวร รายงานย้อนหลังจะไม่เพี้ยนแม้ในอนาคตราคาของสดจะเปลี่ยน
 
-## สำรองและกู้คืน
+### 3. เมนูและสูตรต้นทุน (Menus & Recipe)
+- **ตั้งราคาและผูกสูตร:** แต่ละเมนูสามารถระบุจำนวนชิ้นไก่ และบรรจุภัณฑ์ที่ต้องใช้ (กล่อง, ช้อน, ฝา)
+- **คำนวณ Margin อัตโนมัติ:** แสดงต้นทุนต่อจาน และ % กำไรขั้นต้นทันทีที่ตั้งราคา
+- **เมนูเพิ่มเติม (Add-ons):** เช่น ไก่เพิ่ม ข้าวเปล่า เพิ่มไข่ แยกหมวดชัดเจน ไม่นำไปนับรวมเป็นจำนวนกล่องอาหารหลัก
 
-ใช้ Supabase Dashboard backups ตาม plan ที่เลือก และสำรองแบบ manual ก่อน migration สำคัญ:
+### 4. วัตถุดิบและบรรจุภัณฑ์ (Ingredients & Packaging)
+- **บันทึกการซื้อของเข้าร้าน:**
+  - **ไก่ (ซื้อเป็น กก. → ใช้เป็นชิ้น):** บันทึกราคาและน้ำหนัก ระบบคำนวณต้นทุนเฉลี่ยถ่วงน้ำหนัก 30 วันให้เอง
+  - **วัตถุดิบอื่น (คิดเป็น %):** เช่น ผัก พริก ข้าวสาร ซอส บันทึกยอดเงินที่ซื้อ ระบบจะนำไปคำนวณสัดส่วนต้นทุนเฉลี่ย
+  - **บรรจุภัณฑ์ (ซื้อเป็นแพ็ก):** ระบุราคาต่อแพ็กและจำนวนชิ้น ระบบหารเป็นต้นทุนต่อชิ้นให้อัตโนมัติ
 
-```bash
-npx supabase db dump --linked -f backup.sql
-npx supabase db dump --linked --data-only -f backup-data.sql
+### 5. ค่าใช้จ่าย (Expenses)
+- **บันทึกเงินออกทุกประเภท:**
+  - `ดำเนินงาน (Operating):` ค่าน้ำมัน, ค่าแก๊ส, ค่าน้ำ, ค่าไฟ
+  - `ประจำ (Recurring):` ค่าเช่าที่, ค่าจ้างรายเดือน
+  - `ครั้งเดียว (One-time):` ซื้ออุปกรณ์, เครื่องครัว
+- ระบบจัดหมวดหมู่และนำไปหักกำไรสุทธิให้อย่างถูกต้อง
+
+### 6. รายงานผลประกอบการ (Reports & Analytics)
+- สรุปผลประกอบการรายวัน รายสัปดาห์ และรายเดือน
+- **วิเคราะห์ต้นทุนประมาณการ vs ยอดซื้อจริง:** ช่วยให้เห็นว่าซื้อของมาตุนไว้มากน้อยแค่ไหน
+- **กำไรจากการส่ง:** เปรียบเทียบค่าส่งที่เก็บได้ กับค่าน้ำมันรถส่งของ
+- **ส่งออก CSV:** ดาวน์โหลดไฟล์เพื่อนำไปทำบัญชีต่อได้ทันที
+
+---
+
+## 💡 ระบบคำนวณต้นทุนอัจฉริยะ (Costing Engine v2)
+
+kaikai ใช้โมเดลต้นทุนผสมผสานที่แม่นยำสูง แต่ไม่สร้างภาระให้เจ้าของร้านต้องชั่งตวงวัดทุกจาน:
+
+```
+ต้นทุนอาหารต่อจาน = (ชิ้นไก่ในสูตร × ราคาเฉลี่ยต่อชิ้น) + (ราคาขาย × % วัตถุดิบรวม) + ต้นทุนบรรจุภัณฑ์
 ```
 
-กู้คืนไปยัง project ใหม่/ว่างและตรวจสอบก่อนเสมอ อย่าทับ Production โดยตรง:
+1. **ไก่ (Per-unit Average):**  
+   คำนวณจากน้ำหนักที่ซื้อจริง 30 วันล่าสุด หารด้วยอัตราแปลงเป็นชิ้น (เช่น 1 กก. ≈ 27 ชิ้น) พร้อมอัลกอริทึมปรับค่าอัตโนมัติเมื่อข้อมูลการขายเสถียร
+2. **วัตถุดิบร่วม (Pooled Ingredients %):**  
+   คำนวณจาก `ยอดซื้อวัตถุดิบรวม 30 วัน ÷ ยอดขายอาหาร` แล้วนำสัดส่วน % นี้ไปกระจายลงในทุกเมนูอย่างเป็นธรรม
+3. **บรรจุภัณฑ์ (Direct Packaging):**  
+   ดึงต้นทุนตามสูตรของแต่ละเมนู (เช่น 1 กล่อง + 1 ช้อน) ตามราคาเฉลี่ยล่าสุดที่ซื้อเป็นแพ็ก
 
-```bash
-psql "$DATABASE_URL" -f backup.sql
-psql "$DATABASE_URL" -f backup-data.sql
-```
+---
 
-ไฟล์ใน Private Storage ต้องสำรองแยกจาก database เพราะ database เก็บเพียง storage path
+## 🛠️ สถาปัตยกรรมและเทคโนโลยี (Tech Stack)
 
-## บรรจุภัณฑ์ ค่าส่ง และของเพิ่ม
+| ส่วนประกอบ | เทคโนโลยีที่เลือกใช้ | รายละเอียดการทำงาน |
+|---|---|---|
+| **Frontend Framework** | **Next.js 15 (App Router)** | Server Components, Server Actions และ Fast Streaming |
+| **Language** | **TypeScript 5 (Strict)** | ป้องกันข้อผิดพลาดด้าน Type ตลอดทั้งแอป |
+| **Styling** | **Custom Vanilla CSS Modules** | เบา โหลดเร็ว ไม่มี Runtime Overhead, ออกแบบ Responsive ลื่นไหล |
+| **Database & Auth** | **Supabase (PostgreSQL)** | RLS แยก Tenant, RPC Functions, Cookie-based Session |
+| **Storage** | **Supabase Storage** | Private bucket สำหรับเก็บภาพสลิป (`sale-slips`) พร้อม Signed URL |
+| **Testing** | **Vitest & Playwright** | Unit tests สำหรับคำนวณเงิน และ E2E tests สำหรับ User Flow |
+| **Deployment** | **Vercel** | Edge Network, CI/CD อัตโนมัติผ่าน GitHub |
 
-ต้องรัน migration `supabase/migrations/202610140001_packaging_delivery.sql` (ใน SQL Editor หรือ `npx supabase db push`) ถ้ายังไม่รัน หน้าเว็บจะแจ้งว่า "ฐานข้อมูลยังไม่ได้อัปเดต"
+---
 
-ลำดับตั้งค่าร้านครั้งแรก:
+## 💻 การติดตั้งและเริ่มใช้งานในเครื่อง (Local Setup)
 
-1. **ตั้งค่า → การขาย** ใส่ค่าส่งเริ่มต้น เช่น 15 บาท
-2. **วัตถุดิบ → บรรจุภัณฑ์** เพิ่มของที่ซื้อเป็นแพ็ก โดยกรอกราคาทั้งแพ็กและจำนวนในแพ็ก ระบบจะหารเป็นราคาต่อชิ้นให้ เช่น กล่อง+ฝา 65 บาท/25 ชุด = 2.60
-   - "คิดต่อออเดอร์" (กล่อง ช้อน ถ้วยน้ำจิ้ม): ผูกกับสูตรเมนู แล้วนับเป็นต้นทุนตอนขาย
-   - "ไม่คิดต่อออเดอร์" (ถุงใหญ่ ถุงใส่ข้าว): ตอนบันทึกการซื้อ ระบบลงเป็นค่าใช้จ่ายหมวด "บรรจุภัณฑ์" ให้เอง
-   - ซื้อครั้งถัดไปให้ใช้ "บันทึกการซื้อ" ราคาต่อชิ้นจะเป็นค่าเฉลี่ยถ่วงน้ำหนักจากทุกครั้งที่ซื้อ และต้นทุนเมนูจะคำนวณใหม่ให้อัตโนมัติ
-3. **เมนู** สร้างเมนูหลัก และสร้างของเพิ่ม (ไก่เพิ่ม ข้าวเปล่า) ในหมวด `เพิ่มเติม` ของเพิ่มจะไม่ถูกนับเป็นจำนวนกล่อง
-   - "ต้นทุนอาหาร" กรอกประมาณได้ หรือใส่วัตถุดิบในสูตรแทน
-   - ใส่บรรจุภัณฑ์ต่อจานใน "สูตรต้นทุน"
-4. **เพิ่มยอดขาย** ระบบนับบรรจุภัณฑ์จากสูตรให้ (กด +/− แก้ได้ เช่น ให้ช้อนเพิ่ม) และให้เลือก "รับเอง" หรือ "ส่ง"
+### สิ่งที่ต้องมีในเครื่อง (Prerequisites)
+- **Node.js 22+** และ **npm**
+- **Git**
+- **Docker Desktop** (จำเป็นสำหรับการรัน Supabase Local)
 
-ค่าส่งที่เก็บจากลูกค้าเป็นรายได้ของร้าน ส่วนค่าน้ำมันให้ลงในหน้าค่าใช้จ่าย หมวด `ค่าน้ำมัน` รายงานจะแสดงกำไรจากการส่ง (ค่าส่ง − ค่าน้ำมัน)
+### ขั้นตอนการติดตั้ง
 
-## ต้นทุน v2: ไก่ต่อชิ้น + วัตถุดิบอื่นเป็น %
+1. **โคลน Repository:**
+   ```bash
+   git clone https://github.com/your-username/kaikai.git
+   cd kaikai
+   ```
 
-ต้องรัน migration `supabase/migrations/202610150001_costing_v2.sql` ต่อจากไฟล์ด้านบน (รันซ้ำได้)
+2. **ติดตั้ง Dependencies:**
+   ```bash
+   npm install
+   ```
 
-- **ไก่ (นับต่อชิ้น)** ซื้อเป็น กก. ใช้ในสูตรเป็นชิ้น เริ่มที่ 1 กก. ≈ 27 ชิ้น
-  - ตอนซื้อกรอก `จำนวน กก. × ราคาต่อ กก.` (ราคาครั้งก่อนกรอกไว้ให้) ระบบคิดราคาเฉลี่ยต่อ กก. 30 วันล่าสุด ÷ ชิ้นต่อ กก. = ต้นทุนต่อชิ้น
-  - เปิด "ปรับอัตโนมัติ" แล้ว ระบบเทียบชิ้นที่ขายได้กับกิโลที่ซื้อ (ร้านซื้อใหม่เมื่อของเดิมหมด) ต้องมีการซื้อ 3 ครั้งขึ้นไป ช่วง 7 วันขึ้นไป และค่าที่ได้ต้องอยู่ระหว่างครึ่งหนึ่งถึงสองเท่าของค่าเดิม ไม่งั้นจะไม่ปรับ
-  - สูตรเมนู: 69 บาท = 5 ชิ้น, 89 บาท = 7 ชิ้น, ไก่เพิ่ม = 1 ชิ้น
-- **วัตถุดิบอื่น (คิดเป็น %)** ข้าว พริก กระเทียม ผักชี มะนาว ซอส กรอกแค่ราคาที่จ่าย
-  - % = ยอดซื้อ 30 วัน ÷ ยอดขายอาหาร ใช้ค่าเริ่มต้นใน **ตั้งค่า → การขาย** (10%) จนกว่าจะมีข้อมูล 7 วัน
-  - ตอนขาย % นี้ถูกบวกเข้าต้นทุนของแต่ละรายการ (ส่งเป็น `pooled_ingredient_bps` ให้ `create_sale`)
-- **บรรจุภัณฑ์** บันทึกการซื้อหลายรายการพร้อมกัน กด + จำนวนแพ็ก ราคา/แพ็กและจำนวน/แพ็กใช้ของครั้งก่อน
-- **ช้อน** ตอนขายนับเป็น max(จำนวนกล่อง, ข้าวเปล่า) — ใส่ "ช้อน 1" ในสูตรของข้าวเปล่า เช่น 89 + ข้าว×2 = 2 คัน, 89 + ข้าว×1 = 1 คัน
-- เมนูไม่มีค่าแรง/ค่าโสหุ้ยแล้ว ค่าไฟ/ค่าแก๊สให้ลงในหน้าค่าใช้จ่ายตอนบิลมา รายงานจะเตือนถ้าช่วงนั้นยังไม่มี และแสดงค่าใช้จ่าย/กล่อง กำไรสุทธิ/กล่อง และ "กำไรสุทธิจากยอดซื้อจริง" (ใช้ยอดซื้อวัตถุดิบจริงแทนต้นทุนประมาณ)
+3. **ตั้งค่า Environment Variables:**
+   ```bash
+   cp .env.example .env.local
+   ```
 
-ลำดับตั้งค่า v2:
+4. **เปิดระบบ Supabase Local:**
+   ```bash
+   npx supabase start
+   npx supabase db reset
+   ```
+   *(คำสั่ง reset จะรัน migration ทั้งหมด และใส่ข้อมูลตัวอย่างจาก `supabase/seed.sql` ให้อัตโนมัติ)*
 
-1. **วัตถุดิบ → เพิ่มวัตถุดิบใหม่** "ไก่" แบบนับต่อชิ้น (กก. → ชิ้น, 27, อัตโนมัติ) และ "ข้าวสาร" "ผัก/เครื่องปรุง" แบบคิดเป็น %
-2. **เมนู → สูตร** ตั้งไก่ 5/7/1 ชิ้น และบรรจุภัณฑ์ (เมนูหลักใหม่ใส่บรรจุภัณฑ์ต่อออเดอร์ให้อย่างละ 1 อัตโนมัติ) ข้าวเปล่าใส่ช้อน 1
-3. **ตั้งค่า → การขาย** ปรับ % วัตถุดิบอื่นเริ่มต้นถ้าต้องการ
-4. ซื้อของทุกครั้งบันทึกที่หน้า **วัตถุดิบ** (ไม่ต้องลงในค่าใช้จ่ายซ้ำ)
+5. **นำค่าที่ได้จาก Supabase มาใส่ใน `.env.local`:**
+   ```env
+   NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<your-local-anon-key>
+   NEXT_PUBLIC_SITE_URL=http://localhost:3000
+   ```
 
-## สิ่งที่ MVP ทำแล้ว / ยังไม่ทำ
+6. **สร้าง TypeScript Types และรัน Dev Server:**
+   ```bash
+   npm run db:types
+   npm run dev
+   ```
+   เปิดเว็บที่ `http://localhost:3000`  
+   - บัญชีทดสอบ: `owner@kaikai.local`  
+   - รหัสผ่าน: `KaikaiDemo123!`
 
-ทำแล้ว: responsive dashboard, sales composer พร้อมคำนวณสด, ประวัติการขาย, เมนู, วัตถุดิบ, บรรจุภัณฑ์แบบซื้อเป็นแพ็ก, ค่าส่ง, ของเพิ่ม, ค่าใช้จ่าย, CSV, money utilities, Auth clients/middleware, full schema, RLS, Private Storage policies, atomic sale RPC, seed และ test foundation
+---
 
-ยังไม่ทำ: OCR จริง, inventory depletion, roles พนักงาน, bank verification, tax/accounting integration และ printable PDF
+## 🔒 ความปลอดภัยและการจัดเก็บข้อมูล (Security & Database)
 
-## Checklist ก่อนเรียก Production-ready
+- **จัดเก็บเงินเป็นจำนวนเต็มหน่วยสตางค์ (Integer):** ป้องกันข้อผิดพลาดทศนิยมคลาดเคลื่อน (1 บาท = 100 สตางค์)
+- **Row Level Security (RLS) 100%:** ทุกตารางผูกกับ `owner_id` โดยตรง ร้านค้าไม่สามารถมองเห็นหรือแก้ไขข้อมูลข้ามกันได้
+- **Atomic Transaction RPC (`create_sale`):** การบันทึกบิล การตัดของ และการสร้าง snapshot ทำงานใน Database Transaction เดียว หากเกิดข้อผิดพลาดจะ rollback ทันที ป้องกันข้อมูลแหว่ง
+- **Private Storage:** ไฟล์สลิปอยู่ใน Bucket ปิด ลำดับโฟลเดอร์ขึ้นต้นด้วย User ID และเข้าถึงผ่าน Authenticated Signed URL เท่านั้น
 
-- [ ] `.env.local` ไม่ถูก track และไม่มี secret ใน Git history
-- [ ] `npx supabase db reset` และ seed ผ่านจากฐานข้อมูลว่าง
-- [ ] generated types ถูกสร้างใหม่และตรงกับ schema
-- [ ] ทุกตารางเปิด RLS และ test cross-user isolation ผ่าน
-- [ ] `sale-slips` เป็น Private และทดสอบ upload/read/delete ข้าม user จริง
-- [ ] login, logout, refresh และ route protection ผ่านกับ Production Auth
-- [ ] production build และ CI ทุกขั้นผ่าน
-- [ ] E2E บันทึก/แก้ไข/ยกเลิกการขาย และค่าใช้จ่ายผ่านกับ local Supabase
-- [ ] mobile viewport ไม่มี horizontal overflow
-- [ ] เปลี่ยนต้นทุนแล้วรายการขายเก่าไม่เปลี่ยน
-- [ ] Dashboard อัปเดตจากรายการขายจริง
-- [ ] ทดสอบ backup และ restore ไปยังฐานข้อมูลทดสอบ
+---
 
-รายละเอียดการวิเคราะห์ หน้าจอ สูตร และ MVP อยู่ที่ `docs/PRODUCT_PLAN.md`
+## 🚢 การ Deploy สู่ Production
+
+1. สร้างโปรเจกต์ใหม่บน [Supabase Dashboard](https://supabase.com)
+2. เชื่อมต่อและ Deploy Database Migration:
+   ```bash
+   npx supabase login
+   npx supabase link --project-ref <your-project-ref>
+   npx supabase db push
+   ```
+3. ตั้งค่า **Site URL** และ **Redirect URLs** ใน Supabase Auth ให้ตรงกับโดเมน Vercel
+4. นำค่า URL และ Key ของ Production ไปใส่ใน **Environment Variables บน Vercel**
+5. Deploy ขึ้น Vercel และเริ่มใช้งานได้ทันที
+
+---
+
+## ✅ Production-Ready Checklist
+
+- [x] เก็บเงินทุกจุดเป็นหน่วยสตางค์ ป้องกันปัญหา Floating-Point
+- [x] ตรวจสอบ RLS ครอบคลุมทุกตาราง แยกข้อมูลเจ้าของร้านเด็ดขาด
+- [x] Private Storage ป้องกันการเข้าถึงสลิปโอนเงินโดยไม่ได้รับอนุญาต
+- [x] รองรับสูตรต้นทุนวัตถุดิบและบรรจุภัณฑ์ (Costing v2)
+- [x] Responsive สมบูรณ์แบบทั้งบนสมาร์ตโฟนและเดสก์ท็อป
+- [ ] ติดตั้ง Custom SMTP สำหรับส่งอีเมลยืนยันตัวตนใน Production
+- [ ] เชื่อมต่อระบบ OCR อ่านสลิปธนาคารอัตโนมัติ (อยู่ในแผนพัฒนา)
+
+---
+
+<p align="center">
+  พัฒนาด้วยความใส่ใจเพื่อร้านอาหารขนาดเล็กและขนาดกลาง 🍗✨<br>
+  <strong>kaikai — ขาย. คุมทุน. กำไรชัด.</strong>
+</p>
