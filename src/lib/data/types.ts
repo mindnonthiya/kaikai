@@ -186,3 +186,33 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = { cash: "เ
 export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { paid: "ชำระแล้ว", partial: "ชำระบางส่วน", unpaid: "ค้างชำระ", refunded: "คืนเงินแล้ว" };
 export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = { direct: "ต้นทุนโดยตรง", operating: "ดำเนินงาน", one_time: "ครั้งเดียว", recurring: "ประจำ" };
 export const FULFILLMENT_LABELS: Record<Fulfillment, string> = { pickup: "รับเอง", delivery: "ส่ง" };
+
+export type CashBreakdown = {
+  b1000?: number;
+  b500?: number;
+  b100?: number;
+  b50?: number;
+  b20?: number;
+  c10?: number;
+  c5?: number;
+  c2?: number;
+  c1?: number;
+};
+
+export type CashShiftRecord = {
+  id: string;
+  shiftDate: string;
+  openedAt: string;
+  closedAt: string | null;
+  openingCash: number;
+  cashSales: number;
+  cashExpenses: number;
+  expectedCash: number;
+  actualCash: number | null;
+  difference: number | null;
+  status: "open" | "closed";
+  notes: string | null;
+  cashBreakdown: CashBreakdown | null;
+  createdAt: string;
+};
+
