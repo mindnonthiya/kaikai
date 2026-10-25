@@ -40,3 +40,17 @@ export async function deleteExpense(form: FormData): Promise<ActionState> {
     revalidateExpenses();
   });
 }
+
+/** Fixes the payment method of an existing expense, e.g. one saved as cash that was really a transfer. */
+export async function setExpensePaymentMethod(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase }) => {
+    const paymentMethod = oneOf(form, "payment_method", METHODS, "วิธีชำระ");
+    const { error } = await supabase.from("expenses")
+      .update({ payment_method: paymentMethod, updated_at: new Date().toISOString() })
+      .eq("id", id(form));
+    if (error) dbError(error);
+    revalidateExpenses();
+    revalidatePath("/bank-check");
+    return { ok: true, message: "เปลี่ยนวิธีชำระแล้ว" };
+  });
+}

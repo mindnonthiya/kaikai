@@ -57,7 +57,25 @@ describe("summarize", () => {
     const s = summarize([sale({ tip: 1000 }), sale({ id: "s2", tip: 2500 })], []);
     expect(s.tipIncome).toBe(3500);
   });
+  it("tracks net bank transfers and treats unspecified expense methods as transfer", () => {
+    const s = summarize(
+      [
+        sale({ payments: [{ method: "cash", amount: 5000 }] }),
+        sale({ id: "s2", payments: [{ method: "transfer", amount: 7000 }] }),
+      ],
+      [
+        expense({ amount: 1500, paymentMethod: "cash" }),
+        expense({ id: "e2", amount: 2000, paymentMethod: "transfer" }),
+        expense({ id: "e3", amount: 500, paymentMethod: null }),
+      ],
+    );
+    expect(s.payments.transfer).toBe(7000);
+    expect(s.expensePayments.cash).toBe(1500);
+    expect(s.expensePayments.transfer).toBe(2500);
+    expect(s.netTransfer).toBe(4500);
+  });
 });
+
 
 describe("rankings and breakdowns", () => {
   it("ranks menus by profit using sale snapshots", () => {

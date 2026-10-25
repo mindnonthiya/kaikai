@@ -177,7 +177,7 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
           rows.push({ owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: amount, vendor });
           expensesToInsert.push({
             owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
-            description: `ซื้อ${name}`, payee: vendor,
+            description: `ซื้อ${name}`, payee: vendor, payment_method: "transfer",
           });
         }
         continue;
@@ -193,7 +193,7 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       });
       expensesToInsert.push({
         owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
-        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor,
+        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor, payment_method: "transfer",
       });
       perUnit.push({
         id: ingredientId, name, base_unit: String(r.base_unit), purchase_unit: unit,
@@ -254,7 +254,7 @@ async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string
       owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY,
       kind: item.per_order ? "direct" : "operating",
       amount_satang: purchase.price,
-      description: `ซื้อ${item.name} ${packs}`, payee: purchase.vendor,
+      description: `ซื้อ${item.name} ${packs}`, payee: purchase.vendor, payment_method: "transfer",
     }).select("id").single();
     if (error) dbError(error);
     expenseId = String((data as Row).id);
