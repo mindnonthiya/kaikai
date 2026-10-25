@@ -2598,32 +2598,39 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .day-filter input {
-  min-height: 38px;
-  padding: 6px 12px;
+  height: 38px;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
   color: var(--ink);
   font-size: 13px;
 }
-.day-filter .secondary-button,
-.day-filter .day-step {
-  min-height: 38px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-.day-step {
-  display: inline-grid;
-  place-items: center;
+.day-step,
+.day-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 38px;
+  min-width: 38px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
   color: var(--ink);
+  cursor: pointer;
 }
-.day-step:hover { background: var(--surface-2); }
+.day-go {
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.day-step:hover,
+.day-go:hover { background: var(--surface-2); }
 .day-step[aria-disabled="true"] { opacity: .4; pointer-events: none; }
 
 .sr-only {
@@ -2755,6 +2762,8 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 .bank-side-list li span { display: flex; flex-direction: column; min-width: 0; }
 .bank-side-list small { color: var(--muted); font-size: 11.5px; }
+.bank-side-list li .bank-side-actions { flex: 0 0 auto; align-items: flex-end; gap: 2px; }
+.bank-side-actions .link-button { padding: 4px 6px; font-size: 11.5px; }
 .bank-tips { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .bank-tips b { color: var(--ink); }
 
@@ -2762,6 +2771,8 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   .dashboard-grid.bank-lists { grid-template-columns: 1fr; }
 }
 @media (max-width: 700px) {
+  .day-filter { width: 100%; }
+  .day-filter input { flex: 1 1 auto; min-width: 0; }
   .bank-compare-grid { grid-template-columns: 1fr; }
   .bank-list li label { grid-template-columns: auto minmax(0, 1fr) auto; }
   .bank-line-time { display: none; }

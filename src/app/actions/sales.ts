@@ -24,3 +24,22 @@ export async function cancelSale(form: FormData): Promise<ActionState> {
     return { ok: true, message: "ยกเลิกรายการแล้ว" };
   });
 }
+
+/** Re-labels a sale's cash/other payments as transfer — for bills recorded with the wrong method. */
+export async function markSalePaidByTransfer(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    const saleId = id(form);
+    const { data, error } = await supabase.from("payments")
+      .update({ method: "transfer" })
+      .eq("sale_id", saleId).neq("method", "transfer")
+      .select("id");
+    if (error) dbError(error);
+    if (!data?.length) throw new InputError("บิลนี้เป็นเงินโอนอยู่แล้ว");
+    await supabase.from("audit_logs").insert({ owner_id: user.id, entity_type: "sale", entity_id: saleId, action: "payment_method_changed", new_data: { method: "transfer" } });
+    revalidatePath("/sales");
+    revalidatePath("/dashboard");
+    revalidatePath("/reports");
+    revalidatePath("/bank-check");
+    return { ok: true, message: "เปลี่ยนเป็นเงินโอนแล้ว" };
+  });
+}

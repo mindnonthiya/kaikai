@@ -8,6 +8,9 @@ import { buildBankCheck } from "@/lib/bank-check";
 import { fetchExpenses, fetchSales } from "@/lib/data/queries";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatTime, fromBangkokDateInput, startOfBangkokDay } from "@/lib/time";
+import { ActionButton } from "@/components/action-form";
+import { setExpensePaymentMethod } from "@/app/actions/expenses";
+import { markSalePaidByTransfer } from "@/app/actions/sales";
 
 export default async function BankCheckPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const params = await searchParams;
@@ -46,7 +49,7 @@ export default async function BankCheckPage({ searchParams }: { searchParams: Pr
             <Link href={`/bank-check?date=${prevKey}`} className="day-step" aria-label="วันก่อนหน้า"><ChevronLeft size={18} /></Link>
             <label htmlFor="bank-check-date" className="sr-only">เลือกวันที่</label>
             <input id="bank-check-date" type="date" name="date" defaultValue={dateKey} max={todayKey} />
-            <button type="submit" className="secondary-button">ดู</button>
+            <button type="submit" className="day-go">ดู</button>
             <Link href={`/bank-check?date=${nextKey}`} className="day-step" aria-label="วันถัดไป" aria-disabled={isToday} tabIndex={isToday ? -1 : undefined}><ChevronRight size={18} /></Link>
           </form>
         }
@@ -78,14 +81,19 @@ export default async function BankCheckPage({ searchParams }: { searchParams: Pr
         </article>
         <article className="panel">
           <div className="panel-head">
-            <div><h2>ไม่ผ่านบัญชีธนาคาร</h2><p>บันทึกเป็นเงินสด/อื่น ๆ — ถ้าจริง ๆ โอน ให้แก้วิธีชำระ</p></div>
+            <div><h2>ไม่ผ่านบัญชีธนาคาร</h2><p>บันทึกเป็นเงินสด/อื่น ๆ — ถ้าจริง ๆ โอน กด “เปลี่ยนเป็นเงินโอน”</p></div>
             <Link href="/expenses">ค่าใช้จ่าย <ArrowRight size={16} /></Link>
           </div>
           <ul className="bank-side-list">
             {check.notViaBank.map((l) => (
               <li key={l.id}>
                 <span><strong>{l.label}</strong><small>{l.detail}</small></span>
-                <strong className={`bank-line-amount ${l.direction}`}>{l.direction === "in" ? "+" : "−"}{formatBaht(l.amount)}</strong>
+                <span className="bank-side-actions">
+                  <strong className={`bank-line-amount ${l.direction}`}>{l.direction === "in" ? "+" : "−"}{formatBaht(l.amount)}</strong>
+                  {l.source === "sale"
+                    ? <ActionButton action={markSalePaidByTransfer} fields={{ id: l.sourceId }} label="เปลี่ยนเป็นเงินโอน" pendingLabel="กำลังเปลี่ยน…" confirmText={`เปลี่ยน ${l.label} เป็นเงินโอน?`} />
+                    : <ActionButton action={setExpensePaymentMethod} fields={{ id: l.sourceId, payment_method: "transfer" }} label="เปลี่ยนเป็นเงินโอน" pendingLabel="กำลังเปลี่ยน…" confirmText={`เปลี่ยน “${l.label}” เป็นเงินโอน?`} />}
+                </span>
               </li>
             ))}
             {!check.notViaBank.length && <li className="empty-state">ทุกรายการผ่านบัญชีธนาคาร</li>}

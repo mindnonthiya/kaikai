@@ -42,8 +42,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <StatCard label="กำไรสุทธิ" value={formatBaht(current.netProfit)} detail={`หลังหักค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" />
     </div>
     <div className="stat-grid mini-stats">
-      <StatCard label="เงินสด" value={formatBaht(current.payments.cash)} />
-      <StatCard label="เงินโอน" value={formatBaht(current.payments.transfer)} />
+      <StatCard label="เงินโอนเข้า" value={formatBaht(current.payments.transfer)} detail={current.payments.cash + current.payments.other ? `+ เงินสด/อื่น ๆ ${formatBaht(current.payments.cash + current.payments.other)}` : undefined} />
+      <StatCard label="เงินเข้าบัญชี (สุทธิ)" value={formatBaht(current.netTransfer)} detail="โอนเข้า − โอนออก" />
       <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} />
       <StatCard label="จำนวนกล่อง" value={current.boxes.toLocaleString("th-TH")} detail={current.addons ? `+ ของเพิ่ม ${current.addons.toLocaleString("th-TH")} รายการ` : undefined} />
     </div>

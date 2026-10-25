@@ -36,6 +36,7 @@ describe("buildBankCheck", () => {
     expect(check.totalIn).toBe(8000);
     expect(check.totalOut).toBe(0);
     expect(check.notViaBank.map((l) => [l.id, l.amount])).toEqual([["s:s:other", 4000], ["e:e", 2000]]);
+    expect(check.notViaBank.map((l) => [l.source, l.sourceId])).toEqual([["sale", "s"], ["expense", "e"]]);
     expect(check.outstanding).toEqual([expect.objectContaining({ id: "s2", amount: 12000 })]);
   });
 });

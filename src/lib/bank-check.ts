@@ -11,6 +11,8 @@ export type BankLine = {
   label: string;
   detail: string;
   amount: number;
+  source: "sale" | "expense";
+  sourceId: string;
 };
 
 export type OutstandingSale = { id: string; saleNumber: number; customerName: string | null; soldAt: string; amount: number };
@@ -41,8 +43,8 @@ export function buildBankCheck(sales: SaleRecord[], expenses: ExpenseRecord[]): 
       if (p.method === "transfer") transfer += p.amount;
       else other += p.amount;
     }
-    if (transfer > 0) incoming.push({ id: `s:${sale.id}`, direction: "in", at: sale.soldAt, hasTime: true, label, detail, amount: transfer });
-    if (other > 0) notViaBank.push({ id: `s:${sale.id}:other`, direction: "in", at: sale.soldAt, hasTime: true, label, detail: "บันทึกเป็นเงินสด/อื่น ๆ", amount: other });
+    if (transfer > 0) incoming.push({ id: `s:${sale.id}`, direction: "in", at: sale.soldAt, hasTime: true, label, detail, amount: transfer, source: "sale", sourceId: sale.id });
+    if (other > 0) notViaBank.push({ id: `s:${sale.id}:other`, direction: "in", at: sale.soldAt, hasTime: true, label, detail: "บันทึกเป็นเงินสด/อื่น ๆ", amount: other, source: "sale", sourceId: sale.id });
     const due = sale.netRevenue - paid;
     if (due > 0) outstanding.push({ id: sale.id, saleNumber: sale.saleNumber, customerName: sale.customerName, soldAt: sale.soldAt, amount: due });
   }
@@ -51,7 +53,7 @@ export function buildBankCheck(sales: SaleRecord[], expenses: ExpenseRecord[]): 
   for (const e of expenses) {
     const line: BankLine = {
       id: `e:${e.id}`, direction: "out", at: e.spentAt, hasTime: false,
-      label: e.description, detail: [e.category, e.payee].filter(Boolean).join(" · "), amount: e.amount,
+      label: e.description, detail: [e.category, e.payee].filter(Boolean).join(" · "), amount: e.amount, source: "expense", sourceId: e.id,
     };
     // Expenses without a method come from purchase records and were paid by transfer.
     if ((e.paymentMethod ?? "transfer") === "transfer") outgoing.push(line);
