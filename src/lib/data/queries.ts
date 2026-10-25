@@ -7,7 +7,6 @@ import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-act
 import { createClient } from "@/lib/supabase/server";
 import { DAY_MS } from "@/lib/time";
 import type {
-  CashBreakdown, CashShiftRecord,
   ExpenseKind, ExpenseRecord, Fulfillment, IngredientCosting, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
   PricePreset, ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
 } from "./types";
@@ -499,75 +498,3 @@ export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
     return fallback;
   }
 });
-
-export const fetchCashShifts = cache(async (limit = 30): Promise<CashShiftRecord[]> => {
-  if (!hasSupabaseEnv) return [];
-  try {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("cash_shifts")
-      .select("*")
-      .order("shift_date", { ascending: false })
-      .order("opened_at", { ascending: false })
-      .limit(limit);
-    if (error) {
-      if (SCHEMA_OUTDATED_CODES.has(error.code)) return [];
-      console.error("fetchCashShifts error:", error);
-      return [];
-    }
-    return (data as Row[]).map((r) => ({
-      id: String(r.id),
-      shiftDate: String(r.shift_date),
-      openedAt: String(r.opened_at),
-      closedAt: r.closed_at ? String(r.closed_at) : null,
-      openingCash: num(r.opening_cash_satang),
-      cashSales: num(r.cash_sales_satang),
-      cashExpenses: num(r.cash_expenses_satang),
-      expectedCash: num(r.expected_cash_satang),
-      actualCash: r.actual_cash_satang === null ? null : num(r.actual_cash_satang),
-      difference: r.difference_satang === null ? null : num(r.difference_satang),
-      status: (r.status as "open" | "closed") || "open",
-      notes: r.notes ? String(r.notes) : null,
-      cashBreakdown: (r.cash_breakdown as CashBreakdown) || null,
-      createdAt: String(r.created_at),
-    }));
-  } catch (err) {
-    console.error("fetchCashShifts exception:", err);
-    return [];
-  }
-});
-
-export const fetchCurrentCashShift = cache(async (): Promise<CashShiftRecord | null> => {
-  if (!hasSupabaseEnv) return null;
-  try {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("cash_shifts")
-      .select("*")
-      .eq("status", "open")
-      .order("opened_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error || !data) return null;
-    const r = data as Row;
-    return {
-      id: String(r.id),
-      shiftDate: String(r.shift_date),
-      openedAt: String(r.opened_at),
-      closedAt: r.closed_at ? String(r.closed_at) : null,
-      openingCash: num(r.opening_cash_satang),
-      cashSales: num(r.cash_sales_satang),
-      cashExpenses: num(r.cash_expenses_satang),
-      expectedCash: num(r.expected_cash_satang),
-      actualCash: r.actual_cash_satang === null ? null : num(r.actual_cash_satang),
-      difference: r.difference_satang === null ? null : num(r.difference_satang),
-      status: (r.status as "open" | "closed") || "open",
-      notes: r.notes ? String(r.notes) : null,
-      cashBreakdown: (r.cash_breakdown as CashBreakdown) || null,
-      createdAt: String(r.created_at),
-    };
-  } catch {
-    return null;
-  }
-});
-

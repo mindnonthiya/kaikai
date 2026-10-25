@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CircleAlert, Coins, TrendingUp, Wallet, WalletCards } from "lucide-react";
+import { ArrowRight, CircleAlert, Landmark, TrendingUp, Wallet, WalletCards } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";
@@ -43,7 +43,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <p>ตัวเลขจากรายการขายและค่าใช้จ่ายที่บันทึกไว้</p>
       </div>
       <div className="heading-actions">
-        <Link href="/cash-drawer" className="secondary-button"><Coins size={17} /> ตรวจนับเงินสด / ปิดกะ</Link>
+        <Link href="/bank-check" className="secondary-button"><Landmark size={17} /> เทียบยอดกับแอปธนาคาร</Link>
         <Link href="/sales/new" className="primary-button">+ เปิดบิล</Link>
       </div>
     </section>
@@ -56,8 +56,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     <section className="stat-grid mini-stats">
       <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} />
       <StatCard label="ต้นทุนของที่ขาย" value={formatBaht(current.cogs)} detail="หักตามจำนวนจานที่ขายจริง" />
-      <StatCard label="เงินสดในเก๊ะ (สุทธิ)" value={formatBaht(current.netCashDrawer)} detail={`รับสด ${formatBaht(current.payments.cash)} − จ่ายสด ${formatBaht(current.expensePayments.cash)}`} />
-      <StatCard label="เงินโอนเข้า (สุทธิ)" value={formatBaht(current.netTransfer)} detail={current.outstanding ? `ค้างรับ ${formatBaht(current.outstanding)}` : `โอนเข้า ${formatBaht(current.payments.transfer)} − โอนออก ${formatBaht(current.expensePayments.transfer)}`} />
+      <StatCard label="เงินเข้าบัญชี (สุทธิ)" value={formatBaht(current.netTransfer)} detail={`โอนเข้า ${formatBaht(current.payments.transfer)} − โอนออก ${formatBaht(current.expensePayments.transfer)}`} />
+      <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} detail={current.outstanding ? "บิลที่ลูกค้ายังไม่โอนหรือโอนไม่ครบ" : "ได้รับเงินครบทุกบิล"} />
     </section>
     <section className="dashboard-grid">
       <article className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขายและกำไร</h2><p>7 วันล่าสุด · {formatThaiShortDate(chartStart)} – {formatThaiShortDate(today)}</p></div><span className="metric-up">{formatBaht(chartRevenue)}</span></div><SalesChart points={chart} /></article>

@@ -57,7 +57,7 @@ describe("summarize", () => {
     const s = summarize([sale({ tip: 1000 }), sale({ id: "s2", tip: 2500 })], []);
     expect(s.tipIncome).toBe(3500);
   });
-  it("separates cash drawer and bank transfer flows", () => {
+  it("tracks net bank transfers and treats unspecified expense methods as transfer", () => {
     const s = summarize(
       [
         sale({ payments: [{ method: "cash", amount: 5000 }] }),
@@ -66,14 +66,13 @@ describe("summarize", () => {
       [
         expense({ amount: 1500, paymentMethod: "cash" }),
         expense({ id: "e2", amount: 2000, paymentMethod: "transfer" }),
+        expense({ id: "e3", amount: 500, paymentMethod: null }),
       ],
     );
-    expect(s.payments.cash).toBe(5000);
     expect(s.payments.transfer).toBe(7000);
     expect(s.expensePayments.cash).toBe(1500);
-    expect(s.expensePayments.transfer).toBe(2000);
-    expect(s.netCashDrawer).toBe(3500);
-    expect(s.netTransfer).toBe(5000);
+    expect(s.expensePayments.transfer).toBe(2500);
+    expect(s.netTransfer).toBe(4500);
   });
 });
 

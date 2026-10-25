@@ -37,8 +37,6 @@ export type Summary = {
   outstanding: number;
   /** Expenses broken down by payment method. */
   expensePayments: { cash: number; transfer: number; other: number };
-  /** Net physical cash flow (cash sales − cash expenses). */
-  netCashDrawer: number;
   /** Net bank transfer flow (transfer sales − transfer expenses). */
   netTransfer: number;
   /** Delivery fees charged to customers (kept by the shop). */
@@ -78,10 +76,11 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     if (isOperatingExpense(expense)) operatingExpenses += expense.amount;
     else directExpenses += expense.amount;
     if (expense.category.trim() === FUEL_CATEGORY) fuelExpenses += expense.amount;
-    const method = expense.paymentMethod ?? "cash";
-    if (method === "transfer") expensePayments.transfer += expense.amount;
+    // Older auto-created purchase expenses have no payment method; the shop pays by bank transfer.
+    const method = expense.paymentMethod ?? "transfer";
+    if (method === "cash") expensePayments.cash += expense.amount;
     else if (method === "other") expensePayments.other += expense.amount;
-    else expensePayments.cash += expense.amount;
+    else expensePayments.transfer += expense.amount;
   }
   const netProfit = grossProfit - operatingExpenses;
   return {
@@ -93,7 +92,6 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     payments,
     outstanding: Math.max(0, revenue - paid),
     expensePayments,
-    netCashDrawer: payments.cash - expensePayments.cash,
     netTransfer: payments.transfer - expensePayments.transfer,
     deliveryIncome, deliveryCount, tipIncome, fuelExpenses, packagingCost,
     foodCost: Math.max(0, cogs - packagingCost),
