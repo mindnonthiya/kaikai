@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { syncHistoricalCosts } from "./historical-cost-sync";
+import { recalculatedItemCost, saleCostTotals, syncHistoricalCosts } from "./historical-cost-sync";
 
 vi.mock("@/lib/menu-cost", () => ({
   recalculateMenuCosts: vi.fn().mockResolvedValue(undefined),
@@ -139,5 +139,100 @@ describe("syncHistoricalCosts", () => {
       packaging_cost_satang: 1000,
       gross_profit_satang: 13800 - 7900,
     });
+  });
+
+  it("keeps the pooled-ingredient cost stored on the item and the packaging actually used", async () => {
+    const updatedSaleItems: Record<string, unknown>[] = [];
+    const updatedSales: Record<string, unknown>[] = [];
+
+    const builder = (data: unknown) => {
+      const b: Record<string, unknown> = {};
+      for (const fn of ["select", "eq", "in", "or"]) b[fn] = vi.fn(() => b);
+      b.maybeSingle = vi.fn(() => Promise.resolve({ data, error: null }));
+      b.then = (resolve: (v: unknown) => unknown, reject?: (r: unknown) => unknown) =>
+        Promise.resolve({ data, error: null }).then(resolve, reject);
+      return b;
+    };
+    const recordUpdates = (target: Record<string, unknown>[]) =>
+      vi.fn((payload: Record<string, unknown>) => ({
+        eq: vi.fn((col: string, id: string) => {
+          void col;
+          target.push({ id, ...payload });
+          return Promise.resolve({ error: null });
+        }),
+      }));
+
+    const mockSupabase = {
+      rpc: vi.fn(() => Promise.resolve({ data: null, error: { message: "missing function" } })),
+      from: vi.fn((table: string) => {
+        if (table === "menus") {
+          return builder([{ id: "menu1", name: "ข้าวไก่ต้มน้ำปลา", current_cost_satang: 3147, packaging_cost_satang: 597, selling_price_satang: 6900 }]);
+        }
+        if (table === "sale_items") {
+          const b = builder([
+            // Previously stripped by the old sync: cost = menu cost only, pooled 15.6% of 69 ฿ = 10.76 ฿ stored separately.
+            { id: "item1", sale_id: "sale1", menu_id: "menu1", menu_name_snapshot: "ข้าวไก่ต้มน้ำปลา", quantity: 1, unit_price_satang: 6900, line_cost_satang: 3147, unit_cost_satang: 3147, packaging_cost_satang: 597, pooled_cost_satang: 1076 },
+          ]);
+          b.update = recordUpdates(updatedSaleItems);
+          return b;
+        }
+        if (table === "sale_packaging") return builder([{ line_cost_satang: 260 }, { line_cost_satang: 160 }]);
+        if (table === "sales") {
+          const b = builder({ net_revenue_satang: 8400 });
+          b.update = recordUpdates(updatedSales);
+          return b;
+        }
+        return builder([]);
+      }),
+    };
+
+    await syncHistoricalCosts(mockSupabase as never, { ownerId: "owner1", forceAll: true });
+
+    expect(updatedSaleItems[0]).toMatchObject({
+      id: "item1",
+      unit_cost_satang: 3147 + 1076,
+      ingredient_cost_satang: 3147 - 597 + 1076,
+      packaging_cost_satang: 597,
+      line_cost_satang: 4223,
+      unit_profit_satang: 6900 - 4223,
+    });
+    // food (4223 − 597) + packaging actually handed out (260 + 160)
+    expect(updatedSales[0]).toMatchObject({
+      id: "sale1",
+      cogs_satang: 3626 + 420,
+      packaging_cost_satang: 420,
+      gross_profit_satang: 8400 - 4046,
+    });
+  });
+});
+
+describe("recalculatedItemCost", () => {
+  it("adds the pooled cost on top of the current menu cost", () => {
+    expect(recalculatedItemCost({ menuCost: 3147, menuPackagingCost: 597, pooledCost: 1076, unitPrice: 6900, quantity: 2 })).toEqual({
+      unitCost: 4223,
+      ingredientCost: 3626,
+      packagingCost: 597,
+      unitProfit: 2677,
+      lineCost: 8446,
+    });
+  });
+
+  it("matches the menu cost when no pooled cost was recorded", () => {
+    expect(recalculatedItemCost({ menuCost: 3950, menuPackagingCost: 500, pooledCost: 0, unitPrice: 6900, quantity: 1 }).unitCost).toBe(3950);
+  });
+});
+
+describe("saleCostTotals", () => {
+  const items = [
+    { lineCost: 8446, packCost: 597, quantity: 2 },
+    { lineCost: 1000, packCost: 0, quantity: 1 },
+  ];
+
+  it("uses the menus' default packaging when none was recorded", () => {
+    expect(saleCostTotals(items, null)).toEqual({ cogs: 9446, packaging: 1194 });
+  });
+
+  it("uses the packaging actually handed out when recorded", () => {
+    expect(saleCostTotals(items, 500)).toEqual({ cogs: 8446 - 1194 + 1000 + 500, packaging: 500 });
   });
 });

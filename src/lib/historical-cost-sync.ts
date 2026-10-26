@@ -16,10 +16,62 @@ export interface SyncHistoricalCostsResult {
 
 const rows = (val: unknown): Row[] => (Array.isArray(val) ? (val as Row[]) : val ? [val as Row] : []);
 
+export type RecalculatedItemCost = {
+  unitCost: number;
+  ingredientCost: number;
+  packagingCost: number;
+  unitProfit: number;
+  lineCost: number;
+};
+
+/**
+ * Cost of one sale line from the current menu cost, in satang (same formula as create_sale).
+ * `pooledCost` is the per-unit "other ingredients" cost stored on the sale item when it was sold;
+ * it is not part of menus.current_cost_satang, so it must be added back here.
+ */
+export function recalculatedItemCost(input: {
+  menuCost: number;
+  menuPackagingCost: number;
+  pooledCost: number;
+  unitPrice: number;
+  quantity: number;
+}): RecalculatedItemCost {
+  const { menuCost, menuPackagingCost, pooledCost, unitPrice, quantity } = input;
+  const unitCost = menuCost + pooledCost;
+  return {
+    unitCost,
+    ingredientCost: Math.max(0, menuCost - menuPackagingCost) + pooledCost,
+    packagingCost: menuPackagingCost,
+    unitProfit: unitPrice - unitCost,
+    lineCost: unitCost * quantity,
+  };
+}
+
+/**
+ * Sale totals from its items, in satang (same formula as create_sale):
+ * cogs = Σ food cost (line cost − default packaging) + packaging.
+ * Packaging is what was actually handed out (sale_packaging) when recorded, otherwise the menus' default.
+ */
+export function saleCostTotals(
+  items: Array<{ lineCost: number; packCost: number; quantity: number }>,
+  actualPackaging: number | null | undefined,
+) {
+  let food = 0;
+  let defaultPack = 0;
+  for (const item of items) {
+    const pack = item.packCost * item.quantity;
+    food += Math.max(0, item.lineCost - pack);
+    defaultPack += pack;
+  }
+  const packaging = actualPackaging ?? defaultPack;
+  return { cogs: food + packaging, packaging };
+}
+
 /**
  * Retroactively syncs current menu recipe costs to historical sales.
  * Solves the issue where orders recorded prior to configuring recipes
  * (or before adding packaging/ingredients) retain obsolete or 0 cost.
+ * Keeps each item's pooled-ingredient cost and the packaging actually used on the order.
  * Uses fast concurrent batch updates and skips items already up-to-date.
  */
 export async function syncHistoricalCosts(
@@ -74,17 +126,17 @@ export async function syncHistoricalCosts(
   const menuMap = new Map(rows(menus).map((m) => [String(m.id), m]));
   const nameMap = new Map(rows(menus).map((m) => [String(m.name).trim().toLowerCase(), m]));
 
-  // 3) Fetch relevant sale_items (including packaging_cost_satang)
-  let itemQuery = supabase
-    .from("sale_items")
-    .select("id, sale_id, menu_id, menu_name_snapshot, quantity, unit_price_satang, line_cost_satang, unit_cost_satang, packaging_cost_satang")
-    .eq("owner_id", ownerId);
+  // 3) Fetch relevant sale_items (including packaging and pooled cost).
+  //    Databases without migration 202610260001 have no pooled_cost_satang column yet.
+  const ITEM_COLUMNS = "id, sale_id, menu_id, menu_name_snapshot, quantity, unit_price_satang, line_cost_satang, unit_cost_satang, packaging_cost_satang";
+  const fetchItems = (columns: string) => {
+    let query = supabase.from("sale_items").select(columns).eq("owner_id", ownerId);
+    if (menuId) query = query.eq("menu_id", menuId);
+    return query;
+  };
 
-  if (menuId) {
-    itemQuery = itemQuery.eq("menu_id", menuId);
-  }
-
-  const { data: rawItems, error: itemErr } = await itemQuery;
+  let { data: rawItems, error: itemErr } = await fetchItems(`${ITEM_COLUMNS}, pooled_cost_satang`);
+  if (itemErr) ({ data: rawItems, error: itemErr } = await fetchItems(ITEM_COLUMNS));
   if (itemErr) throw itemErr;
 
   const affectedSaleIds = new Set<string>();
@@ -98,36 +150,40 @@ export async function syncHistoricalCosts(
     let lineCost = Number(item.line_cost_satang) || 0;
 
     const hasExistingCost = lineCost > 0 && unitCost > 0;
-    const m = menuMap.get(String(item.menu_id)) ?? nameMap.get(String(item.menu_name_snapshot).trim().toLowerCase());
+    const m = item.menu_id
+      ? menuMap.get(String(item.menu_id))
+      : nameMap.get(String(item.menu_name_snapshot).trim().toLowerCase());
     const shouldRecalculate = (forceAll || !hasExistingCost || Boolean(menuId)) && m && Number(m.current_cost_satang) > 0;
 
     if (shouldRecalculate && m) {
-      const newUnitCost = Number(m.current_cost_satang);
-      const newPackCost = Number(m.packaging_cost_satang) || 0;
-      const newIngredientCost = Math.max(0, newUnitCost - newPackCost);
-      const unitPrice = Number(item.unit_price_satang) || Number(m.selling_price_satang) || 0;
-      const newLineCost = newUnitCost * qty;
+      const next = recalculatedItemCost({
+        menuCost: Number(m.current_cost_satang),
+        menuPackagingCost: Number(m.packaging_cost_satang) || 0,
+        pooledCost: Number(item.pooled_cost_satang) || 0,
+        unitPrice: Number(item.unit_price_satang) || Number(m.selling_price_satang) || 0,
+        quantity: qty,
+      });
 
       const isAlreadyUpToDate =
-        unitCost === newUnitCost &&
-        lineCost === newLineCost &&
-        packCost === newPackCost;
+        unitCost === next.unitCost &&
+        lineCost === next.lineCost &&
+        packCost === next.packagingCost;
 
       if (!isAlreadyUpToDate) {
         itemsToUpdate.push({
           id: String(item.id),
           payload: {
-            ingredient_cost_satang: newIngredientCost,
-            packaging_cost_satang: newPackCost,
-            unit_cost_satang: newUnitCost,
-            unit_profit_satang: unitPrice - newUnitCost,
-            line_cost_satang: newLineCost,
+            ingredient_cost_satang: next.ingredientCost,
+            packaging_cost_satang: next.packagingCost,
+            unit_cost_satang: next.unitCost,
+            unit_profit_satang: next.unitProfit,
+            line_cost_satang: next.lineCost,
           },
         });
         affectedSaleIds.add(String(item.sale_id));
-        unitCost = newUnitCost;
-        packCost = newPackCost;
-        lineCost = newLineCost;
+        unitCost = next.unitCost;
+        packCost = next.packagingCost;
+        lineCost = next.lineCost;
       }
     }
 
@@ -164,16 +220,9 @@ export async function syncHistoricalCosts(
 
   // 5) Recalculate totals for all affected parent sales
   const updateSale = async (saleId: string) => {
-    const itemsList = saleItemsBySaleId.get(saleId);
-    let totalCogs = 0;
-    let totalPack = 0;
+    let itemsList = saleItemsBySaleId.get(saleId);
 
-    if (itemsList && itemsList.length > 0 && !menuId) {
-      for (const it of itemsList) {
-        totalCogs += it.lineCost;
-        totalPack += it.packCost * it.quantity;
-      }
-    } else {
+    if (!itemsList || itemsList.length === 0 || menuId) {
       const { data: saleItems, error: siErr } = await supabase
         .from("sale_items")
         .select("line_cost_satang, packaging_cost_satang, quantity")
@@ -181,11 +230,24 @@ export async function syncHistoricalCosts(
 
       if (siErr) return;
 
-      for (const si of rows(saleItems)) {
-        totalCogs += Number(si.line_cost_satang) || 0;
-        totalPack += (Number(si.packaging_cost_satang) || 0) * (Number(si.quantity) || 1);
-      }
+      itemsList = rows(saleItems).map((si) => ({
+        lineCost: Number(si.line_cost_satang) || 0,
+        packCost: Number(si.packaging_cost_satang) || 0,
+        quantity: Number(si.quantity) || 1,
+      }));
     }
+
+    // Packaging actually handed out with the order, when the seller recorded it.
+    const { data: packRows, error: packErr } = await supabase
+      .from("sale_packaging")
+      .select("line_cost_satang")
+      .eq("sale_id", saleId);
+    const recordedPack = packErr ? [] : rows(packRows);
+    const actualPackaging = recordedPack.length
+      ? recordedPack.reduce((sum, p) => sum + (Number(p.line_cost_satang) || 0), 0)
+      : null;
+
+    const { cogs: totalCogs, packaging: totalPack } = saleCostTotals(itemsList, actualPackaging);
 
     const { data: saleData } = await supabase
       .from("sales")
