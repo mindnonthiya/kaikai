@@ -1,5 +1,5 @@
 import { hasSupabaseEnv } from "@/lib/env";
-import { fetchSales } from "@/lib/data/queries";
+import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { FULFILLMENT_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isAddonCategory } from "@/lib/data/types";
 import { satangToBahtInput } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
@@ -24,7 +24,8 @@ export async function GET(request: Request) {
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
   }
   const key = parseRange(new URL(request.url).searchParams.get("range") ?? undefined, ["today", "7d", "month", "last-month"], "month");
-  const range = resolveRange(key);
+  const saleSettings = await fetchSaleSettings();
+  const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const sales = await fetchSales(range.start, range.end);
 
   const headers = ["เลขที่", "วันเวลา", "ลูกค้า", "รายการ", "จำนวนกล่อง", "รับเอง/ส่ง", "ช่องทางชำระ", "สถานะรายการ", "สถานะชำระ", "ยอดสินค้า (บาท)", "ส่วนลด (บาท)", "ค่าส่ง (บาท)", "ค่าธรรมเนียม (บาท)", "ยอดสุทธิ (บาท)", "ต้นทุน (บาท)", "ต้นทุนบรรจุภัณฑ์ (บาท)", "กำไรขั้นต้น (บาท)"];

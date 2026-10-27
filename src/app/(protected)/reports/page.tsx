@@ -3,7 +3,7 @@ import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
 import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchIngredientPurchases, fetchSales } from "@/lib/data/queries";
+import { fetchExpenses, fetchIngredientPurchases, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { UTILITY_CATEGORIES } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, parseRange, previousRange, resolveRange } from "@/lib/time";
@@ -12,7 +12,9 @@ const RANGES = ["7d", "month", "last-month"] as const;
 
 export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const key = parseRange((await searchParams).range, [...RANGES], "month");
-  const range = resolveRange(key);
+  const saleSettings = await fetchSaleSettings();
+  const dayStartHour = saleSettings.dayStartHour ?? 0;
+  const range = resolveRange(key, new Date(), dayStartHour);
   const prev = previousRange(range);
   const [sales, expenses, purchases] = await Promise.all([fetchSales(prev.start, range.end), fetchExpenses(prev.start, range.end), fetchIngredientPurchases(range.start, range.end)]);
   const curSales = filterSales(sales, range.start, range.end);
@@ -20,7 +22,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const current = summarize(curSales, curExpenses);
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
   const days = Math.round((range.end.getTime() - range.start.getTime()) / DAY_MS);
-  const daily = dailySeries(curSales, curExpenses, range.start, days).reverse();
+  const daily = dailySeries(curSales, curExpenses, range.start, days, undefined, dayStartHour).reverse();
   const menus = menuRanking(curSales);
   const categories = expensesByCategory(curExpenses);
 

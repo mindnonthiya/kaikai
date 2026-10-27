@@ -141,6 +141,8 @@ export type SaleSettings = {
   initialPooledBps: number;
   /** Whether to display food images across the system (default true). When false, displays compact text-only layout. */
   showMenuImages?: boolean;
+  /** Hour of day (0-12, Bangkok time) when a new business day starts. Default 0 (00:00 midnight). */
+  dayStartHour?: number;
 };
 
 export type PricePresetItem = {

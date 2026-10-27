@@ -10,6 +10,7 @@ import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSale
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatBaht, satangToBahtInput } from "@/lib/money";
 import { getOcrProvider } from "@/lib/ocr/types";
+import { DAY_START_HOUR_OPTIONS, DEFAULT_DAY_START_HOUR } from "@/lib/time";
 
 export default async function SettingsPage() {
   const [profile, saleSettings, menus, presets] = await Promise.all([
@@ -51,6 +52,14 @@ export default async function SettingsPage() {
           <label>วัตถุดิบอื่นเริ่มต้น (% ของราคาขาย)<input id="settings-initial-pooled" name="initial_pooled_percent" inputMode="decimal" defaultValue={String(saleSettings.initialPooledBps / 100)} required /></label>
           <p className="field-hint">ข้าว พริก กระเทียม ผักชี มะนาว ซอส — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
           <div className="connection-row"><span>ตอนนี้ใช้</span><strong>{formatPercentBps(pooled.bps)} · {pooled.source === "actual" ? `จากยอดซื้อ ${formatBaht(pooled.pooledPurchases)} ÷ ยอดขาย ${formatBaht(pooled.foodRevenue)} (${pooled.historyDays} วัน)` : `ค่าเริ่มต้น${pooled.historyDays ? ` · มีข้อมูล ${pooled.historyDays}/${POOLED_MIN_DAYS} วัน` : ""}`}</strong></div>
+          <label>เวลาเริ่มวันใหม่ (ตัดรอบรายวัน)
+            <select id="settings-day-start-hour" name="day_start_hour" defaultValue={String(saleSettings.dayStartHour ?? DEFAULT_DAY_START_HOUR)}>
+              {DAY_START_HOUR_OPTIONS.map((opt) => (
+                <option key={opt.hour} value={opt.hour}>{opt.label}</option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint">ค่าเริ่มต้นคือ 00:00 น. (เที่ยงคืน) หากร้านเปิดดึกหรือปิดเช้ามืด เช่น เลือก 06:00 น. ออเดอร์ก่อน 6 โมงเช้าจะถูกนับรวมเป็นยอดของวันก่อนหน้า</p>
           <label className="checkbox-toggle-wrap">
             <input type="checkbox" name="show_menu_images" defaultChecked={saleSettings.showMenuImages ?? true} />
             <div>

@@ -242,4 +242,28 @@ describe("Bangkok time ranges", () => {
     const iso = fromBangkokDateTimeInput("2026-10-13T09:00");
     expect(iso).toBe("2026-10-13T02:00:00.000Z");
   });
+  it("shifts day and month boundaries when a custom dayStartHour (e.g. 06:00) is configured", () => {
+    const todayRange = resolveRange("today", now, 6);
+    expect(todayRange.start.toISOString()).toBe("2026-10-12T23:00:00.000Z");
+    expect(todayRange.end.toISOString()).toBe("2026-10-13T23:00:00.000Z");
+
+    const earlyMorning = new Date("2026-10-12T19:30:00.000Z"); // 02:30 Bangkok on 13 Oct
+    expect(bangkokDayKey(earlyMorning, 6)).toBe("2026-10-12");
+    expect(bangkokDayKey(earlyMorning, 0)).toBe("2026-10-13");
+    expect(resolveRange("today", earlyMorning, 6).start.toISOString()).toBe("2026-10-11T23:00:00.000Z");
+
+    const start = startOfBangkokDay(new Date("2026-10-12T05:00:00Z"), 6);
+    const points = dailySeries(
+      [
+        sale({ id: "late-night", soldAt: "2026-10-12T19:00:00.000Z", netRevenue: 5000 }),
+        sale({ id: "after-6am", soldAt: "2026-10-12T23:00:00.000Z", netRevenue: 8000 }),
+      ],
+      [],
+      start,
+      2,
+      undefined,
+      6,
+    );
+    expect(points.map((p) => [p.key, p.revenue])).toEqual([["2026-10-12", 5000], ["2026-10-13", 8000]]);
+  });
 });

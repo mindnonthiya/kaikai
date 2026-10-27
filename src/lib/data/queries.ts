@@ -5,7 +5,7 @@ import { COSTING_WINDOW_DAYS, pooledIngredientBps } from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
 import { createClient } from "@/lib/supabase/server";
-import { DAY_MS } from "@/lib/time";
+import { DAY_MS, DEFAULT_DAY_START_HOUR, normalizeDayStartHour } from "@/lib/time";
 import type {
   ExpenseKind, ExpenseRecord, Fulfillment, IngredientCosting, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
   PricePreset, ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
@@ -356,7 +356,7 @@ export const fetchRecipeItems = cache(async (): Promise<RecipeItemRecord[]> => {
 });
 
 export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
-  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true };
+  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true, dayStartHour: DEFAULT_DAY_START_HOUR };
   if (!hasSupabaseEnv) return fallback;
   const userId = await getRequestUserId();
   const cacheKey = `${userId}:settings:sales`;
@@ -370,10 +370,12 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
   const fee = Number(value.default_delivery_fee_satang);
   const bps = Number(value.initial_pooled_bps);
   const showMenuImages = value.show_menu_images !== undefined ? Boolean(value.show_menu_images) : true;
+  const dayStartHour = normalizeDayStartHour(value.day_start_hour);
   const res = {
     defaultDeliveryFee: Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee,
     initialPooledBps: Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000 ? bps : fallback.initialPooledBps,
     showMenuImages,
+    dayStartHour,
   };
   return setCached(cacheKey, res, 60_000);
 });

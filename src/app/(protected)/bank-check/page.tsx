@@ -5,7 +5,7 @@ import { StatCard } from "@/components/stat-card";
 import { BankCheckList } from "@/components/bank-check-list";
 import { filterExpenses, filterSales } from "@/lib/analytics";
 import { buildBankCheck } from "@/lib/bank-check";
-import { fetchExpenses, fetchSales } from "@/lib/data/queries";
+import { fetchExpenses, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatTime, fromBangkokDateInput, startOfBangkokDay } from "@/lib/time";
 import { ActionButton } from "@/components/action-form";
@@ -15,12 +15,14 @@ import { markSalePaidByTransfer } from "@/app/actions/sales";
 export default async function BankCheckPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const params = await searchParams;
   const now = new Date();
-  const today = startOfBangkokDay(now);
+  const saleSettings = await fetchSaleSettings();
+  const dayStartHour = saleSettings.dayStartHour ?? 0;
+  const today = startOfBangkokDay(now, dayStartHour);
 
   let dayStart = today;
   if (params.date) {
     try {
-      dayStart = fromBangkokDateInput(params.date);
+      dayStart = startOfBangkokDay(fromBangkokDateInput(params.date), dayStartHour);
     } catch {
       dayStart = today;
     }
@@ -28,10 +30,10 @@ export default async function BankCheckPage({ searchParams }: { searchParams: Pr
   // The future has no statement to compare against.
   if (dayStart.getTime() > today.getTime()) dayStart = today;
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);
-  const dateKey = bangkokDayKey(dayStart);
-  const todayKey = bangkokDayKey(today);
-  const prevKey = bangkokDayKey(new Date(dayStart.getTime() - DAY_MS));
-  const nextKey = bangkokDayKey(dayEnd);
+  const dateKey = bangkokDayKey(dayStart, dayStartHour);
+  const todayKey = bangkokDayKey(today, dayStartHour);
+  const prevKey = bangkokDayKey(new Date(dayStart.getTime() - DAY_MS), dayStartHour);
+  const nextKey = bangkokDayKey(dayEnd, dayStartHour);
   const isToday = dateKey === todayKey;
 
   const [sales, expenses] = await Promise.all([fetchSales(dayStart, dayEnd), fetchExpenses(dayStart, dayEnd)]);
