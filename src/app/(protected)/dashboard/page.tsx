@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";
 import { dailySeries, filterExpenses, filterSales, formatChange, formatPercentBps, menuCostWarnings, menuRanking, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchMenus, fetchPooledRate, fetchSales } from "@/lib/data/queries";
+import { fetchExpenses, fetchMenus, fetchPooledRate, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatThaiShortDate, formatTime, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
 
@@ -14,20 +14,22 @@ const COMPARE_LABEL = { today: "เมื่อวาน", yesterday: "วัน
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const key = parseRange((await searchParams).range, [...RANGES], "today");
   const now = new Date();
-  const range = resolveRange(key, now);
+  const saleSettings = await fetchSaleSettings();
+  const dayStartHour = saleSettings.dayStartHour ?? 0;
+  const range = resolveRange(key, now, dayStartHour);
   const prev = previousRange(range);
-  const today = startOfBangkokDay(now);
+  const today = startOfBangkokDay(now, dayStartHour);
   const chartStart = new Date(today.getTime() - 6 * DAY_MS);
-  const monthStart = startOfBangkokMonth(now);
+  const monthStart = startOfBangkokMonth(now, 0, dayStartHour);
   const windowStart = new Date(Math.min(prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
   const windowEnd = new Date(today.getTime() + DAY_MS);
 
-  const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate()]);
+  const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate(saleSettings)]);
 
   const current = summarize(filterSales(sales, range.start, range.end), filterExpenses(expenses, range.start, range.end));
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
   const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
-  const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now));
+  const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now, dayStartHour), dayStartHour);
   const chartRevenue = chart.reduce((sum, p) => sum + p.revenue, 0);
   const ranking = menuRanking(filterSales(sales, range.start, range.end)).filter((row) => !row.isAddon).slice(0, 3);
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
@@ -38,7 +40,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   return <>
     <section className="page-heading">
       <div>
-        <p className="eyebrow">{formatThaiLongDate(now)}</p>
+        <p className="eyebrow">{formatThaiLongDate(today)}</p>
         <h1>สวัสดี วันนี้ร้านเป็นอย่างไรบ้าง?</h1>
         <p>ตัวเลขจากรายการขายและค่าใช้จ่ายที่บันทึกไว้</p>
       </div>

@@ -8,7 +8,7 @@ import { PackPriceFields } from "@/components/pack-price-fields";
 import { PackagingRestockTable, type RestockItem } from "@/components/packaging-restock-table";
 import { createIngredient, createPackaging, recordIngredientPurchases, restockPackaging, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
 import { formatPercentBps } from "@/lib/analytics";
-import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases } from "@/lib/data/queries";
+import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchSaleSettings } from "@/lib/data/queries";
 import type { PackagingPurchaseRecord } from "@/lib/data/types";
 import { formatBaht, formatUnitCost, satangToBahtInput } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate } from "@/lib/time";
@@ -39,7 +39,10 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
   const [ingredients, packaging, purchases, latest, packPurchases, pooledRate] = await Promise.all([
     fetchIngredients(), fetchPackaging(), fetchRecentPurchases(20), fetchLatestPurchases(), fetchPackagingPurchases(), fetchPooledRate(),
   ]);
-  const today = bangkokDayKey(new Date());
+  const saleSettings = await fetchSaleSettings();
+  const now = new Date();
+  const today = bangkokDayKey(now, saleSettings.dayStartHour);
+  const maxDate = bangkokDayKey(now);
   const latestPack = new Map<string, PackagingPurchaseRecord>();
   for (const p of packPurchases) if (!latestPack.has(p.packagingItemId)) latestPack.set(p.packagingItemId, p);
 
@@ -100,7 +103,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อวัตถุดิบ</summary>
             {active.length
               ? <ActionForm action={recordIngredientPurchases} submitLabel="บันทึกการซื้อ">
-                  <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={today} /></label>
+                  <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น ตลาดสด" /></label>
                   <IngredientPurchaseTable key={perUnit.map((i) => `${i.id}:${i.unitPrice}:${i.unitsPerPurchaseUnit}`).join("|") + pooled.length} perUnit={perUnit} pooled={pooled} />
                 </ActionForm>
@@ -178,7 +181,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อบรรจุภัณฑ์</summary>
             {activePackaging.length
               ? <ActionForm action={restockPackaging} submitLabel="บันทึกการซื้อ">
-                  <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={today} /></label>
+                  <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น แม็คโคร" /></label>
                   <PackagingRestockTable key={restockItems.map((i) => `${i.id}:${i.packPrice}:${i.perPack}`).join("|")} items={restockItems} />
                   <p className="field-hint wide">กด + จำนวนแพ็กที่ซื้อ ราคา/แพ็กและจำนวนต่อแพ็กใช้ของครั้งก่อน แก้ได้ถ้าราคาเปลี่ยน</p>
@@ -191,7 +194,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
               <label>ชื่อ<input name="name" maxLength={120} required placeholder="เช่น กล่อง + ฝา" /></label>
               <label>หน่วย<input name="unit" list="pack-units" maxLength={30} required defaultValue="ชิ้น" /></label>
               <PerOrderSelect />
-              <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={today} /></label>
+              <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
               <PackPriceFields unitInputName="unit" required={false} />
               <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น แม็คโคร" /></label>
               <p className="field-hint wide">ราคาแพ็กเว้นว่างได้ ถ้ายังไม่รู้ ค่อยบันทึกการซื้อทีหลัง</p>

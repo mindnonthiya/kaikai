@@ -6,7 +6,7 @@ import { RangeTabs } from "@/components/range-tabs";
 import { ActionButton, ActionForm } from "@/components/action-form";
 import { deleteExpense, saveExpense } from "@/app/actions/expenses";
 import { isOperatingExpense } from "@/lib/analytics";
-import { fetchExpenses } from "@/lib/data/queries";
+import { fetchExpenses, fetchSaleSettings } from "@/lib/data/queries";
 import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate, parseRange, resolveRange } from "@/lib/time";
@@ -18,14 +18,17 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const params = await searchParams;
   const key = parseRange(params.range, [...RANGES], "month");
   const q = (params.q ?? "").trim();
-  const range = resolveRange(key);
+  const saleSettings = await fetchSaleSettings();
+  const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const all = await fetchExpenses(range.start, range.end);
   const needle = q.toLowerCase();
   const expenses = needle ? all.filter((e) => [e.description, e.category, e.payee ?? ""].some((v) => v.toLowerCase().includes(needle))) : all;
   const total = expenses.reduce((s, e) => s + e.amount, 0);
   const operating = expenses.filter(isOperatingExpense).reduce((s, e) => s + e.amount, 0);
   const direct = total - operating;
-  const today = bangkokDayKey(new Date());
+  const now = new Date();
+  const today = bangkokDayKey(now, saleSettings.dayStartHour);
+  const maxDate = bangkokDayKey(now);
 
   return <>
     <PageTitle eyebrow="เงินออก" title="ค่าใช้จ่าย" description="แยกต้นทุนสินค้าและค่าใช้จ่ายดำเนินงานอย่างชัดเจน" />
@@ -41,7 +44,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
           <option value="one_time">ครั้งเดียว เช่น ซื้ออุปกรณ์ (หักจากกำไร)</option>
           <option value="direct">ต้นทุนโดยตรง (อยู่ในต้นทุนเมนูแล้ว ไม่หักซ้ำ)</option>
         </select></label>
-        <label>วันที่จ่าย<input type="date" name="spent_at" defaultValue={today} max={today} /></label>
+        <label>วันที่จ่าย<input type="date" name="spent_at" defaultValue={today} max={maxDate} /></label>
         <label>วิธีชำระ<select name="payment_method" defaultValue="transfer"><option value="transfer">เงินโอน</option><option value="cash">เงินสด</option><option value="other">อื่น ๆ</option></select></label>
         <label>ผู้รับเงิน (ไม่บังคับ)<input name="payee" maxLength={120} placeholder="เช่น ปั๊ม ปตท." /></label>
         <p className="field-hint wide">ค่าไฟ / ค่าแก๊ส ลงที่นี่ตอนบิลมา (หมวด “ค่าไฟ” “ค่าแก๊ส”) · ซื้อไก่ ข้าว ผัก เครื่องปรุง กล่อง ช้อน ถุง ให้บันทึกที่หน้า <Link href="/ingredients" className="text-link">วัตถุดิบและบรรจุภัณฑ์</Link> แทน ระบบคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>

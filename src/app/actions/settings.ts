@@ -15,15 +15,26 @@ function percentBps(form: FormData, name: string, label: string) {
   return bps;
 }
 
+function dayStartHourField(form: FormData) {
+  const raw = String(form.get("day_start_hour") ?? "0").trim();
+  if (!/^\d+$/.test(raw)) throw new InputError("เวลาเริ่มวันใหม่ไม่ถูกต้อง");
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 12) {
+    throw new InputError("เวลาเริ่มวันใหม่ต้องอยู่ระหว่าง 00:00 ถึง 12:00 น.");
+  }
+  return hour;
+}
+
 /**
  * Sale settings (settings key "sales"):
- * default delivery fee filled in when an order is marked “ส่ง”, and the starting % for other ingredients.
+ * default delivery fee filled in when an order is marked “ส่ง”, starting % for other ingredients, and business day start hour.
  */
 export async function saveSaleSettings(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const fee = money(form, "default_delivery_fee", "ค่าส่งเริ่มต้น", { required: true });
     const initialPooledBps = percentBps(form, "initial_pooled_percent", "% วัตถุดิบอื่นเริ่มต้น");
     const showMenuImages = form.get("show_menu_images") === "on" || form.get("show_menu_images") === "true";
+    const dayStartHour = dayStartHourField(form);
     const { error } = await supabase.from("settings").upsert(
       {
         owner_id: user.id,
@@ -32,6 +43,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
           default_delivery_fee_satang: fee,
           initial_pooled_bps: initialPooledBps,
           show_menu_images: showMenuImages,
+          day_start_hour: dayStartHour,
         },
         updated_at: new Date().toISOString()
       },
@@ -45,6 +57,10 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
     revalidatePath("/menus");
     revalidatePath("/ingredients");
     revalidatePath("/dashboard");
+    revalidatePath("/sales");
+    revalidatePath("/expenses");
+    revalidatePath("/reports");
+    revalidatePath("/bank-check");
     return { ok: true, message: "บันทึกการตั้งค่าแล้ว" };
   });
 }

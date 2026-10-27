@@ -5,7 +5,7 @@ import { ActionButton } from "@/components/action-form";
 import { cancelSale } from "@/app/actions/sales";
 import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
-import { fetchSales } from "@/lib/data/queries";
+import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, type SaleRecord } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { formatThaiShortDate, formatTime, parseRange, resolveRange } from "@/lib/time";
@@ -22,7 +22,8 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
   const key = parseRange(params.range, [...RANGES], "7d");
   const q = (params.q ?? "").trim();
-  const range = resolveRange(key);
+  const saleSettings = await fetchSaleSettings();
+  const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const all = await fetchSales(range.start, range.end);
   const uncalculatedCount = all.filter((s) => s.status === "confirmed" && s.cogs === 0 && s.netRevenue > 0).length;
   const needle = q.toLowerCase().replace(/^#/, "");

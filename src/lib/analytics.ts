@@ -117,16 +117,16 @@ export function formatPercentBps(bps: number) {
 export type DayPoint = { key: string; label: string; shortDate: string; saleCount: number; revenue: number; grossProfit: number; operatingExpenses: number; netProfit: number };
 
 /** One point per Bangkok calendar day from `start` for `days` days. */
-export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], start: Date, days: number, todayKey?: string): DayPoint[] {
+export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], start: Date, days: number, todayKey?: string, dayStartHour = 0): DayPoint[] {
   const points = new Map<string, DayPoint>();
   for (let i = 0; i < days; i++) {
     const day = new Date(start.getTime() + i * DAY_MS);
-    const key = bangkokDayKey(day);
+    const key = bangkokDayKey(day, dayStartHour);
     points.set(key, { key, label: key === todayKey ? "วันนี้" : formatThaiWeekday(day), shortDate: formatThaiShortDate(day), saleCount: 0, revenue: 0, grossProfit: 0, operatingExpenses: 0, netProfit: 0 });
   }
   for (const sale of sales) {
     if (!countsAsRevenue(sale)) continue;
-    const point = points.get(bangkokDayKey(sale.soldAt));
+    const point = points.get(bangkokDayKey(sale.soldAt, dayStartHour));
     if (!point) continue;
     point.saleCount += 1;
     point.revenue += sale.netRevenue;
@@ -134,7 +134,7 @@ export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], star
   }
   for (const expense of expenses) {
     if (!isOperatingExpense(expense)) continue;
-    const point = points.get(bangkokDayKey(expense.spentAt));
+    const point = points.get(bangkokDayKey(expense.spentAt, dayStartHour));
     if (point) point.operatingExpenses += expense.amount;
   }
   for (const point of points.values()) point.netProfit = point.grossProfit - point.operatingExpenses;
