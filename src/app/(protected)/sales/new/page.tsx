@@ -50,6 +50,7 @@ export default async function NewSalePage() {
       menus={menus}
       packaging={packaging}
       defaultDeliveryFee={settings.defaultDeliveryFee}
+      deliveryFeeOptions={settings.deliveryFeeOptions}
       pooledBps={pooled.bps}
       showMenuImages={settings.showMenuImages ?? true}
       presets={presets}

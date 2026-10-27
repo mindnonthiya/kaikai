@@ -121,6 +121,8 @@ If any field cannot be determined, set it to null. Return strictly JSON, no mark
       transferredAt,
       bank: parsed.bank || undefined,
       referenceNumber: parsed.referenceNumber || undefined,
+      senderName: parsed.senderName || undefined,
+      receiverName: parsed.receiverName || undefined,
       confidence: 0.98,
     };
   }

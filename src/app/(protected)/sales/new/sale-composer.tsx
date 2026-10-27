@@ -47,11 +47,12 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, showMenuImages = true, presets = [] }: {
-  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; pooledBps: number; showMenuImages?: boolean; presets?: PricePreset[];
+export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFeeOptions, pooledBps, showMenuImages = true, presets = [] }: {
+  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; deliveryFeeOptions?: number[]; pooledBps: number; showMenuImages?: boolean; presets?: PricePreset[];
 }) {
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
+  const feeOptions = Array.from(new Set([defaultDeliveryFee, ...(deliveryFeeOptions ?? [1500, 2000])])).sort((a, b) => a - b);
 
   const [cart, setCart] = useState<Cart>({});
   const [customItems, setCustomItems] = useState<CustomItem[]>([]);
@@ -481,7 +482,28 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, pooledBps, 
         <button type="button" role="radio" aria-checked={fulfillment === "delivery"} className={fulfillment === "delivery" ? "active" : ""} onClick={() => setFulfillment("delivery")}><Bike size={17} /> ส่ง</button>
       </div>
       <div className="form-grid">
-        {fulfillment === "delivery" && <label>ค่าส่ง (บาท)<input id="sale-delivery" inputMode="decimal" value={delivery} onChange={(e) => setDelivery(e.target.value)} aria-invalid={deliverySatang === null} /></label>}
+        {fulfillment === "delivery" && (
+          <div className="tip-input-wrap">
+            <div className="label-row">
+              <label htmlFor="sale-delivery">ค่าส่ง (บาท)</label>
+            </div>
+            <div className="tip-input-group">
+              <input id="sale-delivery" inputMode="decimal" value={delivery} onChange={(e) => setDelivery(e.target.value)} aria-invalid={deliverySatang === null} />
+              <div className="tip-chips">
+                {feeOptions.map((optSatang) => (
+                  <button
+                    key={optSatang}
+                    type="button"
+                    className={`chip-btn ${deliverySatang === optSatang ? "round-up" : ""}`}
+                    onClick={() => setDelivery(formatBaht(optSatang, false))}
+                  >
+                    {formatBaht(optSatang, false)} ฿
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="tip-input-wrap">
           <div className="label-row">
             <label htmlFor="sale-tip">ทิป / ลูกค้าโอนเกิน (บาท)</label>

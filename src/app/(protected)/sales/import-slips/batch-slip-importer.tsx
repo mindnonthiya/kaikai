@@ -70,10 +70,12 @@ type Props = {
   menus: MenuRecord[];
   presets: PricePreset[];
   defaultDeliveryFee: number;
+  deliveryFeeOptions?: number[];
   pooledBps: number;
 };
 
-export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBps }: Props) {
+export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, deliveryFeeOptions, pooledBps }: Props) {
+  const feeOptions = Array.from(new Set([defaultDeliveryFee, ...(deliveryFeeOptions ?? [1500, 2000])])).sort((a, b) => a - b);
   const router = useRouter();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -461,10 +463,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
     handleUpdateItemQty(rowId, menuId, 0);
   }
 
-  function handleFulfillmentChange(rowId: string, fulfillment: Fulfillment) {
+  function handleFulfillmentChange(rowId: string, fulfillment: Fulfillment, feeSatang?: number) {
     updateRow(rowId, {
       fulfillment,
-      deliveryChargedSatang: fulfillment === "delivery" ? defaultDeliveryFee : 0,
+      deliveryChargedSatang: fulfillment === "delivery" ? (feeSatang ?? defaultDeliveryFee) : 0,
       matchedPresetId: null,
     });
   }
@@ -992,13 +994,16 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, pooledBp
                             >
                               รับเอง (0฿)
                             </button>
-                            <button
-                              type="button"
-                              className={`seg-btn ${row.fulfillment === "delivery" ? "active" : ""}`}
-                              onClick={() => handleFulfillmentChange(row.id, "delivery")}
-                            >
-                              ส่ง (+฿{defaultDeliveryFee / 100})
-                            </button>
+                            {feeOptions.map((optSatang) => (
+                              <button
+                                key={optSatang}
+                                type="button"
+                                className={`seg-btn ${row.fulfillment === "delivery" && row.deliveryChargedSatang === optSatang ? "active" : ""}`}
+                                onClick={() => handleFulfillmentChange(row.id, "delivery", optSatang)}
+                              >
+                                ส่ง (+฿{optSatang / 100})
+                              </button>
+                            ))}
                           </div>
                         </div>
 

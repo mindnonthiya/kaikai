@@ -16,6 +16,7 @@ const PAGE_SIZE = 1000; // matches the Data API max_rows default
 
 /** Used until the owner sets their own delivery fee in Settings. */
 export const DEFAULT_DELIVERY_FEE_SATANG = 1500;
+export const DEFAULT_DELIVERY_FEE_OPTIONS_SATANG = [1500, 2000];
 /** Starting guess for other ingredients (rice, herbs, sauce) = 10% of food sales, until there is real data. */
 export const DEFAULT_INITIAL_POOLED_BPS = 1000;
 export const SALE_SETTINGS_KEY = "sales";
@@ -193,6 +194,8 @@ function mapExpense(row: Row): ExpenseRecord {
     description: str(row.description),
     payee: strOrNull(row.payee),
     paymentMethod: strOrNull(row.payment_method) as PaymentMethod | null,
+    receiptPath: strOrNull(row.receipt_path),
+    notes: strOrNull(row.notes),
   };
 }
 
@@ -201,7 +204,7 @@ export async function fetchExpenses(start: Date, end: Date): Promise<ExpenseReco
   if (!hasSupabaseEnv) return [];
   const supabase = await createClient();
   const data = await fetchAll("ค่าใช้จ่าย", (from, to) =>
-    supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method")
+    supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
       .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to));
   return data.map(mapExpense);
 }
@@ -356,7 +359,7 @@ export const fetchRecipeItems = cache(async (): Promise<RecipeItemRecord[]> => {
 });
 
 export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
-  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true, dayStartHour: DEFAULT_DAY_START_HOUR };
+  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, deliveryFeeOptions: DEFAULT_DELIVERY_FEE_OPTIONS_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true, dayStartHour: DEFAULT_DAY_START_HOUR };
   if (!hasSupabaseEnv) return fallback;
   const userId = await getRequestUserId();
   const cacheKey = `${userId}:settings:sales`;
@@ -371,8 +374,15 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
   const bps = Number(value.initial_pooled_bps);
   const showMenuImages = value.show_menu_images !== undefined ? Boolean(value.show_menu_images) : true;
   const dayStartHour = normalizeDayStartHour(value.day_start_hour);
+  const resolvedDefaultFee = Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee;
+  const rawFeeOptions = Array.isArray(value.delivery_fee_options_satang)
+    ? value.delivery_fee_options_satang.map(Number).filter((n) => Number.isSafeInteger(n) && n >= 0)
+    : [];
+  const baseOptions = rawFeeOptions.length > 0 ? rawFeeOptions : DEFAULT_DELIVERY_FEE_OPTIONS_SATANG;
+  const deliveryFeeOptions = Array.from(new Set([resolvedDefaultFee, ...baseOptions])).sort((a, b) => a - b);
   const res = {
-    defaultDeliveryFee: Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee,
+    defaultDeliveryFee: resolvedDefaultFee,
+    deliveryFeeOptions,
     initialPooledBps: Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000 ? bps : fallback.initialPooledBps,
     showMenuImages,
     dayStartHour,

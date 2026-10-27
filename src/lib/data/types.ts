@@ -70,6 +70,8 @@ export type ExpenseRecord = {
   description: string;
   payee: string | null;
   paymentMethod: PaymentMethod | null;
+  receiptPath?: string | null;
+  notes?: string | null;
 };
 
 export type MenuRecord = {
@@ -137,6 +139,8 @@ export type PackagingPurchaseRecord = {
 
 export type SaleSettings = {
   defaultDeliveryFee: number;
+  /** Quick-pick delivery fee options in satang (e.g. [1500, 2000] = 15฿, 20฿). */
+  deliveryFeeOptions?: number[];
   /** Pooled-ingredient rate (basis points of food sales) used until there is enough real data. */
   initialPooledBps: number;
   /** Whether to display food images across the system (default true). When false, displays compact text-only layout. */
