@@ -44,6 +44,7 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const clientHash = formData.get("hash") as string | null;
+    const context = String(formData.get("context") ?? "sale");
 
     if (!file) {
       return NextResponse.json({ ok: false, error: "กรุณาแนบไฟล์รูปสลิป" }, { status: 400 });
@@ -59,35 +60,53 @@ export async function POST(req: Request) {
     }
 
     // 1. Initial file hash check (owner-scoped)
-    let hashDuplicate: { saleNumber?: number; soldAt?: string } | null = null;
+    let hashDuplicate: { saleNumber?: number; soldAt?: string; expenseDesc?: string } | null = null;
     if (hash) {
-      const { data: existingSlip } = await supabase
-        .from("slip_uploads")
-        .select("id, sale_id, created_at, sales(sale_number, sold_at)")
-        .eq("owner_id", user.id)
-        .eq("file_hash_sha256", hash)
-        .maybeSingle();
+      if (context === "expense") {
+        const { data: existingExp } = await supabase
+          .from("expenses")
+          .select("id, description, spent_at")
+          .eq("owner_id", user.id)
+          .ilike("receipt_path", `%${hash.slice(0, 16)}%`)
+          .limit(1)
+          .maybeSingle();
+        if (existingExp) {
+          hashDuplicate = {
+            soldAt: existingExp.spent_at,
+            expenseDesc: existingExp.description,
+          };
+        }
+      } else {
+        const { data: existingSlip } = await supabase
+          .from("slip_uploads")
+          .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+          .eq("owner_id", user.id)
+          .eq("file_hash_sha256", hash)
+          .maybeSingle();
 
-      if (existingSlip) {
-        const rawSale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
-        const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
-        if (sale?.sale_number) {
-          hashDuplicate = {
-            saleNumber: sale.sale_number,
-            soldAt: sale.sold_at,
-          };
-        } else {
-          hashDuplicate = {
-            saleNumber: undefined,
-            soldAt: existingSlip.created_at,
-          };
+        if (existingSlip) {
+          const rawSale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+          const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
+          if (sale?.sale_number) {
+            hashDuplicate = {
+              saleNumber: sale.sale_number,
+              soldAt: sale.sold_at,
+            };
+          } else {
+            hashDuplicate = {
+              saleNumber: undefined,
+              soldAt: existingSlip.created_at,
+            };
+          }
         }
       }
     }
 
     let isDuplicate = Boolean(hashDuplicate);
     let duplicateReason = isDuplicate
-      ? `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate?.saleNumber ?? "เดิม"}`
+      ? hashDuplicate?.expenseDesc
+        ? `ไฟล์สลิปนี้เคยบันทึกในค่าใช้จ่าย “${hashDuplicate.expenseDesc}” แล้ว`
+        : `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate?.saleNumber ?? "เดิม"}`
       : undefined;
     let duplicateSaleNumber = hashDuplicate?.saleNumber;
     let duplicateSoldAt = hashDuplicate?.soldAt;
@@ -110,41 +129,36 @@ export async function POST(req: Request) {
       const ocrResult = await ocrProvider.readSlip(buffer, file.type || "image/webp");
 
       // 2. Reference Number check (Unique per banking transaction)
-      let refDuplicate: { saleNumber?: number; soldAt?: string; ref: string } | null = null;
+      let refDuplicate: { saleNumber?: number; soldAt?: string; ref: string; expenseDesc?: string } | null = null;
       const cleanRef = ocrResult?.referenceNumber?.trim();
 
       if (cleanRef && cleanRef.length >= 6) {
-        // A. Check in payments table by reference_number
-        const { data: paymentMatch } = await supabase
-          .from("payments")
-          .select("sale_id, sales(sale_number, sold_at)")
-          .eq("owner_id", user.id)
-          .eq("reference_number", cleanRef)
-          .maybeSingle();
-
-        if (paymentMatch) {
-          const rawSale = (paymentMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
-          const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
-          if (sale?.sale_number) {
+        if (context === "expense") {
+          const { data: expRefMatch } = await supabase
+            .from("expenses")
+            .select("id, description, spent_at")
+            .eq("owner_id", user.id)
+            .ilike("notes", `%${cleanRef}%`)
+            .limit(1)
+            .maybeSingle();
+          if (expRefMatch) {
             refDuplicate = {
-              saleNumber: sale.sale_number,
-              soldAt: sale.sold_at,
+              soldAt: expRefMatch.spent_at,
               ref: cleanRef,
+              expenseDesc: expRefMatch.description,
             };
           }
-        }
-
-        // B. Check in slip_uploads table by ocr_reference_number
-        if (!refDuplicate) {
-          const { data: slipRefMatch } = await supabase
-            .from("slip_uploads")
-            .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+        } else {
+          // A. Check in payments table by reference_number
+          const { data: paymentMatch } = await supabase
+            .from("payments")
+            .select("sale_id, sales(sale_number, sold_at)")
             .eq("owner_id", user.id)
-            .eq("ocr_reference_number", cleanRef)
+            .eq("reference_number", cleanRef)
             .maybeSingle();
 
-          if (slipRefMatch) {
-            const rawSale = (slipRefMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+          if (paymentMatch) {
+            const rawSale = (paymentMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
             const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
             if (sale?.sale_number) {
               refDuplicate = {
@@ -154,23 +168,45 @@ export async function POST(req: Request) {
               };
             }
           }
-        }
 
-        // C. Check in sales.notes if payments/slip_uploads didn't have it
-        if (!refDuplicate) {
-          const { data: noteMatch } = await supabase
-            .from("sales")
-            .select("id, sale_number, sold_at")
-            .eq("owner_id", user.id)
-            .ilike("notes", `%${cleanRef}%`)
-            .maybeSingle();
+          // B. Check in slip_uploads table by ocr_reference_number
+          if (!refDuplicate) {
+            const { data: slipRefMatch } = await supabase
+              .from("slip_uploads")
+              .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+              .eq("owner_id", user.id)
+              .eq("ocr_reference_number", cleanRef)
+              .maybeSingle();
 
-          if (noteMatch) {
-            refDuplicate = {
-              saleNumber: noteMatch.sale_number,
-              soldAt: noteMatch.sold_at,
-              ref: cleanRef,
-            };
+            if (slipRefMatch) {
+              const rawSale = (slipRefMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+              const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
+              if (sale?.sale_number) {
+                refDuplicate = {
+                  saleNumber: sale.sale_number,
+                  soldAt: sale.sold_at,
+                  ref: cleanRef,
+                };
+              }
+            }
+          }
+
+          // C. Check in sales.notes if payments/slip_uploads didn't have it
+          if (!refDuplicate) {
+            const { data: noteMatch } = await supabase
+              .from("sales")
+              .select("id, sale_number, sold_at")
+              .eq("owner_id", user.id)
+              .ilike("notes", `%${cleanRef}%`)
+              .maybeSingle();
+
+            if (noteMatch) {
+              refDuplicate = {
+                saleNumber: noteMatch.sale_number,
+                soldAt: noteMatch.sold_at,
+                ref: cleanRef,
+              };
+            }
           }
         }
       }
@@ -180,12 +216,16 @@ export async function POST(req: Request) {
         isDuplicate = true;
         duplicateSaleNumber = refDuplicate.saleNumber;
         duplicateSoldAt = refDuplicate.soldAt;
-        duplicateReason = `เลขอ้างอิง Ref: ${cleanRef} ตรงกับบิล #${refDuplicate.saleNumber ?? "เดิม"}`;
+        duplicateReason = refDuplicate.expenseDesc
+          ? `เลขอ้างอิง Ref: ${cleanRef} ตรงกับค่าใช้จ่าย “${refDuplicate.expenseDesc}”`
+          : `เลขอ้างอิง Ref: ${cleanRef} ตรงกับบิล #${refDuplicate.saleNumber ?? "เดิม"}`;
       } else if (hashDuplicate) {
         isDuplicate = true;
         duplicateSaleNumber = hashDuplicate.saleNumber;
         duplicateSoldAt = hashDuplicate.soldAt;
-        duplicateReason = `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate.saleNumber ?? "เดิม"}`;
+        duplicateReason = hashDuplicate.expenseDesc
+          ? `ไฟล์สลิปนี้เคยบันทึกในค่าใช้จ่าย “${hashDuplicate.expenseDesc}” แล้ว`
+          : `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate.saleNumber ?? "เดิม"}`;
       }
 
       return NextResponse.json({

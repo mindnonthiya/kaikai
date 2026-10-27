@@ -1,10 +1,12 @@
 import Link from "next/link";
-import { WalletCards } from "lucide-react";
+import { UploadCloud, WalletCards } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
-import { ActionButton, ActionForm } from "@/components/action-form";
-import { deleteExpense, saveExpense } from "@/app/actions/expenses";
+import { ActionButton } from "@/components/action-form";
+import { ExpenseFormWithSlip } from "@/components/expense-form-with-slip";
+import { ExpenseReceiptButton } from "@/components/expense-receipt-button";
+import { deleteExpense } from "@/app/actions/expenses";
 import { isOperatingExpense } from "@/lib/analytics";
 import { fetchExpenses, fetchSaleSettings } from "@/lib/data/queries";
 import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
@@ -31,24 +33,27 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const maxDate = bangkokDayKey(now);
 
   return <>
-    <PageTitle eyebrow="เงินออก" title="ค่าใช้จ่าย" description="แยกต้นทุนสินค้าและค่าใช้จ่ายดำเนินงานอย่างชัดเจน" />
+    <PageTitle
+      eyebrow="เงินออก"
+      title="ค่าใช้จ่าย"
+      description="แยกต้นทุนสินค้าและค่าใช้จ่ายดำเนินงานอย่างชัดเจน พร้อมแนบสลิปอ่านยอดอัตโนมัติ"
+      action={
+        <Link className="secondary-button" href="/expenses/import-slips">
+          <UploadCloud size={17} /> นำเข้าสลิปเป็นชุด
+        </Link>
+      }
+    />
+    <div className="sales-mode-bar" style={{ marginBottom: "14px" }}>
+      <div className="sales-mode-tabs">
+        <span className="sales-mode-tab active">รายการและบันทึกเดี่ยว</span>
+        <Link href="/expenses/import-slips" className="sales-mode-tab">
+          นำเข้าสลิปค่าใช้จ่ายเป็นชุด
+        </Link>
+      </div>
+    </div>
     <details className="panel form-panel">
-      <summary><WalletCards size={18} /> เพิ่มค่าใช้จ่าย</summary>
-      <ActionForm action={saveExpense} submitLabel="บันทึกค่าใช้จ่าย">
-        <label>รายละเอียด<input name="description" maxLength={200} required placeholder="เช่น เติมน้ำมันมอเตอร์ไซค์" /></label>
-        <label>จำนวนเงิน (บาท)<input name="amount" inputMode="decimal" required placeholder="เช่น 100" /></label>
-        <label>หมวดหมู่<input name="category" list="expense-categories" maxLength={60} required placeholder={`เช่น ${FUEL_CATEGORY}`} /></label>
-        <label>ประเภท<select name="kind" defaultValue="operating">
-          <option value="operating">ดำเนินงาน เช่น ค่าน้ำมัน แก๊ส (หักจากกำไร)</option>
-          <option value="recurring">ประจำ เช่น ค่าเช่า (หักจากกำไร)</option>
-          <option value="one_time">ครั้งเดียว เช่น ซื้ออุปกรณ์ (หักจากกำไร)</option>
-          <option value="direct">ต้นทุนโดยตรง (อยู่ในต้นทุนเมนูแล้ว ไม่หักซ้ำ)</option>
-        </select></label>
-        <label>วันที่จ่าย<input type="date" name="spent_at" defaultValue={today} max={maxDate} /></label>
-        <label>วิธีชำระ<select name="payment_method" defaultValue="transfer"><option value="transfer">เงินโอน</option><option value="cash">เงินสด</option><option value="other">อื่น ๆ</option></select></label>
-        <label>ผู้รับเงิน (ไม่บังคับ)<input name="payee" maxLength={120} placeholder="เช่น ปั๊ม ปตท." /></label>
-        <p className="field-hint wide">ค่าไฟ / ค่าแก๊ส ลงที่นี่ตอนบิลมา (หมวด “ค่าไฟ” “ค่าแก๊ส”) · ซื้อไก่ ข้าว ผัก เครื่องปรุง กล่อง ช้อน ถุง ให้บันทึกที่หน้า <Link href="/ingredients" className="text-link">วัตถุดิบและบรรจุภัณฑ์</Link> แทน ระบบคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>
-      </ActionForm>
+      <summary><WalletCards size={18} /> เพิ่มค่าใช้จ่าย (แนบสลิปอ่านยอดอัตโนมัติได้)</summary>
+      <ExpenseFormWithSlip today={today} maxDate={maxDate} categories={CATEGORIES} />
       <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
     </details>
     <RangeTabs basePath="/expenses" options={[...RANGES]} active={key} extraParams={{ q }} />
@@ -65,14 +70,22 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         {q && <Link className="link-button" href={`/expenses?range=${key}`}>ล้าง</Link>}
       </form>
       <table className="data-table">
-        <thead><tr><th>วันที่</th><th>รายละเอียด</th><th>ประเภท</th><th>ผู้รับเงิน</th><th>วิธีชำระ</th><th className="num">จำนวน</th><th /></tr></thead>
+        <thead><tr><th>วันที่</th><th>รายละเอียด</th><th>ประเภท</th><th>ผู้รับเงิน</th><th>วิธีชำระ / สลิป</th><th className="num">จำนวน</th><th /></tr></thead>
         <tbody>
           {expenses.map((e) => <tr key={e.id}>
             <td>{formatThaiShortDate(e.spentAt)}</td>
             <td><strong>{e.description}</strong><br /><small className="muted">{e.category}</small></td>
             <td><span className={`status ${e.kind === "direct" ? "muted" : "pending"}`}>{EXPENSE_KIND_LABELS[e.kind]}</span></td>
             <td>{e.payee ?? "—"}</td>
-            <td>{e.paymentMethod ? PAYMENT_METHOD_LABELS[e.paymentMethod] : "—"}</td>
+            <td>
+              {e.paymentMethod ? PAYMENT_METHOD_LABELS[e.paymentMethod] : "—"}
+              {e.receiptPath && (
+                <>
+                  <br />
+                  <ExpenseReceiptButton receiptPath={e.receiptPath} />
+                </>
+              )}
+            </td>
             <td className="num"><strong>{formatBaht(e.amount)}</strong></td>
             <td className="num"><ActionButton action={deleteExpense} fields={{ id: e.id }} label="ลบ" confirmText={`ลบ “${e.description}” ${formatBaht(e.amount)}?`} className="link-button danger" /></td>
           </tr>)}

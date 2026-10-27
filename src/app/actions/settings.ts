@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { invalidateQueryCache } from "@/lib/data/queries";
+import { DEFAULT_DELIVERY_FEE_OPTIONS_SATANG, invalidateQueryCache } from "@/lib/data/queries";
+import { bahtToSatang } from "@/lib/money";
 import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 
@@ -29,9 +30,30 @@ function dayStartHourField(form: FormData) {
  * Sale settings (settings key "sales"):
  * default delivery fee filled in when an order is marked “ส่ง”, starting % for other ingredients, and business day start hour.
  */
+function deliveryFeeOptionsField(form: FormData, defaultFeeSatang: number): number[] {
+  const raw = String(form.get("delivery_fee_options") ?? "").trim();
+  if (!raw) {
+    return Array.from(new Set([defaultFeeSatang, ...DEFAULT_DELIVERY_FEE_OPTIONS_SATANG])).sort((a, b) => a - b);
+  }
+  const parts = raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  const parsed: number[] = [defaultFeeSatang];
+  for (const part of parts) {
+    let val: number;
+    try {
+      val = bahtToSatang(part);
+    } catch {
+      throw new InputError(`ตัวเลือกค่าส่ง “${part}” ไม่ถูกต้อง (ใส่ตัวเลขคั่นด้วยลูกน้ำ เช่น 15, 20)`);
+    }
+    if (val < 0) throw new InputError("ตัวเลือกค่าส่งต้องไม่ติดลบ");
+    parsed.push(val);
+  }
+  return Array.from(new Set(parsed)).sort((a, b) => a - b);
+}
+
 export async function saveSaleSettings(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const fee = money(form, "default_delivery_fee", "ค่าส่งเริ่มต้น", { required: true });
+    const deliveryFeeOptions = deliveryFeeOptionsField(form, fee);
     const initialPooledBps = percentBps(form, "initial_pooled_percent", "% วัตถุดิบอื่นเริ่มต้น");
     const showMenuImages = form.get("show_menu_images") === "on" || form.get("show_menu_images") === "true";
     const dayStartHour = dayStartHourField(form);
@@ -41,6 +63,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
         key: "sales",
         value: {
           default_delivery_fee_satang: fee,
+          delivery_fee_options_satang: deliveryFeeOptions,
           initial_pooled_bps: initialPooledBps,
           show_menu_images: showMenuImages,
           day_start_hour: dayStartHour,
@@ -54,6 +77,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
     invalidateQueryCache("pooled_rate");
     revalidatePath("/settings");
     revalidatePath("/sales/new");
+    revalidatePath("/sales/import-slips");
     revalidatePath("/menus");
     revalidatePath("/ingredients");
     revalidatePath("/dashboard");

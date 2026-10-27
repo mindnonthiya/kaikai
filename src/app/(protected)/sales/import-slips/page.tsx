@@ -31,6 +31,7 @@ export default async function BatchSlipImportPage() {
         menus={menus.filter((m) => m.isAvailable)}
         presets={presets}
         defaultDeliveryFee={settings.defaultDeliveryFee}
+        deliveryFeeOptions={settings.deliveryFeeOptions}
         pooledBps={pooled.bps}
       />
     </>

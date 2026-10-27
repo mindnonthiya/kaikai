@@ -10,9 +10,11 @@ type Props = {
   initialPresets: PricePreset[];
   menus: MenuRecord[];
   defaultDeliveryFee: number;
+  deliveryFeeOptions?: number[];
 };
 
-export function PresetManager({ initialPresets, menus, defaultDeliveryFee }: Props) {
+export function PresetManager({ initialPresets, menus, defaultDeliveryFee, deliveryFeeOptions }: Props) {
+  const feeOptions = Array.from(new Set([defaultDeliveryFee, ...(deliveryFeeOptions ?? [1500, 2000])])).sort((a, b) => a - b);
   const [presets, setPresets] = useState<PricePreset[]>(initialPresets);
   const [editingPreset, setEditingPreset] = useState<PricePreset | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -324,6 +326,18 @@ export function PresetManager({ initialPresets, menus, defaultDeliveryFee }: Pro
                   onChange={(e) => setDeliveryFeeBaht(e.target.value)}
                   placeholder="15"
                 />
+                <div className="tip-chips" style={{ marginTop: "6px" }}>
+                  {feeOptions.map((optSatang) => (
+                    <button
+                      key={optSatang}
+                      type="button"
+                      className={`chip-btn ${deliverySatang === optSatang ? "round-up" : ""}`}
+                      onClick={() => setDeliveryFeeBaht(satangToBahtInput(optSatang))}
+                    >
+                      {formatBaht(optSatang, false)} ฿
+                    </button>
+                  ))}
+                </div>
               </label>
             )}
           </div>

@@ -42,6 +42,7 @@ export default async function SettingsPage() {
         initialPresets={presets}
         menus={menus.filter((m) => m.isAvailable)}
         defaultDeliveryFee={saleSettings.defaultDeliveryFee}
+        deliveryFeeOptions={saleSettings.deliveryFeeOptions}
       />
 
       <section className="panel settings-card">
@@ -49,6 +50,8 @@ export default async function SettingsPage() {
         <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
           <label>ค่าส่งเริ่มต้น (บาท)<input id="settings-delivery-fee" name="default_delivery_fee" inputMode="decimal" defaultValue={satangToBahtInput(saleSettings.defaultDeliveryFee)} required /></label>
           <p className="field-hint">ใส่ให้อัตโนมัติเมื่อเลือก “ส่ง” ตอนเปิดบิล แก้ได้ทุกออเดอร์</p>
+          <label>ตัวเลือกค่าส่งด่วน (บาท, คั่นด้วยลูกน้ำ ,)<input id="settings-delivery-fee-options" name="delivery_fee_options" defaultValue={(saleSettings.deliveryFeeOptions ?? [1500, 2000]).map((s) => satangToBahtInput(s).replace(/\.00$/, "")).join(", ")} placeholder="เช่น 15, 20" /></label>
+          <p className="field-hint">แสดงเป็นปุ่มกดลัดให้สลับเรทค่าส่งได้ทันทีตอนเปิดบิลและนำเข้าสลิป (เช่น 15, 20)</p>
           <label>วัตถุดิบอื่นเริ่มต้น (% ของราคาขาย)<input id="settings-initial-pooled" name="initial_pooled_percent" inputMode="decimal" defaultValue={String(saleSettings.initialPooledBps / 100)} required /></label>
           <p className="field-hint">ข้าว พริก กระเทียม ผักชี มะนาว ซอส — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
           <div className="connection-row"><span>ตอนนี้ใช้</span><strong>{formatPercentBps(pooled.bps)} · {pooled.source === "actual" ? `จากยอดซื้อ ${formatBaht(pooled.pooledPurchases)} ÷ ยอดขาย ${formatBaht(pooled.foodRevenue)} (${pooled.historyDays} วัน)` : `ค่าเริ่มต้น${pooled.historyDays ? ` · มีข้อมูล ${pooled.historyDays}/${POOLED_MIN_DAYS} วัน` : ""}`}</strong></div>
