@@ -105,8 +105,8 @@ async function fetchAll(what: string, build: (from: number, to: number) => Promi
   }
 }
 
-const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang)";
-const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang)";
+const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
+const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
 
 let cachedHasTipColumn: boolean | null = null;
 
@@ -140,6 +140,7 @@ function mapSale(row: Row): SaleRecord {
     netRevenue,
     cogs: num(row.cogs_satang),
     grossProfit: num(row.gross_profit_satang),
+    slipPath: strOrNull(one(row.slip_uploads)?.storage_path),
     items: rows(row.sale_items).map((item) => ({
       menuId: str(item.menu_id),
       name: str(item.menu_name_snapshot),

@@ -7,9 +7,11 @@ import { createClient } from "@/lib/supabase/client";
 export function ExpenseReceiptButton({
   receiptPath,
   label = "ดูสลิป",
+  modalTitle = "ดูรูปสลิป",
 }: {
   receiptPath: string;
   label?: string;
+  modalTitle?: string;
 }) {
   const [loading, setLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -55,7 +57,7 @@ export function ExpenseReceiptButton({
         <div className="image-preview-modal-backdrop" onClick={() => setPreviewUrl(null)}>
           <div className="image-preview-modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <strong>ดูรูปสลิปค่าใช้จ่าย</strong>
+              <strong>{modalTitle}</strong>
               <button
                 type="button"
                 className="icon-button"
