@@ -3,16 +3,14 @@ import { UploadCloud, WalletCards } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
-import { ActionButton } from "@/components/action-form";
 import { ExpenseFormWithSlip } from "@/components/expense-form-with-slip";
-import { ExpenseReceiptButton } from "@/components/expense-receipt-button";
-import { deleteExpense } from "@/app/actions/expenses";
+import { ExpenseTable } from "@/components/expense-table";
 import { isOperatingExpense } from "@/lib/analytics";
 import { fetchPurchaseCatalog } from "@/lib/data/purchase-options";
 import { fetchExpenses, fetchSaleSettings } from "@/lib/data/queries";
-import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
+import { FUEL_CATEGORY } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
-import { bangkokDayKey, formatThaiShortDate, parseRange, resolveRange } from "@/lib/time";
+import { bangkokDayKey, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month"] as const;
 const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์", "วัตถุดิบ", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
@@ -80,29 +78,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <button className="secondary-button">ค้นหา</button>
         {q && <Link className="link-button" href={`/expenses?range=${key}`}>ล้าง</Link>}
       </form>
-      <table className="data-table">
-        <thead><tr><th>วันที่</th><th>รายละเอียด</th><th>ประเภท</th><th>ผู้รับเงิน</th><th>วิธีชำระ / สลิป</th><th className="num">จำนวน</th><th /></tr></thead>
-        <tbody>
-          {expenses.map((e) => <tr key={e.id}>
-            <td>{formatThaiShortDate(e.spentAt)}</td>
-            <td><strong>{e.description}</strong><br /><small className="muted">{e.category}</small></td>
-            <td><span className={`status ${e.kind === "direct" ? "muted" : "pending"}`}>{EXPENSE_KIND_LABELS[e.kind]}</span></td>
-            <td>{e.payee ?? "—"}</td>
-            <td>
-              {e.paymentMethod ? PAYMENT_METHOD_LABELS[e.paymentMethod] : "—"}
-              {e.receiptPath && (
-                <>
-                  <br />
-                  <ExpenseReceiptButton receiptPath={e.receiptPath} />
-                </>
-              )}
-            </td>
-            <td className="num"><strong>{formatBaht(e.amount)}</strong></td>
-            <td className="num"><ActionButton action={deleteExpense} fields={{ id: e.id }} label="ลบ" confirmText={`ลบ “${e.description}” ${formatBaht(e.amount)}?`} className="link-button danger" /></td>
-          </tr>)}
-          {!expenses.length && <tr><td colSpan={7}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีค่าใช้จ่ายในช่วงนี้"}</div></td></tr>}
-        </tbody>
-      </table>
+      <ExpenseTable expenses={expenses} searchQuery={q} />
     </section>
   </>;
 }

@@ -1,12 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { weightedPricePerUnit } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
-import { dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
+import { InputError, dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
 
 const KINDS = ["direct", "operating", "one_time", "recurring"] as const;
 const METHODS = ["cash", "transfer", "other"] as const;
@@ -64,35 +65,55 @@ export async function saveExpense(form: FormData): Promise<ActionState> {
   });
 }
 
-export async function deleteExpense(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
-    const expenseId = id(form);
-    const { data: existing } = await supabase
-      .from("expenses")
-      .select("id, spent_at, category, amount_satang, description, receipt_path")
-      .eq("id", expenseId)
-      .maybeSingle();
+async function deleteExpensesByIds(supabase: SupabaseClient, ownerId: string, expenseIds: string[]) {
+  const uniqueIds = Array.from(new Set(expenseIds.map((x) => x.trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) throw new InputError("กรุณาเลือกรายการที่ต้องการลบ");
 
-    const affectedPackagingItemIds = new Set<string>();
-    const affectedPerUnitIngs: Array<{ id: string; units_per_purchase_unit: number }> = [];
-    let didDeletePurchase = false;
+  const { data: existingRows, error: readErr } = await supabase
+    .from("expenses")
+    .select("id, spent_at, category, amount_satang, description, receipt_path")
+    .in("id", uniqueIds);
+  if (readErr) dbError(readErr);
 
-    // 1. Clean up linked packaging_purchases row if this expense came from a packaging purchase
-    const { data: linkedPacks } = await supabase
-      .from("packaging_purchases")
-      .select("id, packaging_item_id")
-      .eq("expense_id", expenseId);
+  const rows = (existingRows ?? []) as Array<{
+    id: string;
+    spent_at: string;
+    category: string;
+    amount_satang: number;
+    description: string;
+    receipt_path: string | null;
+  }>;
 
-    if (linkedPacks && linkedPacks.length > 0) {
-      for (const p of linkedPacks) {
-        affectedPackagingItemIds.add(String((p as { packaging_item_id: unknown }).packaging_item_id));
+  const affectedPackagingItemIds = new Set<string>();
+  const affectedPerUnitIngMap = new Map<string, number>();
+  const receiptPathsToCheck = new Set<string>();
+  let didDeletePurchase = false;
+
+  // 1. Clean up linked packaging_purchases rows by expense_id in batch
+  const { data: linkedPacks } = await supabase
+    .from("packaging_purchases")
+    .select("id, packaging_item_id, expense_id")
+    .in("expense_id", uniqueIds);
+
+  const handledExpenseIdsForPack = new Set<string>();
+  if (linkedPacks && linkedPacks.length > 0) {
+    for (const p of linkedPacks) {
+      affectedPackagingItemIds.add(String((p as { packaging_item_id: unknown }).packaging_item_id));
+      if ((p as { expense_id?: unknown }).expense_id) {
+        handledExpenseIdsForPack.add(String((p as { expense_id: unknown }).expense_id));
       }
-      await supabase
-        .from("packaging_purchases")
-        .delete()
-        .in("id", linkedPacks.map((p) => String((p as { id: unknown }).id)));
-      didDeletePurchase = true;
-    } else if (existing && existing.category === "บรรจุภัณฑ์") {
+    }
+    await supabase
+      .from("packaging_purchases")
+      .delete()
+      .in("id", linkedPacks.map((p) => String((p as { id: unknown }).id)));
+    didDeletePurchase = true;
+  }
+
+  // Fallback for backfilled packaging_purchases where expense_id was null
+  for (const existing of rows) {
+    if (existing.receipt_path) receiptPathsToCheck.add(existing.receipt_path);
+    if (existing.category === "บรรจุภัณฑ์" && !handledExpenseIdsForPack.has(existing.id)) {
       const { data: fallbackPacks } = await supabase
         .from("packaging_purchases")
         .select("id, packaging_item_id")
@@ -108,15 +129,20 @@ export async function deleteExpense(form: FormData): Promise<ActionState> {
         didDeletePurchase = true;
       }
     }
+  }
 
-    // 2. Clean up matching ingredient_purchases row if this expense came from an ingredient purchase
-    if (existing && existing.category === "วัตถุดิบ" && String(existing.description ?? "").startsWith("ซื้อ")) {
-      const desc = String(existing.description);
-      const { data: ings } = await supabase
-        .from("ingredients")
-        .select("id, name, costing, units_per_purchase_unit");
-      if (ings && ings.length > 0) {
-        const sortedIngs = [...ings].sort((a, b) => String(b.name).length - String(a.name).length);
+  // 2. Clean up matching ingredient_purchases rows
+  const ingExpenseRows = rows.filter(
+    (r) => r.category === "วัตถุดิบ" && String(r.description ?? "").startsWith("ซื้อ")
+  );
+  if (ingExpenseRows.length > 0) {
+    const { data: ings } = await supabase
+      .from("ingredients")
+      .select("id, name, costing, units_per_purchase_unit");
+    if (ings && ings.length > 0) {
+      const sortedIngs = [...ings].sort((a, b) => String(b.name).length - String(a.name).length);
+      for (const existing of ingExpenseRows) {
+        const desc = String(existing.description);
         const matchedIng = sortedIngs.find((ing) => {
           const name = String(ing.name);
           return desc === `ซื้อ${name}` || desc.startsWith(`ซื้อ${name} `);
@@ -145,91 +171,102 @@ export async function deleteExpense(form: FormData): Promise<ActionState> {
               .eq("id", String((ingPurchases[0] as { id: unknown }).id));
             didDeletePurchase = true;
             if (String(matchedIng.costing) === "per_unit") {
-              affectedPerUnitIngs.push({
-                id: String(matchedIng.id),
-                units_per_purchase_unit: Number(matchedIng.units_per_purchase_unit) || 1,
-              });
+              affectedPerUnitIngMap.set(
+                String(matchedIng.id),
+                Number(matchedIng.units_per_purchase_unit) || 1
+              );
             }
           }
         }
       }
     }
+  }
 
-    // 3. Delete the expense row itself
-    const { error } = await supabase.from("expenses").delete().eq("id", expenseId);
-    if (error) dbError(error);
+  // 3. Delete all selected expense rows in one query
+  const { error } = await supabase.from("expenses").delete().in("id", uniqueIds);
+  if (error) dbError(error);
 
-    // 4. Remove storage file if no other expenses share this receipt_path
-    const receiptPath = existing && typeof (existing as { receipt_path?: unknown }).receipt_path === "string"
-      ? (existing as { receipt_path: string }).receipt_path
-      : null;
-    if (receiptPath) {
-      const { count } = await supabase
-        .from("expenses")
-        .select("id", { count: "exact", head: true })
-        .eq("receipt_path", receiptPath);
-      if (!count || count === 0) {
-        await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
-      }
+  // 4. Remove storage files if no other expenses share their receipt_path
+  for (const receiptPath of receiptPathsToCheck) {
+    const { count } = await supabase
+      .from("expenses")
+      .select("id", { count: "exact", head: true })
+      .eq("receipt_path", receiptPath);
+    if (!count || count === 0) {
+      await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
     }
+  }
 
-    // 5. Recompute packaging unit cost for any affected packaging items that still have purchase history
-    for (const packItemId of affectedPackagingItemIds) {
-      const { data: purchases } = await supabase
-        .from("packaging_purchases")
-        .select("price_satang, pack_quantity")
-        .eq("packaging_item_id", packItemId);
-      if (purchases && purchases.length > 0) {
-        let totalPrice = 0;
-        let totalPieces = 0;
-        for (const p of purchases as Array<{ price_satang: unknown; pack_quantity: unknown }>) {
-          totalPrice += Number(p.price_satang);
-          totalPieces += Number(p.pack_quantity);
-        }
-        if (totalPieces > 0) {
-          const unitCost = roundCost(totalPrice / totalPieces);
-          await supabase
-            .from("packaging_items")
-            .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
-            .eq("id", packItemId);
-          await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packItemId));
-        }
+  // 5. Recompute packaging unit cost once per affected packaging item
+  for (const packItemId of affectedPackagingItemIds) {
+    const { data: purchases } = await supabase
+      .from("packaging_purchases")
+      .select("price_satang, pack_quantity")
+      .eq("packaging_item_id", packItemId);
+    if (purchases && purchases.length > 0) {
+      let totalPrice = 0;
+      let totalPieces = 0;
+      for (const p of purchases as Array<{ price_satang: unknown; pack_quantity: unknown }>) {
+        totalPrice += Number(p.price_satang);
+        totalPieces += Number(p.pack_quantity);
       }
-    }
-
-    // 6. Recompute per-unit ingredient cost for any affected per-unit ingredients that still have purchase history
-    for (const ing of affectedPerUnitIngs) {
-      const { data: purchases } = await supabase
-        .from("ingredient_purchases")
-        .select("purchased_at, price_satang, purchased_quantity")
-        .eq("ingredient_id", ing.id)
-        .order("purchased_at", { ascending: false })
-        .limit(200);
-      if (purchases && purchases.length > 0) {
-        const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
-          purchasedAt: String(p.purchased_at),
-          price: Number(p.price_satang),
-          quantity: p.purchased_quantity === null ? null : Number(p.purchased_quantity),
-        }));
-        const pricePerUnit = roundCost(weightedPricePerUnit(mapped));
-        const unitCost = roundCost(pricePerUnit / ing.units_per_purchase_unit);
+      if (totalPieces > 0) {
+        const unitCost = roundCost(totalPrice / totalPieces);
         await supabase
-          .from("ingredients")
-          .update({
-            price_per_purchase_unit_satang: pricePerUnit,
-            weighted_unit_cost_satang: unitCost,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", ing.id);
-        await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ing.id));
+          .from("packaging_items")
+          .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
+          .eq("id", packItemId);
+        await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packItemId));
       }
     }
+  }
 
-    if (didDeletePurchase) {
-      await syncHistoricalCosts(supabase, { ownerId: user.id }).catch(() => undefined);
+  // 6. Recompute per-unit ingredient cost once per affected per-unit ingredient
+  for (const [ingId, unitsPerPurchaseUnit] of affectedPerUnitIngMap.entries()) {
+    const { data: purchases } = await supabase
+      .from("ingredient_purchases")
+      .select("purchased_at, price_satang, purchased_quantity")
+      .eq("ingredient_id", ingId)
+      .order("purchased_at", { ascending: false })
+      .limit(200);
+    if (purchases && purchases.length > 0) {
+      const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
+        purchasedAt: String(p.purchased_at),
+        price: Number(p.price_satang),
+        quantity: p.purchased_quantity === null ? null : Number(p.purchased_quantity),
+      }));
+      const pricePerUnit = roundCost(weightedPricePerUnit(mapped));
+      const unitCost = roundCost(pricePerUnit / unitsPerPurchaseUnit);
+      await supabase
+        .from("ingredients")
+        .update({
+          price_per_purchase_unit_satang: pricePerUnit,
+          weighted_unit_cost_satang: unitCost,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", ingId);
+      await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingId));
     }
+  }
 
-    revalidateExpenses();
+  if (didDeletePurchase) {
+    await syncHistoricalCosts(supabase, { ownerId }).catch(() => undefined);
+  }
+
+  revalidateExpenses();
+}
+
+export async function deleteExpense(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    const expenseId = id(form);
+    await deleteExpensesByIds(supabase, user.id, [expenseId]);
+  });
+}
+
+export async function deleteExpensesBulkAction(expenseIds: string[]): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    await deleteExpensesByIds(supabase, user.id, expenseIds);
+    return { ok: true, message: `ลบ ${expenseIds.length} รายการเรียบร้อยแล้ว` };
   });
 }
 

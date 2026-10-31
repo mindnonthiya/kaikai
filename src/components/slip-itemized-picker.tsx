@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Box, CheckCircle2, Plus, ShoppingBasket, Sparkles, Trash2, WalletCards } from "lucide-react";
+import { Box, CheckCircle2, Pencil, Plus, RotateCcw, ShoppingBasket, Sparkles, Trash2, WalletCards } from "lucide-react";
 import type { PerUnitPurchaseItem, PooledPurchaseItem } from "@/components/ingredient-purchase-table";
 import type { RestockItem } from "@/components/packaging-restock-table";
 import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, type ExpenseKind } from "@/lib/data/types";
@@ -116,8 +116,10 @@ export function computeItemizedSummary(
   for (const item of restockItems) {
     const row = state.packaging[item.id];
     if (!row || row.packs <= 0) continue;
-    const packPriceSatang = tryBahtToSatang(row.priceBaht);
-    const perPackQuantity = Number((row.perPack ?? "").replace(/,/g, ""));
+    const effectivePriceBaht = row.priceBaht.trim() ? row.priceBaht : item.packPrice;
+    const effectivePerPack = (row.perPack ?? "").trim() ? row.perPack : item.perPack;
+    const packPriceSatang = tryBahtToSatang(effectivePriceBaht);
+    const perPackQuantity = Number((effectivePerPack ?? "").replace(/,/g, ""));
     if (packPriceSatang && packPriceSatang > 0 && Number.isFinite(perPackQuantity) && perPackQuantity > 0) {
       const lineSatang = Math.round(row.packs * packPriceSatang);
       totalSatang += lineSatang;
@@ -185,8 +187,28 @@ export function SlipItemizedPicker({
   compact?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"ingredients" | "packaging" | "extra">("ingredients");
+  const [editingPerUnitPriceIds, setEditingPerUnitPriceIds] = useState<Set<string>>(new Set());
+  const [editingPackIds, setEditingPackIds] = useState<Set<string>>(new Set());
   const summary = computeItemizedSummary(value, perUnit, pooled, restockItems);
   const remainingSatang = slipAmountSatang > 0 ? slipAmountSatang - summary.totalSatang : 0;
+
+  function toggleEditPerUnitPrice(id: string) {
+    setEditingPerUnitPriceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleEditPack(id: string) {
+    setEditingPackIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function setPerUnitQty(id: string, nextQty: string) {
     onChange({
@@ -314,10 +336,15 @@ export function SlipItemizedPicker({
                 {perUnit.map((item) => {
                   const rawQty = value.perUnitQty[item.id] ?? "";
                   const qty = Number(rawQty.replace(/,/g, "")) || 0;
-                  const rawPrice = value.perUnitPrice[item.id] ?? item.unitPrice ?? "";
+                  const rawPrice = (value.perUnitPrice[item.id] ?? "").trim()
+                    ? value.perUnitPrice[item.id]
+                    : item.unitPrice ?? "";
                   const priceSatang = tryBahtToSatang(rawPrice);
                   const lineSatang =
                     qty > 0 && priceSatang ? Math.round(qty * priceSatang) : null;
+                  const hasDefaultPrice = Boolean(item.unitPrice && item.unitPrice.trim() !== "");
+                  const isEditingPrice = !hasDefaultPrice || editingPerUnitPriceIds.has(item.id);
+                  const isPriceModified = hasDefaultPrice && rawPrice !== item.unitPrice;
 
                   return (
                     <div
@@ -365,16 +392,69 @@ export function SlipItemizedPicker({
                             </button>
                           </div>
                         </label>
-                        <label>
-                          ราคาต่อ{item.purchaseUnit} (บาท)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={rawPrice}
-                            placeholder="เช่น 115"
-                            onChange={(e) => setPerUnitPrice(item.id, e.target.value)}
-                          />
-                        </label>
+                        {!isEditingPrice ? (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              justifyContent: "center",
+                              gap: "4px",
+                            }}
+                          >
+                            <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                              ราคาที่ตั้งไว้:{" "}
+                              <strong style={{ color: "var(--text)" }}>
+                                {priceSatang ? formatBaht(priceSatang) : `฿${rawPrice}`} /{" "}
+                                {item.purchaseUnit}
+                              </strong>
+                            </span>
+                            <div>
+                              <button
+                                type="button"
+                                className="chip"
+                                style={{ fontSize: "12px", padding: "3px 10px" }}
+                                onClick={() => toggleEditPerUnitPrice(item.id)}
+                              >
+                                <Pencil size={12} style={{ marginRight: 4 }} />
+                                แก้ราคา/{item.purchaseUnit} (ซื้อคนละร้าน)
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <label>
+                            <span
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <span>ราคาต่อ{item.purchaseUnit} (บาท)</span>
+                              {hasDefaultPrice && (
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  style={{ fontSize: "11px" }}
+                                  onClick={() => {
+                                    setPerUnitPrice(item.id, item.unitPrice);
+                                    toggleEditPerUnitPrice(item.id);
+                                  }}
+                                >
+                                  <RotateCcw size={11} />{" "}
+                                  {isPriceModified ? `คืนค่าเดิม (฿${item.unitPrice})` : "ล็อกราคาเดิม"}
+                                </button>
+                              )}
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={rawPrice}
+                              placeholder="เช่น 115"
+                              onChange={(e) => setPerUnitPrice(item.id, e.target.value)}
+                            />
+                          </label>
+                        )}
                       </div>
                       <p className="restock-line">
                         {lineSatang !== null ? (
@@ -387,7 +467,7 @@ export function SlipItemizedPicker({
                         ) : qty > 0 ? (
                           `กรอกราคาต่อ${item.purchaseUnit}`
                         ) : (
-                          "ไม่ได้ซื้อในสลิปนี้"
+                          "กด + เลือกจำนวนที่ซื้อ"
                         )}
                       </p>
                     </div>
@@ -468,10 +548,15 @@ export function SlipItemizedPicker({
           {restockItems.length > 0 ? (
             <div className="restock-table">
               {restockItems.map((item) => {
-                const row = value.packaging[item.id] ?? {
-                  packs: 0,
-                  priceBaht: item.packPrice,
-                  perPack: item.perPack,
+                const rawRow = value.packaging[item.id];
+                const effectivePriceBaht =
+                  rawRow && rawRow.priceBaht.trim() !== "" ? rawRow.priceBaht : item.packPrice;
+                const effectivePerPack =
+                  rawRow && (rawRow.perPack ?? "").trim() !== "" ? rawRow.perPack : item.perPack;
+                const row = {
+                  packs: rawRow?.packs ?? 0,
+                  priceBaht: effectivePriceBaht,
+                  perPack: effectivePerPack,
                 };
                 const priceSatang = tryBahtToSatang(row.priceBaht);
                 const perPackNum = Number((row.perPack ?? "").replace(/,/g, ""));
@@ -481,6 +566,14 @@ export function SlipItemizedPicker({
                   priceSatang > 0 &&
                   Number.isFinite(perPackNum) &&
                   perPackNum > 0;
+
+                const hasDefaults = Boolean(
+                  item.packPrice.trim() !== "" && item.perPack.trim() !== ""
+                );
+                const isEditingPack = !hasDefaults || editingPackIds.has(item.id);
+                const isPackModified =
+                  hasDefaults &&
+                  (row.priceBaht !== item.packPrice || row.perPack !== item.perPack);
 
                 return (
                   <div
@@ -533,30 +626,94 @@ export function SlipItemizedPicker({
                           </button>
                         </div>
                       </label>
-                      <label>
-                        ราคา/แพ็ก (บาท)
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={row.priceBaht}
-                          placeholder="เช่น 65"
-                          onChange={(e) =>
-                            updatePackaging(item.id, item, { priceBaht: e.target.value })
-                          }
-                        />
-                      </label>
-                      <label>
-                        {item.unit}/แพ็ก
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={row.perPack}
-                          placeholder="เช่น 25"
-                          onChange={(e) =>
-                            updatePackaging(item.id, item, { perPack: e.target.value })
-                          }
-                        />
-                      </label>
+                      {!isEditingPack ? (
+                        <div
+                          style={{
+                            gridColumn: "span 2",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "8px",
+                            padding: "8px 12px",
+                            borderRadius: "10px",
+                            background: "rgba(255, 250, 243, 0.85)",
+                            border: "1px dashed var(--line, #eadfce)",
+                          }}
+                        >
+                          <span style={{ fontSize: "13px" }}>
+                            ค่าที่ตั้งไว้:{" "}
+                            <strong>
+                              แพ็กละ {priceSatang ? formatBaht(priceSatang) : `฿${row.priceBaht}`}
+                            </strong>{" "}
+                            · ได้ <strong>{row.perPack}</strong> {item.unit}/แพ็ก
+                          </span>
+                          <button
+                            type="button"
+                            className="chip"
+                            style={{ fontSize: "12px", padding: "3px 10px" }}
+                            onClick={() => toggleEditPack(item.id)}
+                          >
+                            <Pencil size={12} style={{ marginRight: 4 }} />
+                            เปลี่ยนราคา/จำนวน (ซื้อคนละร้าน)
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <label>
+                            ราคา/แพ็ก (บาท)
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={row.priceBaht}
+                              placeholder="เช่น 65"
+                              onChange={(e) =>
+                                updatePackaging(item.id, item, { priceBaht: e.target.value })
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <span>{item.unit}/แพ็ก</span>
+                              {hasDefaults && (
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  style={{ fontSize: "11px" }}
+                                  onClick={() => {
+                                    updatePackaging(item.id, item, {
+                                      priceBaht: item.packPrice,
+                                      perPack: item.perPack,
+                                    });
+                                    toggleEditPack(item.id);
+                                  }}
+                                >
+                                  <RotateCcw size={11} />{" "}
+                                  {isPackModified
+                                    ? `คืนค่าเดิม (฿${item.packPrice}/${item.perPack})`
+                                    : "ล็อกค่าที่ตั้งไว้"}
+                                </button>
+                              )}
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={row.perPack}
+                              placeholder="เช่น 25"
+                              onChange={(e) =>
+                                updatePackaging(item.id, item, { perPack: e.target.value })
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
                     </div>
                     <p className="restock-line">
                       {active && valid ? (
@@ -568,7 +725,7 @@ export function SlipItemizedPicker({
                       ) : active ? (
                         "กรอกราคาและจำนวนต่อแพ็ก"
                       ) : (
-                        "ไม่ได้ซื้อในสลิปนี้"
+                        "กด + เลือกจำนวนแพ็กที่ซื้อ"
                       )}
                     </p>
                   </div>

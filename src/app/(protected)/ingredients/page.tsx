@@ -9,6 +9,7 @@ import { PackagingRestockTable, type RestockItem } from "@/components/packaging-
 import { PurchaseSlipAttachment } from "@/components/purchase-slip-attachment";
 import { createIngredient, createPackaging, recordIngredientPurchases, restockPackaging, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
 import { formatPercentBps } from "@/lib/analytics";
+import { resolvePackagingDefaultPack } from "@/lib/data/purchase-options";
 import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchSaleSettings } from "@/lib/data/queries";
 import type { PackagingPurchaseRecord } from "@/lib/data/types";
 import { formatBaht, formatUnitCost, satangToBahtInput } from "@/lib/money";
@@ -50,10 +51,11 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
   const activePackaging = packaging.filter((p) => p.isActive);
   const restockItems: RestockItem[] = activePackaging.map((p) => {
     const last = latestPack.get(p.id);
+    const defaults = resolvePackagingDefaultPack(p, last);
     return {
       id: p.id, name: p.name, unit: p.unit, perOrder: p.perOrder,
-      packPrice: last ? satangToBahtInput(Math.round(last.price / last.packCount)) : "",
-      perPack: last ? trimZeros(last.packQuantity / last.packCount) : "",
+      packPrice: defaults.packPrice,
+      perPack: defaults.perPack,
     };
   });
 
@@ -212,16 +214,19 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <tbody>
               {packaging.map((p) => {
                 const last = latestPack.get(p.id);
+                const defaults = resolvePackagingDefaultPack(p, last);
                 return <tr key={p.id}>
                   <td><strong>{p.name}</strong></td>
                   <td><span className={`status ${p.perOrder ? "success" : "muted"}`}>{p.perOrder ? "ต่อออเดอร์" : "ลงค่าใช้จ่าย"}</span></td>
                   <td className="num"><strong>{p.unitCost ? `${formatUnitCost(p.unitCost)}/${p.unit}` : "—"}</strong></td>
-                  <td>{last ? <>{packText(last)}<br /><small className="muted">{formatThaiShortDate(last.purchasedAt)}</small></> : <span className="status pending">ยังไม่มีการซื้อ</span>}</td>
+                  <td>{last ? <>{packText(last)}<br /><small className="muted">{formatThaiShortDate(last.purchasedAt)}</small></> : defaults.packPrice && defaults.perPack ? <small className="muted">ค่าตั้งต้น ฿{defaults.packPrice} / {defaults.perPack} {p.unit}</small> : <span className="status pending">ยังไม่มีการซื้อ</span>}</td>
                   <td><details className="inline-details"><summary>แก้ไข</summary>
                     <ActionForm action={updatePackaging} submitLabel="บันทึก" className="form-grid compact" resetOnSuccess={false}>
                       <input type="hidden" name="id" value={p.id} />
                       <label>ชื่อ<input name="name" defaultValue={p.name} maxLength={120} required /></label>
                       <label>หน่วย<input name="unit" list="pack-units" defaultValue={p.unit} maxLength={30} required /></label>
+                      <label>ราคา/แพ็ก (บาท)<input name="pack_price" inputMode="decimal" defaultValue={defaults.packPrice} placeholder="เช่น 65" /></label>
+                      <label>{p.unit}/แพ็ก<input name="pack_quantity" inputMode="decimal" defaultValue={defaults.perPack} placeholder="เช่น 25" /></label>
                       <PerOrderSelect value={p.perOrder} />
                     </ActionForm>
                   </details></td>
