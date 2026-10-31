@@ -57,6 +57,7 @@ export type SaleRecord = {
   netRevenue: number;
   cogs: number;
   grossProfit: number;
+  slipPath?: string | null;
   items: SaleItemRecord[];
   payments: PaymentRecord[];
 };

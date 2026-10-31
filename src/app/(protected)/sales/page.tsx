@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PageTitle } from "@/components/page-title";
 import { RangeTabs } from "@/components/range-tabs";
 import { ActionButton } from "@/components/action-form";
+import { ExpenseReceiptButton } from "@/components/expense-receipt-button";
 import { cancelSale } from "@/app/actions/sales";
 import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
@@ -72,7 +73,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
         />
       </div>
       <table className="data-table">
-        <thead><tr><th>เวลา / เลขที่</th><th>ลูกค้า</th><th>รายการ</th><th>ชำระด้วย</th><th>สถานะ</th><th className="num">ยอดรวม</th><th className="num">กำไรขั้นต้น</th><th /></tr></thead>
+        <thead><tr><th>เวลา / เลขที่</th><th>ลูกค้า</th><th>รายการ</th><th>ชำระด้วย / สลิป</th><th>สถานะ</th><th className="num">ยอดรวม</th><th className="num">กำไรขั้นต้น</th><th /></tr></thead>
         <tbody>
           {sales.map((sale) => <tr key={sale.id} className={sale.status === "cancelled" ? "row-muted" : undefined}>
             <td><strong>{formatTime(sale.soldAt)}</strong> <small className="muted">{formatThaiShortDate(sale.soldAt)}</small><br />#{sale.saleNumber}</td>
@@ -89,7 +90,15 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
                 </>
               )}
             </td>
-            <td>{sale.payments.length ? [...new Set(sale.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", ") : "—"}</td>
+            <td>
+              {sale.payments.length ? [...new Set(sale.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", ") : "—"}
+              {sale.slipPath && (
+                <>
+                  <br />
+                  <ExpenseReceiptButton receiptPath={sale.slipPath} modalTitle={`สลิปบิล #${sale.saleNumber}`} />
+                </>
+              )}
+            </td>
             <td>{statusBadge(sale)}</td>
             <td className="num"><strong>{formatBaht(sale.netRevenue)}</strong></td>
             <td className="num">{formatBaht(sale.grossProfit)}</td>
