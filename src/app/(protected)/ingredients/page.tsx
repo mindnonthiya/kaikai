@@ -6,6 +6,7 @@ import { IngredientKindFields } from "@/components/ingredient-kind-fields";
 import { IngredientPurchaseTable } from "@/components/ingredient-purchase-table";
 import { PackPriceFields } from "@/components/pack-price-fields";
 import { PackagingRestockTable, type RestockItem } from "@/components/packaging-restock-table";
+import { PurchaseSlipAttachment } from "@/components/purchase-slip-attachment";
 import { createIngredient, createPackaging, recordIngredientPurchases, restockPackaging, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
 import { formatPercentBps } from "@/lib/analytics";
 import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchSaleSettings } from "@/lib/data/queries";
@@ -103,6 +104,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อวัตถุดิบ</summary>
             {active.length
               ? <ActionForm action={recordIngredientPurchases} submitLabel="บันทึกการซื้อ">
+                  <PurchaseSlipAttachment maxDate={maxDate} />
                   <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น ตลาดสด" /></label>
                   <IngredientPurchaseTable key={perUnit.map((i) => `${i.id}:${i.unitPrice}:${i.unitsPerPurchaseUnit}`).join("|") + pooled.length} perUnit={perUnit} pooled={pooled} />
@@ -181,6 +183,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อบรรจุภัณฑ์</summary>
             {activePackaging.length
               ? <ActionForm action={restockPackaging} submitLabel="บันทึกการซื้อ">
+                  <PurchaseSlipAttachment maxDate={maxDate} />
                   <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น แม็คโคร" /></label>
                   <PackagingRestockTable key={restockItems.map((i) => `${i.id}:${i.packPrice}:${i.perPack}`).join("|")} items={restockItems} />

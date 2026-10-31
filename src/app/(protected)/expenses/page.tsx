@@ -8,13 +8,14 @@ import { ExpenseFormWithSlip } from "@/components/expense-form-with-slip";
 import { ExpenseReceiptButton } from "@/components/expense-receipt-button";
 import { deleteExpense } from "@/app/actions/expenses";
 import { isOperatingExpense } from "@/lib/analytics";
+import { fetchPurchaseCatalog } from "@/lib/data/purchase-options";
 import { fetchExpenses, fetchSaleSettings } from "@/lib/data/queries";
 import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, PAYMENT_METHOD_LABELS } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month"] as const;
-const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
+const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์", "วัตถุดิบ", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
 
 export default async function ExpensesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string }> }) {
   const params = await searchParams;
@@ -22,7 +23,10 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const q = (params.q ?? "").trim();
   const saleSettings = await fetchSaleSettings();
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
-  const all = await fetchExpenses(range.start, range.end);
+  const [all, catalog] = await Promise.all([
+    fetchExpenses(range.start, range.end),
+    fetchPurchaseCatalog(),
+  ]);
   const needle = q.toLowerCase();
   const expenses = needle ? all.filter((e) => [e.description, e.category, e.payee ?? ""].some((v) => v.toLowerCase().includes(needle))) : all;
   const total = expenses.reduce((s, e) => s + e.amount, 0);
@@ -36,7 +40,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
     <PageTitle
       eyebrow="เงินออก"
       title="ค่าใช้จ่าย"
-      description="แยกต้นทุนสินค้าและค่าใช้จ่ายดำเนินงานอย่างชัดเจน พร้อมแนบสลิปอ่านยอดอัตโนมัติ"
+      description="แยกต้นทุนสินค้าและค่าใช้จ่ายดำเนินงานอย่างชัดเจน พร้อมแนบสลิปอ่านยอดและแยกวัตถุดิบ/บรรจุภัณฑ์ในสลิปเดียว"
       action={
         <Link className="secondary-button" href="/expenses/import-slips">
           <UploadCloud size={17} /> นำเข้าสลิปเป็นชุด
@@ -51,9 +55,16 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         </Link>
       </div>
     </div>
-    <details className="panel form-panel">
-      <summary><WalletCards size={18} /> เพิ่มค่าใช้จ่าย (แนบสลิปอ่านยอดอัตโนมัติได้)</summary>
-      <ExpenseFormWithSlip today={today} maxDate={maxDate} categories={CATEGORIES} />
+    <details className="panel form-panel" open>
+      <summary><WalletCards size={18} /> เพิ่มค่าใช้จ่าย / แนบสลิปซื้อวัตถุดิบและบรรจุภัณฑ์</summary>
+      <ExpenseFormWithSlip
+        today={today}
+        maxDate={maxDate}
+        categories={CATEGORIES}
+        perUnit={catalog.perUnit}
+        pooled={catalog.pooled}
+        restockItems={catalog.restockItems}
+      />
       <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
     </details>
     <RangeTabs basePath="/expenses" options={[...RANGES]} active={key} extraParams={{ q }} />

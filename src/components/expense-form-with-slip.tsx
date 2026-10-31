@@ -1,14 +1,22 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ImagePlus, Loader2, X } from "lucide-react";
+import { ImagePlus, Loader2, ReceiptText, ShoppingBasket, X } from "lucide-react";
 import { saveExpense } from "@/app/actions/expenses";
+import { saveItemizedExpenseAction } from "@/app/actions/ingredients";
+import type { PerUnitPurchaseItem, PooledPurchaseItem } from "@/components/ingredient-purchase-table";
+import type { RestockItem } from "@/components/packaging-restock-table";
+import {
+  SlipItemizedPicker,
+  computeItemizedSummary,
+  createInitialItemizedState,
+  type ItemizedSelectionState,
+} from "@/components/slip-itemized-picker";
 import { FUEL_CATEGORY, type ExpenseKind, type PaymentMethod } from "@/lib/data/types";
 import { hasSupabaseEnv } from "@/lib/env";
 import { compressSlipImage } from "@/lib/image-compression";
-import { formatBaht, satangToBahtInput } from "@/lib/money";
+import { formatBaht, satangToBahtInput, tryBahtToSatang } from "@/lib/money";
 import { createClient } from "@/lib/supabase/client";
 import { bangkokDayKey } from "@/lib/time";
 
@@ -23,6 +31,7 @@ export function guessExpenseFromPayee(payee: string): {
   category?: string;
   description?: string;
   kind?: ExpenseKind;
+  suggestItemized?: boolean;
 } {
   const text = payee.trim();
   if (!text) return {};
@@ -38,8 +47,13 @@ export function guessExpenseFromPayee(payee: string): {
   if (/การประปา|mwa|pwa|ประปา/i.test(text)) {
     return { category: "ค่าน้ำ", description: "ค่าน้ำ", kind: "operating" };
   }
-  if (/แม็คโคร|makro|cp axtra|ซีพี แอ็กซ์ตร้า|โลตัส|lotus|บิ๊กซี|big c/i.test(text)) {
-    return { category: "บรรจุภัณฑ์", description: `ซื้อของ (${text})`, kind: "operating" };
+  if (/แม็คโคร|makro|cp axtra|ซีพี แอ็กซ์ตร้า|โลตัส|lotus|บิ๊กซี|big c|ตลาด|ของสด|ผัก|ไก่/i.test(text)) {
+    return {
+      category: "บรรจุภัณฑ์",
+      description: `ซื้อของ (${text})`,
+      kind: "operating",
+      suggestItemized: true,
+    };
   }
   return {};
 }
@@ -48,12 +62,19 @@ export function ExpenseFormWithSlip({
   today,
   maxDate,
   categories,
+  perUnit = [],
+  pooled = [],
+  restockItems = [],
 }: {
   today: string;
   maxDate: string;
   categories: string[];
+  perUnit?: PerUnitPurchaseItem[];
+  pooled?: PooledPurchaseItem[];
+  restockItems?: RestockItem[];
 }) {
   const router = useRouter();
+  const [entryMode, setEntryMode] = useState<"single" | "itemized">("single");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
@@ -63,11 +84,19 @@ export function ExpenseFormWithSlip({
   const [payee, setPayee] = useState("");
   const [referenceNumber, setReferenceNumber] = useState("");
 
+  const [itemizedState, setItemizedState] = useState<ItemizedSelectionState>(() =>
+    createInitialItemizedState(perUnit, restockItems)
+  );
+
   const [slip, setSlip] = useState<File | null>(null);
+  const [slipPreviewUrl, setSlipPreviewUrl] = useState<string | null>(null);
   const [slipHash, setSlipHash] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const slipAmountSatang = tryBahtToSatang(amount) ?? 0;
+  const itemizedSummary = computeItemizedSummary(itemizedState, perUnit, pooled, restockItems);
 
   async function handleChooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -87,6 +116,7 @@ export function ExpenseFormWithSlip({
     try {
       const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
       setSlip(compressed.file);
+      setSlipPreviewUrl(compressed.previewUrl);
       setSlipHash(compressed.hash);
       setPaymentMethod("transfer");
 
@@ -124,20 +154,23 @@ export function ExpenseFormWithSlip({
           if (guessed.category) setCategory((prev) => prev || guessed.category!);
           if (guessed.description) setDescription((prev) => prev || guessed.description!);
           if (guessed.kind) setKind(guessed.kind);
+          if (guessed.suggestItemized) {
+            setEntryMode("itemized");
+          }
         }
 
         if (!json.isDuplicate) {
           setStatus({
             ok: true,
             text: ocr.amountSatang
-              ? `อ่านสลิปสำเร็จ: ยอด ${formatBaht(ocr.amountSatang)}${detectedPayee ? ` · ผู้รับ "${detectedPayee}"` : ""} (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`
+              ? `อ่านสลิปสำเร็จ: ยอด ${formatBaht(ocr.amountSatang)}${detectedPayee ? ` · ผู้รับ "${detectedPayee}"` : ""} — เลือกบันทึกเป็นรายการเดี่ยว หรือกด "แยกซื้อวัตถุดิบ/บรรจุภัณฑ์" เพื่อแยกพริก กระเทียม ไก่ ในสลิปนี้ได้เลย`
               : `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         }
       } else if (!json.isDuplicate) {
         setStatus({
           ok: true,
-          text: `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB) — กรอกยอดเงินและรายละเอียดด้านล่าง`,
+          text: `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB) — กรอกยอดเงินและเลือกรายการด้านล่าง`,
         });
       }
     } catch (err: unknown) {
@@ -151,6 +184,11 @@ export function ExpenseFormWithSlip({
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (entryMode === "itemized" && itemizedSummary.itemCount === 0) {
+      setStatus({ ok: false, text: "กรุณากรอกรายการวัตถุดิบ บรรจุภัณฑ์ หรือค่าใช้จ่ายอย่างน้อย 1 รายการ" });
+      return;
+    }
+
     setSaving(true);
     setStatus(null);
     let uploadedPath: string | null = null;
@@ -158,7 +196,9 @@ export function ExpenseFormWithSlip({
     try {
       const supabase = createClient();
       if (slip && hasSupabaseEnv) {
-        const { data: { user } } = await supabase.auth.getUser();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
         if (!user) throw new Error("หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่");
         const ext = SLIP_TYPES[slip.type] || "webp";
         const hashPart = slipHash ? slipHash.slice(0, 16) : Date.now().toString(36);
@@ -170,6 +210,41 @@ export function ExpenseFormWithSlip({
           uploadedPath = null;
           throw new Error(`อัปโหลดสลิปไม่สำเร็จ: ${uploadError.message}`);
         }
+      }
+
+      if (entryMode === "itemized") {
+        const res = await saveItemizedExpenseAction({
+          spentAt,
+          vendor: payee.trim() || null,
+          paymentMethod,
+          receiptPath: uploadedPath,
+          notes: referenceNumber ? `Ref: ${referenceNumber}` : null,
+          perUnitItems: itemizedSummary.perUnitItems,
+          pooledItems: itemizedSummary.pooledItems,
+          packagingItems: itemizedSummary.packagingItems,
+          extraExpenses: itemizedSummary.extraExpenses,
+        });
+
+        if (res.error) {
+          if (uploadedPath) {
+            await supabase.storage.from("sale-slips").remove([uploadedPath]).catch(() => undefined);
+          }
+          setStatus({ ok: false, text: res.error });
+          return;
+        }
+
+        setItemizedState(createInitialItemizedState(perUnit, restockItems));
+        setAmount("");
+        setSpentAt(today);
+        setPaymentMethod("transfer");
+        setPayee("");
+        setReferenceNumber("");
+        setSlip(null);
+        setSlipPreviewUrl(null);
+        setSlipHash("");
+        setStatus({ ok: true, text: res.message ?? "บันทึกรายการซื้อและค่าใช้จ่ายเรียบร้อยแล้ว" });
+        router.refresh();
+        return;
       }
 
       const formData = new FormData();
@@ -185,7 +260,9 @@ export function ExpenseFormWithSlip({
 
       const res = await saveExpense(formData);
       if (res.error) {
-        if (uploadedPath) await supabase.storage.from("sale-slips").remove([uploadedPath]).catch(() => undefined);
+        if (uploadedPath) {
+          await supabase.storage.from("sale-slips").remove([uploadedPath]).catch(() => undefined);
+        }
         setStatus({ ok: false, text: res.error });
         return;
       }
@@ -199,26 +276,52 @@ export function ExpenseFormWithSlip({
       setPayee("");
       setReferenceNumber("");
       setSlip(null);
+      setSlipPreviewUrl(null);
       setSlipHash("");
       setStatus({ ok: true, text: res.message ?? "บันทึกค่าใช้จ่ายแล้ว" });
       router.refresh();
     } catch (err: unknown) {
-      setStatus({ ok: false, text: err instanceof Error ? err.message : "บันทึกค่าใช้จ่ายไม่สำเร็จ" });
+      setStatus({
+        ok: false,
+        text: err instanceof Error ? err.message : "บันทึกค่าใช้จ่ายไม่สำเร็จ",
+      });
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <form className="action-form" onSubmit={handleSubmit}>
-      <div className="wide" style={{ gridColumn: "1 / -1", marginBottom: "4px" }}>
+    <form className="form-grid" onSubmit={handleSubmit}>
+      {/* SLIP UPLOAD ZONE */}
+      <div className="wide" style={{ gridColumn: "1 / -1", marginBottom: "2px" }}>
         {slip ? (
           <div className="slip-chosen">
-            <ImagePlus size={18} />
+            {slipPreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={slipPreviewUrl}
+                alt="ตัวอย่างสลิป"
+                style={{
+                  width: "48px",
+                  height: "62px",
+                  objectFit: "cover",
+                  borderRadius: "8px",
+                  border: "1px solid rgba(0,0,0,0.1)",
+                  flexShrink: 0,
+                }}
+              />
+            ) : (
+              <ImagePlus size={18} />
+            )}
             <span>
               <strong>{slip.name}</strong>
               <small>
-                {(slip.size / 1024).toFixed(0)} KB · {analyzing ? "กำลังอ่านยอดจากสลิป…" : "อ่านข้อมูลและพร้อมแนบเมื่อกดบันทึก"}
+                {(slip.size / 1024).toFixed(0)} KB ·{" "}
+                {analyzing
+                  ? "กำลังอ่านยอดจากสลิป…"
+                  : slipAmountSatang > 0
+                  ? `ยอดสลิป ${formatBaht(slipAmountSatang)} · พร้อมแนบเมื่อกดบันทึก`
+                  : "พร้อมแนบเมื่อกดบันทึก"}
               </small>
             </span>
             <button
@@ -226,6 +329,7 @@ export function ExpenseFormWithSlip({
               className="icon-button"
               onClick={() => {
                 setSlip(null);
+                setSlipPreviewUrl(null);
                 setSlipHash("");
                 setReferenceNumber("");
               }}
@@ -244,75 +348,49 @@ export function ExpenseFormWithSlip({
             />
             {analyzing ? <Loader2 className="spin-icon" /> : <ImagePlus />}
             <strong>แนบสลิปค่าใช้จ่ายเพื่อดึงยอดเงินและวันที่อัตโนมัติ (ไม่บังคับ)</strong>
-            <span>รองรับ JPG, PNG หรือ WebP — ระบบบีบอัดรูปจิ๋วและอ่านยอดเงิน/ผู้รับให้ทันที</span>
+            <span>
+              รองรับ JPG, PNG หรือ WebP — แนบสลิปใบเดียวแล้วเลือกแยกพริก กระเทียม ไก่ กล่อง หรือค่าใช้จ่ายทั่วไปได้ทันที
+            </span>
           </label>
         )}
       </div>
 
-      <label>
-        รายละเอียด
-        <input
-          name="description"
-          maxLength={200}
-          required
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="เช่น เติมน้ำมันมอเตอร์ไซค์"
-        />
-      </label>
-      <label>
-        จำนวนเงิน (บาท)
-        <input
-          name="amount"
-          inputMode="decimal"
-          required
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder="เช่น 100"
-        />
-      </label>
-      <label>
-        หมวดหมู่
-        <input
-          name="category"
-          list="expense-categories"
-          maxLength={60}
-          required
-          value={category}
-          onChange={(e) => {
-            const nextCat = e.target.value;
-            setCategory(nextCat);
-            if (!description.trim() && categories.includes(nextCat)) {
-              setDescription(nextCat);
-            }
-          }}
-          placeholder={`เช่น ${FUEL_CATEGORY}`}
-        />
-        <div className="tip-chips" style={{ marginTop: "6px" }}>
-          {[FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์"].map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              className={`chip-btn ${category === cat ? "round-up" : ""}`}
-              onClick={() => {
-                setCategory(cat);
-                if (!description.trim()) setDescription(cat);
-              }}
-            >
-              {cat}
-            </button>
-          ))}
+      {/* MODE SWITCHER: SINGLE EXPENSE VS ITEMIZED INGREDIENTS/PACKAGING */}
+      <div className="wide" style={{ gridColumn: "1 / -1" }}>
+        <div className="expense-entry-mode-switch" role="tablist" aria-label="เลือกรูปแบบการบันทึกค่าใช้จ่าย">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={entryMode === "single"}
+            className={`expense-mode-btn ${entryMode === "single" ? "active" : ""}`}
+            onClick={() => setEntryMode("single")}
+          >
+            <ReceiptText size={16} />
+            <div>
+              <strong>ค่าใช้จ่ายทั่วไป (บิลเดี่ยว)</strong>
+              <small>เช่น ค่าน้ำมัน, ค่าแก๊ส, ค่าไฟ, ค่าน้ำ, ค่าเช่า</small>
+            </div>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={entryMode === "itemized"}
+            className={`expense-mode-btn ${entryMode === "itemized" ? "active" : ""}`}
+            onClick={() => setEntryMode("itemized")}
+          >
+            <ShoppingBasket size={16} />
+            <div>
+              <strong>แยกซื้อวัตถุดิบ / บรรจุภัณฑ์ในสลิปนี้</strong>
+              <small>เลือกแยก พริกกี่บาท กระเทียมกี่บาท ไก่กี่กิโล กล่องกี่แพ็ก</small>
+            </div>
+            {itemizedSummary.itemCount > 0 && (
+              <span className="mode-count-pill">{itemizedSummary.itemCount} รายการ</span>
+            )}
+          </button>
         </div>
-      </label>
-      <label>
-        ประเภท
-        <select name="kind" value={kind} onChange={(e) => setKind(e.target.value as ExpenseKind)}>
-          <option value="operating">ดำเนินงาน เช่น ค่าน้ำมัน แก๊ส (หักจากกำไร)</option>
-          <option value="recurring">ประจำ เช่น ค่าเช่า (หักจากกำไร)</option>
-          <option value="one_time">ครั้งเดียว เช่น ซื้ออุปกรณ์ (หักจากกำไร)</option>
-          <option value="direct">ต้นทุนโดยตรง (อยู่ในต้นทุนเมนูแล้ว ไม่หักซ้ำ)</option>
-        </select>
-      </label>
+      </div>
+
+      {/* COMMON FIELDS FOR BOTH MODES: DATE, PAYMENT METHOD, PAYEE/VENDOR */}
       <label>
         วันที่จ่าย
         <input
@@ -323,6 +401,7 @@ export function ExpenseFormWithSlip({
           onChange={(e) => setSpentAt(e.target.value)}
         />
       </label>
+
       <label>
         วิธีชำระ
         <select
@@ -335,32 +414,125 @@ export function ExpenseFormWithSlip({
           <option value="other">อื่น ๆ</option>
         </select>
       </label>
+
       <label>
-        ผู้รับเงิน (ไม่บังคับ)
+        {entryMode === "itemized" ? "ร้านค้า / ผู้รับโอน (ไม่บังคับ)" : "ผู้รับเงิน (ไม่บังคับ)"}
         <input
           name="payee"
           maxLength={120}
           value={payee}
           onChange={(e) => setPayee(e.target.value)}
-          placeholder="เช่น ปั๊ม ปตท."
+          placeholder={entryMode === "itemized" ? "เช่น ตลาดสด / แม็คโคร" : "เช่น ปั๊ม ปตท."}
         />
       </label>
+
+      <label>
+        {entryMode === "itemized" ? "ยอดรวมตามสลิป (บาท · ใช้เทียบยอด)" : "จำนวนเงิน (บาท)"}
+        <input
+          name="amount"
+          inputMode="decimal"
+          required={entryMode === "single"}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder={entryMode === "itemized" ? "อ่านจากสลิปอัตโนมัติ หรือเว้นว่างได้" : "เช่น 100"}
+        />
+      </label>
+
+      {/* MODE 1: SINGLE EXPENSE FIELDS */}
+      {entryMode === "single" ? (
+        <>
+          <label>
+            รายละเอียด
+            <input
+              name="description"
+              maxLength={200}
+              required
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="เช่น เติมน้ำมันมอเตอร์ไซค์"
+            />
+          </label>
+          <label>
+            หมวดหมู่
+            <input
+              name="category"
+              list="expense-categories"
+              maxLength={60}
+              required
+              value={category}
+              onChange={(e) => {
+                const nextCat = e.target.value;
+                setCategory(nextCat);
+                if (!description.trim() && categories.includes(nextCat)) {
+                  setDescription(nextCat);
+                }
+              }}
+              placeholder={`เช่น ${FUEL_CATEGORY}`}
+            />
+            <div className="tip-chips" style={{ marginTop: "6px" }}>
+              {[FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์"].map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`chip-btn ${category === cat ? "round-up" : ""}`}
+                  onClick={() => {
+                    setCategory(cat);
+                    if (!description.trim() || categories.includes(description.trim())) {
+                      setDescription(cat);
+                    }
+                  }}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </label>
+          <label className="wide" style={{ gridColumn: "1 / -1" }}>
+            ประเภทการคิดกำไร
+            <select name="kind" value={kind} onChange={(e) => setKind(e.target.value as ExpenseKind)}>
+              <option value="operating">ดำเนินงาน เช่น ค่าน้ำมัน แก๊ส (หักจากกำไร)</option>
+              <option value="recurring">ประจำ เช่น ค่าเช่า (หักจากกำไร)</option>
+              <option value="one_time">ครั้งเดียว เช่น ซื้ออุปกรณ์ (หักจากกำไร)</option>
+              <option value="direct">ต้นทุนโดยตรง (อยู่ในต้นทุนเมนูแล้ว ไม่หักซ้ำ)</option>
+            </select>
+          </label>
+        </>
+      ) : (
+        /* MODE 2: ITEMIZED INGREDIENTS + PACKAGING + EXTRA EXPENSES */
+        <div className="wide" style={{ gridColumn: "1 / -1" }}>
+          <SlipItemizedPicker
+            perUnit={perUnit}
+            pooled={pooled}
+            restockItems={restockItems}
+            categories={categories}
+            slipAmountSatang={slipAmountSatang}
+            value={itemizedState}
+            onChange={setItemizedState}
+          />
+        </div>
+      )}
+
       <p className="field-hint wide">
-        ค่าไฟ / ค่าแก๊ส ลงที่นี่ตอนบิลมา (หมวด “ค่าไฟ” “ค่าแก๊ส”) · ซื้อไก่ ข้าว ผัก เครื่องปรุง กล่อง ช้อน ถุง ให้บันทึกที่หน้า{" "}
-        <Link href="/ingredients" className="text-link">
-          วัตถุดิบและบรรจุภัณฑ์
-        </Link>{" "}
-        แทน ระบบคิดต้นทุนหรือลงค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ
+        {entryMode === "itemized"
+          ? "ทุกรายการที่กรอกจะถูกบันทึกตามวันที่จ่ายด้านบน · อัปเดตต้นทุนไก่/บรรจุภัณฑ์และ % วัตถุดิบรวมให้อัตโนมัติ พร้อมผูกสลิปใบเดียวกันในหน้าค่าใช้จ่ายและหน้าเทียบยอดธนาคาร"
+          : "หากเป็นสลิปซื้อของสด (ไก่ พริก กระเทียม ข้าว) หรือบรรจุภัณฑ์ (กล่อง ช้อน ถุง) กดสลับไปที่ปุ่ม “แยกซื้อวัตถุดิบ / บรรจุภัณฑ์ในสลิปนี้” ด้านบนเพื่อแจกแจงรายตัวได้เลย"}
       </p>
-      <div className="form-Status">
-        <button type="submit" className="primary-button" disabled={saving || analyzing}>
-          {saving ? "กำลังบันทึก…" : "บันทึกค่าใช้จ่าย"}
-        </button>
+
+      <div className="form-footer">
         {status && (
-          <span className={status.ok ? "form-ok" : "form-error"} role="status">
+          <p className={status.ok ? "form-success" : "form-error"} role="status">
             {status.text}
-          </span>
+          </p>
         )}
+        <button type="submit" className="primary-button" disabled={saving || analyzing}>
+          {saving
+            ? "กำลังบันทึก…"
+            : entryMode === "itemized"
+            ? itemizedSummary.itemCount > 0
+              ? `บันทึก ${itemizedSummary.itemCount} รายการ (${formatBaht(itemizedSummary.totalSatang)})`
+              : "บันทึกรายการที่เลือก"
+            : "บันทึกค่าใช้จ่าย"}
+        </button>
       </div>
     </form>
   );

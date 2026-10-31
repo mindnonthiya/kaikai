@@ -63,7 +63,13 @@ export async function deleteExpense(form: FormData): Promise<ActionState> {
       ? (existing as { receipt_path: string }).receipt_path
       : null;
     if (receiptPath) {
-      await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
+      const { count } = await supabase
+        .from("expenses")
+        .select("id", { count: "exact", head: true })
+        .eq("receipt_path", receiptPath);
+      if (!count || count === 0) {
+        await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
+      }
     }
     revalidateExpenses();
   });

@@ -2777,3 +2777,431 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   .bank-list li label { grid-template-columns: auto minmax(0, 1fr) auto; }
   .bank-line-time { display: none; }
 }
+
+
+/* ==========================================================================
+   Itemized Slip Picker & Unified Expense Form Styles
+   ========================================================================== */
+.tab-pane .form-panels {
+  grid-template-columns: 1fr;
+}
+
+.compact-slip-drop {
+  min-height: 92px;
+  padding: 12px 16px;
+}
+
+.expense-entry-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.expense-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 15px;
+  border: 1.5px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 0;
+}
+
+.expense-mode-btn:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.expense-mode-btn.active {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: #e9a37f;
+  box-shadow: 0 4px 12px rgba(230, 103, 41, 0.08);
+}
+
+.expense-mode-btn svg {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+
+.expense-mode-btn > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.expense-mode-btn strong {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.expense-mode-btn small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.mode-count-pill {
+  flex-shrink: 0;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 99px;
+}
+
+/* Itemized Picker Box */
+.slip-itemized-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: #fbf9f4;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.slip-itemized-picker.is-compact {
+  padding: 12px;
+  background: #fcfbf8;
+  border-radius: 13px;
+}
+
+.itemized-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.itemized-subtab {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  white-space: nowrap;
+}
+
+.itemized-subtab:hover {
+  color: var(--ink);
+}
+
+.itemized-subtab.active {
+  background: var(--surface);
+  color: var(--primary-dark);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.itemized-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.itemized-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.itemized-subhead-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.remaining-hint-pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8a5b10;
+  background: #fff4d7;
+  border: 1px solid #f1d199;
+  padding: 4px 10px;
+  border-radius: 99px;
+}
+
+.itemized-pooled-grid {
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 10px;
+}
+
+.pooled-item-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pooled-item-box.is-active {
+  border-color: #e9a37f;
+  background: #fff9f5;
+  box-shadow: 0 2px 10px rgba(230, 103, 41, 0.08);
+}
+
+.pooled-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.pooled-item-head label {
+  font-size: 11.5px;
+  font-weight: 750;
+  color: var(--ink);
+}
+
+.fill-remaining-mini-btn {
+  border: 1px solid #a3d4b6;
+  background: #f0faf3;
+  color: #1f6f46;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 99px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.fill-remaining-mini-btn:hover {
+  background: #dff3e6;
+  border-color: var(--green);
+}
+
+.pooled-item-box input {
+  min-height: 38px !important;
+  height: 38px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0 10px;
+  background: #ffffff;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
+.extra-expense-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extra-expense-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 1.2fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.extra-expense-row label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4d554f;
+  min-width: 0;
+}
+
+.extra-expense-row input,
+.extra-expense-row select {
+  min-height: 38px !important;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0 10px;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+
+/* Itemized Summary & Slip Match Banner */
+.itemized-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  border: 1px solid var(--line);
+}
+
+.itemized-summary-bar.is-ready {
+  background: var(--green-soft);
+  border-color: #c3e6cf;
+  color: var(--green);
+}
+
+.itemized-summary-bar.is-diff {
+  background: #fff8e8;
+  border-color: #f3d79b;
+  color: #8a560e;
+}
+
+.itemized-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.itemized-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.itemized-total-num {
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.itemized-chips-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.itemized-summary-chip {
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 3px 9px;
+  border-radius: 99px;
+}
+
+.compare-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 11px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.compare-badge.match {
+  background: #d5f2df;
+  color: #166534;
+}
+
+.compare-badge.diff {
+  background: #fde9bd;
+  color: #8a4b08;
+}
+
+/* Batch Slip Row Mode Pills */
+.slip-row-mode-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 99px;
+  margin-left: auto;
+}
+
+.slip-row-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: #475569;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  white-space: nowrap;
+}
+
+.slip-row-mode-pill.active {
+  background: #ffffff;
+  color: var(--primary-dark);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.slip-row-mode-pill .pill-count {
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 99px;
+}
+
+@media (max-width: 720px) {
+  .expense-entry-mode-switch {
+    grid-template-columns: 1fr;
+  }
+  .extra-expense-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .slip-row-mode-pills {
+    margin-left: 0;
+    width: 100%;
+    justify-content: stretch;
+  }
+  .slip-row-mode-pill {
+    flex: 1;
+    justify-content: center;
+  }
+}

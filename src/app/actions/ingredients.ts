@@ -5,10 +5,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { learnedYield, weightedPricePerUnit, yieldWindow } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
-import { INGREDIENT_COSTING_LABELS, type IngredientCosting } from "@/lib/data/types";
+import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
+import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
 import { InputError, amountOrZero, dateField, dbError, id, money, oneOf, optionalText, quantity, runAction, text } from "@/lib/server-action";
+import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 
 type Row = Record<string, unknown>;
 const POOLED_UNIT = "บาท";
@@ -23,9 +25,11 @@ function revalidateCosts() {
   revalidatePath("/menus");
   revalidatePath("/sales/new");
   revalidatePath("/expenses");
+  revalidatePath("/expenses/import-slips");
   revalidatePath("/reports");
   revalidatePath("/dashboard");
   revalidatePath("/settings");
+  revalidatePath("/bank-check");
 }
 
 function yieldAutoField(form: FormData) {
@@ -161,6 +165,11 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
   return runAction(async ({ supabase, user }) => {
     const purchasedAt = dateField(form, "purchased_at", "วันที่ซื้อ").toISOString();
     const vendor = optionalText(form, "vendor", "ร้านค้า", 120);
+    const receiptPath = optionalText(form, "receipt_path", "สลิป", 300);
+    const notesText = optionalText(form, "notes", "หมายเหตุ", 300);
+    const rawMethod = String(form.get("payment_method") ?? "transfer");
+    const paymentMethod: PaymentMethod = rawMethod === "cash" || rawMethod === "other" ? rawMethod : "transfer";
+
     const { data, error } = await supabase.from("ingredients")
       .select("id,name,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto").eq("is_active", true);
     if (error) dbError(error);
@@ -177,7 +186,9 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
           rows.push({ owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: amount, vendor });
           expensesToInsert.push({
             owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
-            description: `ซื้อ${name}`, payee: vendor, payment_method: "transfer",
+            description: `ซื้อ${name}`, payee: vendor, payment_method: paymentMethod,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+            ...(notesText ? { notes: notesText } : {}),
           });
         }
         continue;
@@ -193,7 +204,9 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       });
       expensesToInsert.push({
         owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
-        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor, payment_method: "transfer",
+        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor, payment_method: paymentMethod,
+        ...(receiptPath ? { receipt_path: receiptPath } : {}),
+        ...(notesText ? { notes: notesText } : {}),
       });
       perUnit.push({
         id: ingredientId, name, base_unit: String(r.base_unit), purchase_unit: unit,
@@ -216,7 +229,16 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
 }
 
 type PackagingItem = { id: string; name: string; unit: string; per_order: boolean };
-type PackPurchase = { purchasedAt: Date; price: number; packQuantity: number; packCount: number; vendor: string | null };
+type PackPurchase = {
+  purchasedAt: Date;
+  price: number;
+  packQuantity: number;
+  packCount: number;
+  vendor: string | null;
+  receiptPath?: string | null;
+  paymentMethod?: PaymentMethod;
+  notes?: string | null;
+};
 
 const PACKAGING_EXPENSE_CATEGORY = "บรรจุภัณฑ์";
 
@@ -254,7 +276,11 @@ async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string
       owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY,
       kind: item.per_order ? "direct" : "operating",
       amount_satang: purchase.price,
-      description: `ซื้อ${item.name} ${packs}`, payee: purchase.vendor, payment_method: "transfer",
+      description: `ซื้อ${item.name} ${packs}`,
+      payee: purchase.vendor,
+      payment_method: purchase.paymentMethod ?? "transfer",
+      ...(purchase.receiptPath ? { receipt_path: purchase.receiptPath } : {}),
+      ...(purchase.notes ? { notes: purchase.notes } : {}),
     }).select("id").single();
     if (error) dbError(error);
     expenseId = String((data as Row).id);
@@ -323,6 +349,11 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const purchasedAt = dateField(form, "purchased_at", "วันที่ซื้อ");
     const vendor = optionalText(form, "vendor", "ร้านค้า", 120);
+    const receiptPath = optionalText(form, "receipt_path", "สลิป", 300);
+    const notesText = optionalText(form, "notes", "หมายเหตุ", 300);
+    const rawMethod = String(form.get("payment_method") ?? "transfer");
+    const paymentMethod: PaymentMethod = rawMethod === "cash" || rawMethod === "other" ? rawMethod : "transfer";
+
     const { data, error } = await supabase.from("packaging_items").select("id,name,unit,per_order").eq("is_active", true);
     if (error) dbError(error);
     const rows: Array<{ item: PackagingItem; purchase: PackPurchase }> = [];
@@ -332,7 +363,19 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
       if (!Number.isInteger(packs)) throw new InputError(`จำนวนแพ็กของ${item.name}ต้องเป็นจำนวนเต็ม`);
       const packPrice = money(form, `price_${item.id}`, `ราคาต่อแพ็กของ${item.name}`, { required: true });
       const perPack = quantity(form, `qty_${item.id}`, `จำนวนต่อแพ็กของ${item.name}`)!;
-      rows.push({ item, purchase: { purchasedAt, vendor, packCount: packs, price: packPrice * packs, packQuantity: perPack * packs } });
+      rows.push({
+        item,
+        purchase: {
+          purchasedAt,
+          vendor,
+          packCount: packs,
+          price: packPrice * packs,
+          packQuantity: perPack * packs,
+          receiptPath,
+          paymentMethod,
+          notes: notesText,
+        },
+      });
     }
     if (!rows.length) throw new InputError("เลือกจำนวนแพ็กอย่างน้อย 1 รายการ");
     let total = 0;
@@ -342,5 +385,234 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
     }
     revalidateCosts();
     return { ok: true, message: `บันทึกการซื้อ ${rows.length} รายการ รวม ${formatBaht(total)} · ลงในรายการค่าใช้จ่ายแล้ว` };
+  });
+}
+
+export type ItemizedPurchasePayload = {
+  spentAt: string; // YYYY-MM-DD
+  vendor?: string | null;
+  paymentMethod?: PaymentMethod;
+  receiptPath?: string | null;
+  notes?: string | null;
+  perUnitItems?: Array<{
+    ingredientId: string;
+    quantity: number;
+    unitPriceSatang: number;
+  }>;
+  pooledItems?: Array<{
+    ingredientId: string;
+    amountSatang: number;
+  }>;
+  packagingItems?: Array<{
+    packagingId: string;
+    packs: number;
+    packPriceSatang: number;
+    perPackQuantity: number;
+  }>;
+  extraExpenses?: Array<{
+    description: string;
+    category: string;
+    kind: ExpenseKind;
+    amountSatang: number;
+  }>;
+};
+
+/**
+ * Unified server action that saves an itemized slip containing any mix of:
+ * - Per-unit ingredients (e.g. chicken kg × price) -> ingredient_purchases + expenses + refreshPerUnitCost
+ * - Pooled ingredients (e.g. chili, garlic, rice, fish sauce) -> ingredient_purchases + expenses + pooled %
+ * - Packaging items (e.g. boxes, spoons, bags) -> packaging_purchases + expenses + packaging unit cost
+ * - General/extra expenses (e.g. ice, delivery fuel, etc.) -> expenses
+ * All records use the slip's date (`spentAt`), vendor/payee, payment method, and shared `receiptPath`.
+ */
+export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    let purchasedAtDate: Date;
+    try {
+      purchasedAtDate = fromBangkokDateInput(payload.spentAt || bangkokDayKey(new Date()));
+    } catch {
+      throw new InputError("วันที่จ่ายไม่ถูกต้อง");
+    }
+    const purchasedAtIso = purchasedAtDate.toISOString();
+    const vendor = payload.vendor?.trim() ? payload.vendor.trim().slice(0, 120) : null;
+    const paymentMethod: PaymentMethod =
+      payload.paymentMethod === "cash" || payload.paymentMethod === "other" ? payload.paymentMethod : "transfer";
+    const receiptPath = payload.receiptPath?.trim() ? payload.receiptPath.trim().slice(0, 300) : null;
+    const notesText = payload.notes?.trim() ? payload.notes.trim().slice(0, 300) : null;
+
+    const perUnitInput = (payload.perUnitItems ?? []).filter((i) => i.quantity > 0 && i.unitPriceSatang > 0);
+    const pooledInput = (payload.pooledItems ?? []).filter((i) => i.amountSatang > 0);
+    const packagingInput = (payload.packagingItems ?? []).filter(
+      (i) => i.packs > 0 && i.packPriceSatang > 0 && i.perPackQuantity > 0
+    );
+    const extraInput = (payload.extraExpenses ?? []).filter(
+      (i) => i.amountSatang > 0 && i.description.trim().length > 0 && i.category.trim().length > 0
+    );
+
+    const totalItemsCount =
+      perUnitInput.length + pooledInput.length + packagingInput.length + extraInput.length;
+    if (totalItemsCount === 0) {
+      throw new InputError("กรุณากรอกรายการอย่างน้อย 1 รายการ");
+    }
+
+    const ingredientPurchasesToInsert: Row[] = [];
+    const expensesToInsert: Row[] = [];
+    const perUnitToRefresh: PerUnitIngredient[] = [];
+    let totalSatang = 0;
+
+    if (perUnitInput.length > 0 || pooledInput.length > 0) {
+      const { data: ingRows, error: ingErr } = await supabase
+        .from("ingredients")
+        .select("id,name,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto")
+        .eq("is_active", true);
+      if (ingErr) dbError(ingErr);
+      const ingMap = new Map((ingRows as Row[]).map((r) => [String(r.id), r]));
+
+      for (const item of perUnitInput) {
+        const r = ingMap.get(item.ingredientId);
+        if (!r) continue;
+        const name = String(r.name);
+        const unit = String(r.purchase_unit ?? r.base_unit);
+        const priceSatang = Math.round(item.quantity * item.unitPriceSatang);
+        if (priceSatang <= 0) continue;
+        totalSatang += priceSatang;
+
+        ingredientPurchasesToInsert.push({
+          owner_id: user.id,
+          ingredient_id: item.ingredientId,
+          purchased_at: purchasedAtIso,
+          price_satang: priceSatang,
+          purchased_quantity: item.quantity,
+          usable_quantity: item.quantity,
+          purchase_unit: unit,
+          vendor,
+        });
+        expensesToInsert.push({
+          owner_id: user.id,
+          spent_at: purchasedAtIso,
+          category: "วัตถุดิบ",
+          kind: "direct",
+          amount_satang: priceSatang,
+          description: `ซื้อ${name} ${item.quantity.toLocaleString("th-TH")} ${unit}`,
+          payee: vendor,
+          payment_method: paymentMethod,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          ...(notesText ? { notes: notesText } : {}),
+        });
+        perUnitToRefresh.push({
+          id: item.ingredientId,
+          name,
+          base_unit: String(r.base_unit),
+          purchase_unit: unit,
+          units_per_purchase_unit: Number(r.units_per_purchase_unit),
+          yield_auto: Boolean(r.yield_auto),
+        });
+      }
+
+      for (const item of pooledInput) {
+        const r = ingMap.get(item.ingredientId);
+        if (!r) continue;
+        const name = String(r.name);
+        const amount = Math.round(item.amountSatang);
+        if (amount <= 0) continue;
+        totalSatang += amount;
+
+        ingredientPurchasesToInsert.push({
+          owner_id: user.id,
+          ingredient_id: item.ingredientId,
+          purchased_at: purchasedAtIso,
+          price_satang: amount,
+          vendor,
+        });
+        expensesToInsert.push({
+          owner_id: user.id,
+          spent_at: purchasedAtIso,
+          category: "วัตถุดิบ",
+          kind: "direct",
+          amount_satang: amount,
+          description: `ซื้อ${name}`,
+          payee: vendor,
+          payment_method: paymentMethod,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          ...(notesText ? { notes: notesText } : {}),
+        });
+      }
+    }
+
+    for (const extra of extraInput) {
+      const amount = Math.round(extra.amountSatang);
+      if (amount <= 0) continue;
+      totalSatang += amount;
+      expensesToInsert.push({
+        owner_id: user.id,
+        spent_at: purchasedAtIso,
+        category: extra.category.trim().slice(0, 60),
+        kind: extra.kind,
+        amount_satang: amount,
+        description: extra.description.trim().slice(0, 200),
+        payee: vendor,
+        payment_method: paymentMethod,
+        ...(receiptPath ? { receipt_path: receiptPath } : {}),
+        ...(notesText ? { notes: notesText } : {}),
+      });
+    }
+
+    if (ingredientPurchasesToInsert.length > 0) {
+      const { error: insertIngErr } = await supabase
+        .from("ingredient_purchases")
+        .insert(ingredientPurchasesToInsert);
+      if (insertIngErr) dbError(insertIngErr);
+    }
+
+    if (expensesToInsert.length > 0) {
+      const { error: insertExpErr } = await supabase.from("expenses").insert(expensesToInsert);
+      if (insertExpErr) dbError(insertExpErr);
+    }
+
+    if (packagingInput.length > 0) {
+      const { data: packRows, error: packErr } = await supabase
+        .from("packaging_items")
+        .select("id,name,unit,per_order")
+        .eq("is_active", true);
+      if (packErr) dbError(packErr);
+      const packMap = new Map((packRows as PackagingItem[]).map((p) => [p.id, p]));
+
+      for (const pInput of packagingInput) {
+        const item = packMap.get(pInput.packagingId);
+        if (!item) continue;
+        const packs = Math.round(pInput.packs);
+        const totalPackPrice = Math.round(pInput.packPriceSatang * packs);
+        const totalPackQty = pInput.perPackQuantity * packs;
+        if (packs <= 0 || totalPackPrice <= 0 || totalPackQty <= 0) continue;
+        totalSatang += totalPackPrice;
+
+        await recordPackagingPurchase(supabase, user.id, item, {
+          purchasedAt: purchasedAtDate,
+          vendor,
+          packCount: packs,
+          price: totalPackPrice,
+          packQuantity: totalPackQty,
+          receiptPath,
+          paymentMethod,
+          notes: notesText,
+        });
+      }
+    }
+
+    const notes: string[] = [];
+    for (const ingredient of perUnitToRefresh) {
+      notes.push(await refreshPerUnitCost(supabase, ingredient));
+    }
+
+    await syncHistoricalCosts(supabase, { ownerId: user.id }).catch(() => undefined);
+    revalidateCosts();
+
+    return {
+      ok: true,
+      message: [
+        `บันทึก ${totalItemsCount} รายการ รวม ${formatBaht(totalSatang)} เรียบร้อยแล้ว`,
+        ...notes,
+      ].join(" · "),
+    };
   });
 }

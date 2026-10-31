@@ -10,13 +10,24 @@ import {
   Eye,
   Loader2,
   Plus,
+  ReceiptText,
   RotateCw,
+  ShoppingBasket,
   Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
 import { revalidateExpensesAction } from "@/app/actions/expenses";
+import { saveItemizedExpenseAction } from "@/app/actions/ingredients";
 import { guessExpenseFromPayee } from "@/components/expense-form-with-slip";
+import type { PerUnitPurchaseItem, PooledPurchaseItem } from "@/components/ingredient-purchase-table";
+import type { RestockItem } from "@/components/packaging-restock-table";
+import {
+  SlipItemizedPicker,
+  computeItemizedSummary,
+  createInitialItemizedState,
+  type ItemizedSelectionState,
+} from "@/components/slip-itemized-picker";
 import { EXPENSE_KIND_LABELS, FUEL_CATEGORY, type ExpenseKind } from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
 import { formatBaht, tryBahtToSatang } from "@/lib/money";
@@ -45,6 +56,9 @@ export type BatchExpenseSlipRow = {
   bank?: string;
   referenceNumber?: string;
 
+  mode: "single" | "itemized";
+  itemized: ItemizedSelectionState;
+
   amountSatang: number;
   spentAtDate: string; // YYYY-MM-DD
   category: string;
@@ -61,10 +75,16 @@ export function BatchExpenseSlipImporter({
   today,
   maxDate,
   categories,
+  perUnit = [],
+  pooled = [],
+  restockItems = [],
 }: {
   today: string;
   maxDate: string;
   categories: string[];
+  perUnit?: PerUnitPurchaseItem[];
+  pooled?: PooledPurchaseItem[];
+  restockItems?: RestockItem[];
 }) {
   const router = useRouter();
   const fileInputId = useId();
@@ -86,6 +106,27 @@ export function BatchExpenseSlipImporter({
 
   function updateRow(rowId: string, patch: Partial<BatchExpenseSlipRow>) {
     setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, ...patch } : r)));
+  }
+
+  function isRowReady(row: BatchExpenseSlipRow): boolean {
+    if (row.status === "processing") return false;
+    if (row.mode === "itemized") {
+      const summary = computeItemizedSummary(row.itemized, perUnit, pooled, restockItems);
+      return summary.itemCount > 0 && summary.totalSatang > 0;
+    }
+    return (
+      row.amountSatang > 0 &&
+      row.category.trim().length > 0 &&
+      row.description.trim().length > 0
+    );
+  }
+
+  function getRowEffectiveAmountSatang(row: BatchExpenseSlipRow): number {
+    if (row.mode === "itemized") {
+      const summary = computeItemizedSummary(row.itemized, perUnit, pooled, restockItems);
+      return summary.totalSatang > 0 ? summary.totalSatang : row.amountSatang;
+    }
+    return row.amountSatang;
   }
 
   async function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
@@ -117,6 +158,8 @@ export function BatchExpenseSlipImporter({
         compressedBytes: 0,
         status: "processing",
         statusText: i < 3 ? "กำลังวิเคราะห์…" : "รอคิววิเคราะห์…",
+        mode: "single",
+        itemized: createInitialItemizedState(perUnit, restockItems),
         amountSatang: 0,
         spentAtDate: today,
         category: FUEL_CATEGORY,
@@ -240,6 +283,7 @@ export function BatchExpenseSlipImporter({
         guessed.description ||
         (receiverName ? `${category} (${receiverName})` : category);
       const kind = guessed.kind || "operating";
+      const mode = guessed.suggestItemized ? "itemized" : "single";
 
       setRows((prev) =>
         prev.map((row) => {
@@ -270,6 +314,7 @@ export function BatchExpenseSlipImporter({
               : amountSatang > 0
               ? `อ่านยอด ${formatBaht(amountSatang)}`
               : "กรุณาระบุยอดเงิน",
+            mode,
             amountSatang,
             spentAtDate,
             category,
@@ -280,7 +325,7 @@ export function BatchExpenseSlipImporter({
             referenceNumber: ref,
             isDuplicate: finalIsDuplicate,
             duplicateReason: finalDuplicateReason,
-            selected: !finalIsDuplicate && amountSatang > 0,
+            selected: !finalIsDuplicate && (amountSatang > 0 || mode === "itemized"),
           };
         })
       );
@@ -301,7 +346,7 @@ export function BatchExpenseSlipImporter({
               ...r,
               amountSatang: satang,
               status: r.isDuplicate ? "duplicate" : "ready",
-              selected: !r.isDuplicate && satang > 0,
+              selected: !r.isDuplicate && (satang > 0 || r.mode === "itemized"),
             }
           : r
       )
@@ -318,7 +363,7 @@ export function BatchExpenseSlipImporter({
               ? `${cat} (${r.payee})`
               : cat
             : r.description;
-        return { ...r, category: cat, description: nextDesc };
+        return { ...r, mode: "single", category: cat, description: nextDesc };
       })
     );
   }
@@ -334,14 +379,11 @@ export function BatchExpenseSlipImporter({
   }
 
   const selectedRows = rows.filter((r) => r.selected);
-  const readyRows = selectedRows.filter(
-    (r) =>
-      r.status !== "processing" &&
-      r.amountSatang > 0 &&
-      r.category.trim().length > 0 &&
-      r.description.trim().length > 0
+  const readyRows = selectedRows.filter(isRowReady);
+  const totalSelectedAmountSatang = readyRows.reduce(
+    (sum, r) => sum + getRowEffectiveAmountSatang(r),
+    0
   );
-  const totalSelectedAmountSatang = readyRows.reduce((sum, r) => sum + r.amountSatang, 0);
 
   async function handleSaveAll() {
     if (readyRows.length === 0 || saving) return;
@@ -393,6 +435,33 @@ export function BatchExpenseSlipImporter({
           throw new Error(`อัปโหลดรูปไม่สำเร็จ (${uploadError.message})`);
         }
 
+        if (row.mode === "itemized") {
+          const summary = computeItemizedSummary(row.itemized, perUnit, pooled, restockItems);
+          const res = await saveItemizedExpenseAction({
+            spentAt: row.spentAtDate || today,
+            vendor: row.payee.trim() || null,
+            paymentMethod: "transfer",
+            receiptPath: uploadedPath,
+            notes: row.referenceNumber ? `Ref: ${row.referenceNumber}` : null,
+            perUnitItems: summary.perUnitItems,
+            pooledItems: summary.pooledItems,
+            packagingItems: summary.packagingItems,
+            extraExpenses: summary.extraExpenses,
+          });
+
+          if (res.error) {
+            if (uploadedPath) {
+              await supabase.storage.from("sale-slips").remove([uploadedPath]).catch(() => undefined);
+            }
+            throw new Error(res.error);
+          }
+
+          successCount++;
+          totalSavedSatang += summary.totalSatang;
+          setRows((prev) => prev.filter((r) => r.id !== row.id));
+          continue;
+        }
+
         let spentAtIso: string;
         try {
           spentAtIso = fromBangkokDateInput(row.spentAtDate || today).toISOString();
@@ -425,7 +494,7 @@ export function BatchExpenseSlipImporter({
         setRows((prev) => prev.filter((r) => r.id !== row.id));
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
-        errors.push(`สลิปยอด ${formatBaht(row.amountSatang)}: ${msg}`);
+        errors.push(`สลิปยอด ${formatBaht(getRowEffectiveAmountSatang(row))}: ${msg}`);
       }
     }
 
@@ -481,7 +550,7 @@ export function BatchExpenseSlipImporter({
           </div>
           <div className="batch-dropzone-text">
             <strong>แตะเลือกรูปสลิปค่าใช้จ่ายหลายๆ ใบพร้อมกัน</strong>
-            <span>รองรับ JPG, PNG, WebP — อ่านยอดเงิน วันที่ และชื่อผู้รับโอนให้อัตโนมัติ</span>
+            <span>รองรับ JPG, PNG, WebP — อ่านยอดเงิน วันที่ และกดแยกพริก กระเทียม ไก่ หรือกล่องในสลิปได้เลย</span>
           </div>
           <div className="batch-dropzone-btn">
             <Plus size={16} /> เลือกรูปสลิปค่าใช้จ่าย
@@ -493,7 +562,7 @@ export function BatchExpenseSlipImporter({
         <div className="batch-ocr-missing-notice" style={{ marginTop: "16px" }}>
           <div>
             <strong>ระบบยังไม่ได้เปิดใช้งานอ่านสลิปอัตโนมัติ (OCR_API_KEY)</strong>
-            <span>สามารถกรอกยอดเงินและหมวดหมู่ในแต่ละแถวแล้วกดบันทึกพร้อมกันได้ทันที</span>
+            <span>สามารถกรอกยอดเงินและเลือกรายการในแต่ละสลิปแล้วกดบันทึกพร้อมกันได้ทันที</span>
           </div>
         </div>
       )}
@@ -511,7 +580,7 @@ export function BatchExpenseSlipImporter({
         <div className={saveResult.ok ? "success-toast" : "error-toast"} style={{ marginBottom: "16px" }}>
           {saveResult.ok ? (
             <>
-              บันทึกค่าใช้จ่ายสำเร็จแล้ว <strong>{saveResult.savedCount} รายการ</strong> (รวม{" "}
+              บันทึกสลิปสำเร็จแล้ว <strong>{saveResult.savedCount} สลิป</strong> (รวม{" "}
               {formatBaht(saveResult.totalAmount)}) ·{" "}
               <Link href="/expenses" className="text-link" style={{ textDecoration: "underline" }}>
                 ดูรายการค่าใช้จ่าย
@@ -519,7 +588,7 @@ export function BatchExpenseSlipImporter({
             </>
           ) : (
             <>
-              บันทึกสำเร็จ {saveResult.savedCount} รายการ — ติดปัญหาบางรายการ: {saveResult.errorText}
+              บันทึกสำเร็จ {saveResult.savedCount} สลิป — ติดปัญหาบางรายการ: {saveResult.errorText}
             </>
           )}
         </div>
@@ -558,11 +627,13 @@ export function BatchExpenseSlipImporter({
 
           <div className="batch-rows-list">
             {rows.map((row) => {
-              const isReady =
-                row.status !== "processing" &&
-                row.amountSatang > 0 &&
-                row.category.trim().length > 0 &&
-                row.description.trim().length > 0;
+              const isReady = isRowReady(row);
+              const itemizedSummary = computeItemizedSummary(
+                row.itemized,
+                perUnit,
+                pooled,
+                restockItems
+              );
 
               return (
                 <div
@@ -594,7 +665,7 @@ export function BatchExpenseSlipImporter({
                   <div className="col-info">
                     <div className="slip-amount-row">
                       <div className="slip-amount-box">
-                        <label>ยอดจ่าย:</label>
+                        <label>ยอดในสลิป:</label>
                         <div className="amount-input-badge">
                           <span>฿</span>
                           <input
@@ -615,8 +686,30 @@ export function BatchExpenseSlipImporter({
                           {row.duplicateReason || "สลิปซ้ำ"}
                         </span>
                       )}
+
+                      {/* Toggle between Single Category and Itemized Ingredients/Packaging */}
+                      <div className="slip-row-mode-pills">
+                        <button
+                          type="button"
+                          className={`slip-row-mode-pill ${row.mode === "single" ? "active" : ""}`}
+                          onClick={() => updateRow(row.id, { mode: "single" })}
+                        >
+                          <ReceiptText size={13} /> รายการเดี่ยว
+                        </button>
+                        <button
+                          type="button"
+                          className={`slip-row-mode-pill ${row.mode === "itemized" ? "active" : ""}`}
+                          onClick={() => updateRow(row.id, { mode: "itemized", selected: true })}
+                        >
+                          <ShoppingBasket size={13} /> แยกวัตถุดิบ / บรรจุภัณฑ์
+                          {itemizedSummary.itemCount > 0 && (
+                            <span className="pill-count">{itemizedSummary.itemCount}</span>
+                          )}
+                        </button>
+                      </div>
                     </div>
 
+                    {/* Common metadata row (Date & Payee/Vendor) */}
                     <div
                       className="form-grid compact"
                       style={{
@@ -626,41 +719,46 @@ export function BatchExpenseSlipImporter({
                         marginTop: "8px",
                       }}
                     >
+                      {row.mode === "single" && (
+                        <>
+                          <label style={{ fontSize: "12px" }}>
+                            หมวดหมู่
+                            <input
+                              list="batch-expense-categories"
+                              value={row.category}
+                              onChange={(e) => {
+                                const nextCat = e.target.value;
+                                const shouldSyncDesc =
+                                  !row.description.trim() ||
+                                  categories.includes(row.description.trim());
+                                updateRow(row.id, {
+                                  category: nextCat,
+                                  ...(shouldSyncDesc ? { description: nextCat } : {}),
+                                });
+                              }}
+                              placeholder="เช่น ค่าน้ำมัน"
+                            />
+                          </label>
+                          <label style={{ fontSize: "12px" }}>
+                            รายละเอียด
+                            <input
+                              value={row.description}
+                              onChange={(e) => updateRow(row.id, { description: e.target.value })}
+                              placeholder="เช่น เติมน้ำมัน"
+                            />
+                          </label>
+                        </>
+                      )}
                       <label style={{ fontSize: "12px" }}>
-                        หมวดหมู่
-                        <input
-                          list="batch-expense-categories"
-                          value={row.category}
-                          onChange={(e) => {
-                            const nextCat = e.target.value;
-                            const shouldSyncDesc =
-                              !row.description.trim() || categories.includes(row.description.trim());
-                            updateRow(row.id, {
-                              category: nextCat,
-                              ...(shouldSyncDesc ? { description: nextCat } : {}),
-                            });
-                          }}
-                          placeholder="เช่น ค่าน้ำมัน"
-                        />
-                      </label>
-                      <label style={{ fontSize: "12px" }}>
-                        รายละเอียด
-                        <input
-                          value={row.description}
-                          onChange={(e) => updateRow(row.id, { description: e.target.value })}
-                          placeholder="เช่น เติมน้ำมัน"
-                        />
-                      </label>
-                      <label style={{ fontSize: "12px" }}>
-                        ผู้รับเงิน
+                        {row.mode === "itemized" ? "ร้านค้า / ผู้รับโอน" : "ผู้รับเงิน"}
                         <input
                           value={row.payee}
                           onChange={(e) => updateRow(row.id, { payee: e.target.value })}
-                          placeholder="เช่น ปั๊ม ปตท."
+                          placeholder={row.mode === "itemized" ? "เช่น ตลาดสด / แม็คโคร" : "เช่น ปั๊ม ปตท."}
                         />
                       </label>
                       <label style={{ fontSize: "12px" }}>
-                        วันที่จ่าย
+                        วันที่จ่าย (ตามสลิป)
                         <input
                           type="date"
                           value={row.spentAtDate}
@@ -668,27 +766,49 @@ export function BatchExpenseSlipImporter({
                           onChange={(e) => updateRow(row.id, { spentAtDate: e.target.value })}
                         />
                       </label>
-                      <label style={{ fontSize: "12px" }}>
-                        ประเภท
-                        <select
-                          value={row.kind}
-                          onChange={(e) => updateRow(row.id, { kind: e.target.value as ExpenseKind })}
-                        >
-                          {(Object.keys(EXPENSE_KIND_LABELS) as ExpenseKind[]).map((k) => (
-                            <option key={k} value={k}>
-                              {EXPENSE_KIND_LABELS[k]}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      {row.mode === "single" && (
+                        <label style={{ fontSize: "12px" }}>
+                          ประเภท
+                          <select
+                            value={row.kind}
+                            onChange={(e) =>
+                              updateRow(row.id, { kind: e.target.value as ExpenseKind })
+                            }
+                          >
+                            {(Object.keys(EXPENSE_KIND_LABELS) as ExpenseKind[]).map((k) => (
+                              <option key={k} value={k}>
+                                {EXPENSE_KIND_LABELS[k]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                     </div>
+
+                    {/* Itemized Picker when row is in itemized mode */}
+                    {row.mode === "itemized" && (
+                      <div style={{ marginTop: "10px" }}>
+                        <SlipItemizedPicker
+                          perUnit={perUnit}
+                          pooled={pooled}
+                          restockItems={restockItems}
+                          categories={categories}
+                          slipAmountSatang={row.amountSatang}
+                          value={row.itemized}
+                          onChange={(nextItemized) =>
+                            updateRow(row.id, { itemized: nextItemized, selected: true })
+                          }
+                          compact
+                        />
+                      </div>
+                    )}
 
                     <div className="slip-status-line" style={{ marginTop: "6px" }}>
                       {row.status === "processing" ? (
                         <span className="status-badge processing">
                           <Loader2 size={12} className="spin-icon" /> {row.statusText || "กำลังอ่าน…"}
                         </span>
-                      ) : row.status === "error" ? (
+                      ) : row.status === "error" && !isReady ? (
                         <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                           <span className="status-badge warn">
                             <AlertCircle size={13} /> {row.statusText}
@@ -703,11 +823,19 @@ export function BatchExpenseSlipImporter({
                         </div>
                       ) : isReady ? (
                         <span className="status-badge ready">
-                          <CheckCircle2 size={13} /> พร้อมบันทึก ({row.category} · {formatBaht(row.amountSatang)})
+                          <CheckCircle2 size={13} />{" "}
+                          {row.mode === "itemized"
+                            ? `พร้อมบันทึก (${itemizedSummary.itemCount} รายการ · รวม ${formatBaht(
+                                itemizedSummary.totalSatang
+                              )})`
+                            : `พร้อมบันทึก (${row.category} · ${formatBaht(row.amountSatang)})`}
                         </span>
                       ) : (
                         <span className="status-badge warn">
-                          <AlertCircle size={13} /> กรุณาระบุยอดเงินและรายละเอียดให้ครบ
+                          <AlertCircle size={13} />{" "}
+                          {row.mode === "itemized"
+                            ? "กรุณากรอกจำนวนเงินของวัตถุดิบหรือบรรจุภัณฑ์อย่างน้อย 1 รายการ"
+                            : "กรุณาระบุยอดเงินและรายละเอียดให้ครบ"}
                         </span>
                       )}
                     </div>
@@ -730,7 +858,7 @@ export function BatchExpenseSlipImporter({
 
           <div className="batch-bottom-bar">
             <div className="bar-summary">
-              <span>เลือกพร้อมบันทึก {readyRows.length} รายการ</span>
+              <span>เลือกพร้อมบันทึก {readyRows.length} สลิป</span>
               <strong>ยอดรวม {formatBaht(totalSelectedAmountSatang)}</strong>
             </div>
             <div className="bar-buttons">
@@ -755,7 +883,7 @@ export function BatchExpenseSlipImporter({
                   </>
                 ) : (
                   <>
-                    <Check size={16} /> ยืนยันบันทึกค่าใช้จ่าย ({readyRows.length} รายการ)
+                    <Check size={16} /> ยืนยันบันทึก ({readyRows.length} สลิป)
                   </>
                 )}
               </button>
