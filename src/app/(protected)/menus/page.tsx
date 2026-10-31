@@ -65,7 +65,7 @@ function RecipeEditor({ menu, items, ingredients, packaging }: { menu: MenuRecor
             {packRows.map((row) => <RecipeRow key={row.key} row={row} />)}
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.875rem", margin: "6px 0", cursor: "pointer" }}>
-            <input type="checkbox" name="sync_past_sales" value="true" defaultChecked />
+            <input type="checkbox" name="sync_past_sales" value="true" />
             <span>คำนวณต้นทุนย้อนหลังให้ออเดอร์เก่าที่เคยขายไปแล้วด้วย</span>
           </label>
           <p className="field-hint wide">{isAddonCategory(menu.category)
@@ -127,7 +127,7 @@ export default async function MenusPage() {
         <p className="cost-split">ไก่/วัตถุดิบหลัก {formatBaht(fixedFood)} · บรรจุภัณฑ์ {formatBaht(menu.packagingCost)} · วัตถุดิบอื่น {formatPercentBps(pooledRate.bps)} = {formatBaht(pool)}</p>
       )}
       <div className={`menu-margin ${profit < 0 || marginBps < 2000 ? "warn" : ""}`}>
-        {isService ? `กำไรเต็มจำนวน ${formatBaht(profit)}` : menu.cost === 0 ? "ยังไม่ได้ตั้งสูตร" : `กำไร ${formatBaht(profit)} · ${formatPercentBps(marginBps)}`}
+        {isService ? `กำไรขั้นต้น ${formatBaht(profit)}` : menu.cost === 0 ? "ยังไม่ได้ตั้งสูตร" : `กำไร ${formatBaht(profit)} · ${formatPercentBps(marginBps)}`}
       </div>
       {!isService ? (
         <RecipeEditor menu={menu} items={items} ingredients={ingredients} packaging={packaging} />

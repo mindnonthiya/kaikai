@@ -30,8 +30,8 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
 }
 
 /** PostgREST / Postgres codes for "table or column does not exist" — the database is missing a migration. */
-export const SCHEMA_OUTDATED_CODES = new Set(["PGRST204", "PGRST205", "42P01", "42703"]);
-export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน (เช่น 202610150001_costing_v2.sql) ใน SQL Editor";
+export const SCHEMA_OUTDATED_CODES = new Set(["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"]);
+export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน รวมถึง 202611010001_order_cost_consistency.sql ใน SQL Editor";
 
 /** Converts a Postgres/PostgREST error into a Thai message. */
 export function dbError(error: { code?: string; message: string }, context?: { unique?: string; foreignKey?: string }): never {

@@ -21,7 +21,7 @@ export const isServiceCategory = (category: string | null | undefined, name?: st
   return false;
 };
 export const isDishCategory = (category: string | null | undefined, name?: string) => {
-  return !isAddonCategory(category) && !isServiceCategory(category, name);
+  return (category ?? "").trim() !== "พิเศษ" && !isAddonCategory(category) && !isServiceCategory(category, name);
 };
 /** Expense category used to compare delivery income with fuel. */
 export const FUEL_CATEGORY = "ค่าน้ำมัน";
@@ -35,7 +35,7 @@ export const UTILITY_CATEGORIES = ["ค่าไฟ", "ค่าแก๊ส"];
 export type IngredientCosting = "per_unit" | "pooled";
 export const INGREDIENT_COSTING_LABELS: Record<IngredientCosting, string> = { per_unit: "นับต่อชิ้น", pooled: "คิดเป็น %" };
 
-export type SaleItemRecord = { menuId: string; name: string; category: string | null; quantity: number; revenue: number; cost: number };
+export type SaleItemRecord = { menuId: string; name: string; category: string | null; quantity: number; revenue: number; cost: number; packagingCost?: number };
 export type PaymentRecord = { method: PaymentMethod; amount: number };
 
 export type SaleRecord = {

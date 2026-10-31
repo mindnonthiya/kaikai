@@ -216,6 +216,9 @@ export async function syncHistoricalSalesCosts(form?: FormData): Promise<ActionS
       forceAll,
     });
 
+    invalidateQueryCache();
+    revalidatePath("/menus");
+    revalidatePath("/sales/new");
     revalidatePath("/dashboard");
     revalidatePath("/reports");
     revalidatePath("/sales");

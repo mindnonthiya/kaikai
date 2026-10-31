@@ -160,10 +160,10 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
   function addCustomItem() {
     const name = customName.trim();
     const priceSatang = tryBahtToSatang(customPrice);
-    const costSatang = customCost.trim() ? (tryBahtToSatang(customCost) ?? 0) : 0;
+    const costSatang = customCost.trim() ? tryBahtToSatang(customCost) : 0;
     if (!name) return;
     if (priceSatang === null || priceSatang < 0) return;
-    if (costSatang < 0) return;
+    if (costSatang === null || costSatang < 0) return;
     const newItem: CustomItem = {
       id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name,
@@ -325,6 +325,8 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         discount_satang: discountSatang,
         delivery_charged_satang: deliverySatang,
         tip_satang: tipSatang,
+        expected_net_revenue_satang: summary.netRevenue,
+        expected_cogs_satang: summary.cogs,
         payment_fee_satang: feeSatang,
         payment_amount_satang: paymentAmount,
         payment_method: payment,
@@ -342,7 +344,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         throw new Error(`บันทึกไม่สำเร็จ: ${error.message}`);
       }
       const saleId = String((data as { sale_id?: string })?.sale_id ?? "");
-      setResult({ ok: true, text: `บันทึกแล้ว · ยอด ${formatBaht(summary.netRevenue)} · กำไรขั้นต้น ${formatBaht(summary.grossProfit)}`, saleId });
+      setResult({ ok: true, text: `บันทึกแล้ว · ยอด ${formatBaht(Number((data as { net_revenue_satang: number }).net_revenue_satang))} · กำไรขั้นต้น ${formatBaht(Number((data as { gross_profit_satang: number }).gross_profit_satang))}`, saleId });
       resetForm();
       router.refresh();
     } catch (error) {

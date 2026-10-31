@@ -7,8 +7,8 @@ import { cancelSale } from "@/app/actions/sales";
 import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
 import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
-import { PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, type SaleRecord } from "@/lib/data/types";
-import { formatBaht } from "@/lib/money";
+import { PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isDishCategory, type SaleRecord } from "@/lib/data/types";
+import { customerAmountDue, formatBaht } from "@/lib/money";
 import { formatThaiShortDate, formatTime, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month"] as const;
@@ -26,7 +26,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const saleSettings = await fetchSaleSettings();
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const all = await fetchSales(range.start, range.end);
-  const uncalculatedCount = all.filter((s) => s.status === "confirmed" && s.cogs === 0 && s.netRevenue > 0).length;
+  const uncalculatedCount = all.filter((s) => s.status === "confirmed" && s.cogs === 0 && s.items.some(i => isDishCategory(i.category, i.name))).length;
   const needle = q.toLowerCase().replace(/^#/, "");
   const sales = needle
     ? all.filter((s) => String(s.saleNumber) === needle || (s.customerName ?? "").toLowerCase().includes(needle) || s.items.some((i) => i.name.toLowerCase().includes(needle)))
@@ -39,8 +39,8 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
     {uncalculatedCount > 0 && (
       <div className="warning-card" style={{ marginBottom: 16 }}>
         <div>
-          <strong>พบ {uncalculatedCount} ออเดอร์ที่บันทึกก่อนผูกสูตรต้นทุน (เช่น ออเดอร์ #16 - #24)</strong>
-          <p>ออเดอร์เหล่านี้ยังไม่ได้หักต้นทุนอาหาร ทำให้กำไรแสดงเท่ากับยอดขาย</p>
+          <strong>พบ {uncalculatedCount} ออเดอร์ที่มีเมนูอาหารแต่ต้นทุนเป็นศูนย์</strong>
+          <p>ตรวจสูตรก่อนคำนวณ หากมีต้นทุนจริงแต่ยังไม่ได้ระบุ กำไรจะสูงเกินจริง</p>
         </div>
         <ActionButton
           action={syncHistoricalSalesCosts}
@@ -100,8 +100,11 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
               )}
             </td>
             <td>{statusBadge(sale)}</td>
-            <td className="num"><strong>{formatBaht(sale.netRevenue)}</strong></td>
-            <td className="num">{formatBaht(sale.grossProfit)}</td>
+            <td className="num"><strong>{formatBaht(customerAmountDue(sale))}</strong>
+              {sale.fee > 0 && <><br /><small className="muted">หักค่าธรรมเนียม {formatBaht(sale.fee)} · สุทธิ {formatBaht(sale.netRevenue)}</small></>}
+              {sale.discount > 0 && <><br /><small className="muted">ส่วนลด {formatBaht(sale.discount)}</small></>}
+            </td>
+            <td className="num">{formatBaht(sale.netRevenue - sale.cogs)}<br /><small className="muted">ต้นทุน {formatBaht(sale.cogs)}</small></td>
             <td className="num">{sale.status === "confirmed" && <ActionButton action={cancelSale} fields={{ id: sale.id }} label="ยกเลิก" pendingLabel="กำลังยกเลิก…" confirmText={`ยกเลิกรายการ #${sale.saleNumber} ยอด ${formatBaht(sale.netRevenue)}?\nรายการจะไม่ถูกนับในยอดขายและกำไรอีก`} className="link-button danger" />}</td>
           </tr>)}
           {!sales.length && <tr><td colSpan={8}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีรายการขายในช่วงนี้"}</div></td></tr>}

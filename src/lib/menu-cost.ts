@@ -1,10 +1,9 @@
 // Recalculates menu cost. Used after menu, recipe, ingredient-purchase or packaging changes.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { readCostRows } from "@/lib/cost-rows";
 import { recipeCostParts } from "@/lib/analytics";
 import type { RecipeItemRecord } from "@/lib/data/types";
 import { dbError } from "@/lib/server-action";
-
-type Row = Record<string, unknown>;
 
 /**
  * cost per dish = per-piece ingredients in the recipe (chicken) + per-order packaging.
@@ -15,27 +14,24 @@ type Row = Record<string, unknown>;
  */
 export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: string[]) {
   if (menuIds && !menuIds.length) return;
-  let menuQuery = supabase.from("menus").select("id, current_cost_satang, packaging_cost_satang");
-  let recipeQuery = supabase.from("menu_recipe_items").select("menu_id,ingredient_id,packaging_item_id,quantity");
-  if (menuIds) {
-    menuQuery = menuQuery.in("id", menuIds);
-    recipeQuery = recipeQuery.in("menu_id", menuIds);
-  }
-  const [menus, recipes, ingredients, packaging] = await Promise.all([
-    menuQuery,
-    recipeQuery,
-    supabase.from("ingredients").select("id,costing,weighted_unit_cost_satang"),
-    supabase.from("packaging_items").select("id,unit_cost_satang,per_order"),
+  const [menuRows, recipeRows, ingredientRows, packagingRows] = await Promise.all([
+    readCostRows((from, to) => {
+      let q = supabase.from("menus").select("id,current_cost_satang,packaging_cost_satang");
+      if (menuIds) q = q.in("id", menuIds);
+      return q.order("id").range(from, to);
+    }),
+    readCostRows((from, to) => {
+      let q = supabase.from("menu_recipe_items").select("id,menu_id,ingredient_id,packaging_item_id,quantity");
+      if (menuIds) q = q.in("menu_id", menuIds);
+      return q.order("id").range(from, to);
+    }),
+    readCostRows((from, to) => supabase.from("ingredients").select("id,costing,weighted_unit_cost_satang").order("id").range(from, to)),
+    readCostRows((from, to) => supabase.from("packaging_items").select("id,unit_cost_satang,per_order").order("id").range(from, to)),
   ]);
-  if (menus.error) dbError(menus.error);
-  if (recipes.error) dbError(recipes.error);
-  if (ingredients.error) dbError(ingredients.error);
-  if (packaging.error) dbError(packaging.error);
-
-  const ingredientCost = new Map((ingredients.data as Row[]).filter((r) => r.costing !== "pooled").map((r) => [String(r.id), Number(r.weighted_unit_cost_satang)]));
-  const packagingCost = new Map((packaging.data as Row[]).filter((r) => r.per_order !== false).map((r) => [String(r.id), Number(r.unit_cost_satang)]));
+  const ingredientCost = new Map(ingredientRows.filter((r) => r.costing !== "pooled").map((r) => [String(r.id), Number(r.weighted_unit_cost_satang)]));
+  const packagingCost = new Map(packagingRows.filter((r) => r.per_order !== false).map((r) => [String(r.id), Number(r.unit_cost_satang)]));
   const byMenu = new Map<string, RecipeItemRecord[]>();
-  for (const r of recipes.data as Row[]) {
+  for (const r of recipeRows) {
     const menuId = String(r.menu_id);
     const list = byMenu.get(menuId) ?? [];
     list.push({ id: "", menuId, ingredientId: r.ingredient_id ? String(r.ingredient_id) : null, packagingItemId: r.packaging_item_id ? String(r.packaging_item_id) : null, quantity: Number(r.quantity) });
@@ -44,7 +40,7 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
 
   const now = new Date().toISOString();
   const updates: Promise<unknown>[] = [];
-  for (const menu of menus.data as Row[]) {
+  for (const menu of menuRows) {
     const parts = recipeCostParts(byMenu.get(String(menu.id)) ?? [], ingredientCost, packagingCost);
     const total = Math.round(parts.ingredients + parts.packaging);
     const pack = Math.round(parts.packaging);
@@ -67,7 +63,7 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
 
 /** Menu ids whose recipe uses the given ingredient or packaging item. */
 export async function menusUsing(supabase: SupabaseClient, column: "ingredient_id" | "packaging_item_id", itemId: string) {
-  const { data, error } = await supabase.from("menu_recipe_items").select("menu_id").eq(column, itemId);
-  if (error) dbError(error);
-  return [...new Set((data as Row[]).map((r) => String(r.menu_id)))];
+  const data = await readCostRows((from, to) => supabase.from("menu_recipe_items")
+    .select("id,menu_id").eq(column, itemId).order("id").range(from, to));
+  return [...new Set(data.map((r) => String(r.menu_id)))];
 }

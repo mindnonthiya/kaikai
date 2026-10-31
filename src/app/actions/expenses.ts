@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
+import { readCostRows } from "@/lib/cost-rows";
 import { weightedPricePerUnit } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import type { ExpenseKind, PaymentMethod } from "@/lib/data/types";
-import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { InputError, dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
@@ -26,6 +26,7 @@ function revalidateExpenses() {
   revalidatePath("/expenses/import-slips");
   revalidatePath("/ingredients");
   revalidatePath("/menus");
+  revalidatePath("/sales");
   revalidatePath("/sales/new");
   revalidatePath("/dashboard");
   revalidatePath("/reports");
@@ -95,7 +96,6 @@ async function deleteExpensesByIds(
   const affectedPackagingItemIds = new Set<string>();
   const affectedPerUnitIngMap = new Map<string, number>();
   const receiptPathsToCheck = new Set<string>();
-  let didDeletePurchase = false;
 
   // 1. Clean up linked packaging_purchases rows by expense_id in batch
   const { data: linkedPacks } = await supabase
@@ -115,7 +115,6 @@ async function deleteExpensesByIds(
       .from("packaging_purchases")
       .delete()
       .in("id", linkedPacks.map((p) => String((p as { id: unknown }).id)));
-    didDeletePurchase = true;
   }
 
   // Fallback for backfilled packaging_purchases where expense_id was null
@@ -134,7 +133,6 @@ async function deleteExpensesByIds(
         const p = fallbackPacks[0] as { id: unknown; packaging_item_id: unknown };
         affectedPackagingItemIds.add(String(p.packaging_item_id));
         await supabase.from("packaging_purchases").delete().eq("id", String(p.id));
-        didDeletePurchase = true;
       }
     }
   }
@@ -177,7 +175,6 @@ async function deleteExpensesByIds(
               .from("ingredient_purchases")
               .delete()
               .eq("id", String((ingPurchases[0] as { id: unknown }).id));
-            didDeletePurchase = true;
             if (String(matchedIng.costing) === "per_unit") {
               affectedPerUnitIngMap.set(
                 String(matchedIng.id),
@@ -209,10 +206,8 @@ async function deleteExpensesByIds(
 
   // 5. Recompute packaging unit cost once per affected packaging item
   for (const packItemId of affectedPackagingItemIds) {
-    const { data: purchases } = await supabase
-      .from("packaging_purchases")
-      .select("price_satang, pack_quantity")
-      .eq("packaging_item_id", packItemId);
+    const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases")
+      .select("id,price_satang,pack_quantity").eq("packaging_item_id", packItemId).order("id").range(from, to));
     if (purchases && purchases.length > 0) {
       let totalPrice = 0;
       let totalPieces = 0;
@@ -233,12 +228,8 @@ async function deleteExpensesByIds(
 
   // 6. Recompute per-unit ingredient cost once per affected per-unit ingredient
   for (const [ingId, unitsPerPurchaseUnit] of affectedPerUnitIngMap.entries()) {
-    const { data: purchases } = await supabase
-      .from("ingredient_purchases")
-      .select("purchased_at, price_satang, purchased_quantity")
-      .eq("ingredient_id", ingId)
-      .order("purchased_at", { ascending: false })
-      .limit(200);
+    const purchases = await readCostRows((from, to) => supabase.from("ingredient_purchases")
+      .select("id,purchased_at,price_satang,purchased_quantity").eq("ingredient_id", ingId).order("id").range(from, to));
     if (purchases && purchases.length > 0) {
       const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
         purchasedAt: String(p.purchased_at),
@@ -257,10 +248,6 @@ async function deleteExpensesByIds(
         .eq("id", ingId);
       await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingId));
     }
-  }
-
-  if (didDeletePurchase) {
-    await syncHistoricalCosts(supabase, { ownerId }).catch(() => undefined);
   }
 
   revalidateExpenses();
@@ -295,7 +282,7 @@ export type UpdateExpensePayload = {
  * Updates an existing expense row and keeps any linked packaging_purchases / ingredient_purchases row in sync.
  */
 export async function updateExpenseAction(payload: UpdateExpensePayload): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase }) => {
     const expenseId = payload.id?.trim();
     if (!expenseId) throw new InputError("ไม่พบรหัสรายการค่าใช้จ่าย");
     const description = payload.description?.trim().slice(0, 200);
@@ -324,8 +311,6 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
     if (readErr) dbError(readErr);
     if (!existing) throw new InputError("ไม่พบรายการค่าใช้จ่ายที่ต้องการแก้ไข");
 
-    let didUpdatePurchase = false;
-
     // 1. Sync linked packaging_purchases if any
     const { data: linkedPacks } = await supabase
       .from("packaging_purchases")
@@ -343,12 +328,9 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
           vendor: payee,
         })
         .eq("id", String(p.id));
-      didUpdatePurchase = true;
 
-      const { data: purchases } = await supabase
-        .from("packaging_purchases")
-        .select("price_satang, pack_quantity")
-        .eq("packaging_item_id", packItemId);
+      const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases")
+      .select("id,price_satang,pack_quantity").eq("packaging_item_id", packItemId).order("id").range(from, to));
       if (purchases && purchases.length > 0) {
         let totalPrice = 0;
         let totalPieces = 0;
@@ -404,17 +386,12 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
                 vendor: payee,
               })
               .eq("id", String((ingPurchases[0] as { id: unknown }).id));
-            didUpdatePurchase = true;
 
             if (String(matchedIng.costing) === "per_unit") {
               const ingId = String(matchedIng.id);
               const unitsPerPurchaseUnit = Number(matchedIng.units_per_purchase_unit) || 1;
-              const { data: purchases } = await supabase
-                .from("ingredient_purchases")
-                .select("purchased_at, price_satang, purchased_quantity")
-                .eq("ingredient_id", ingId)
-                .order("purchased_at", { ascending: false })
-                .limit(200);
+              const purchases = await readCostRows((from, to) => supabase.from("ingredient_purchases")
+      .select("id,purchased_at,price_satang,purchased_quantity").eq("ingredient_id", ingId).order("id").range(from, to));
               if (purchases && purchases.length > 0) {
                 const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
                   purchasedAt: String(p.purchased_at),
@@ -454,10 +431,6 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
       })
       .eq("id", expenseId);
     if (updateErr) dbError(updateErr);
-
-    if (didUpdatePurchase) {
-      await syncHistoricalCosts(supabase, { ownerId: user.id }).catch(() => undefined);
-    }
 
     revalidateExpenses();
     return { ok: true, message: "บันทึกการแก้ไขเรียบร้อยแล้ว" };

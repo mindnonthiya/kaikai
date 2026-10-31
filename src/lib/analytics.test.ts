@@ -79,12 +79,12 @@ describe("summarize", () => {
 
 describe("rankings and breakdowns", () => {
   it("ranks menus by profit using sale snapshots", () => {
-    const rows = menuRanking([sale(), sale({ id: "s2", items: [{ menuId: "m2", name: "พิเศษ", category: "ข้าวกล่อง", quantity: 1, revenue: 7500, cost: 4120 }] })]);
+    const rows = menuRanking([sale(), sale({ id: "s2", productRevenue: 7500, netRevenue: 7500, cogs: 4120, grossProfit: 3380, items: [{ menuId: "m2", name: "พิเศษ", category: "ข้าวกล่อง", quantity: 1, revenue: 7500, cost: 4120 }] })]);
     expect(rows.map((r) => r.menuId)).toEqual(["m1", "m2"]);
     expect(rows[0]).toMatchObject({ quantity: 2, profit: 5450 });
   });
   it("lists add-ons after dishes even when they earn more", () => {
-    const rows = menuRanking([sale({ items: [
+    const rows = menuRanking([sale({ productRevenue: 46900, netRevenue: 46900, cogs: 13000, grossProfit: 33900, items: [
       { menuId: "a1", name: "ไก่เพิ่ม", category: "เพิ่มเติม", quantity: 50, revenue: 40000, cost: 10000 },
       { menuId: "m1", name: "ข้าวไก่", category: "ข้าวกล่อง", quantity: 1, revenue: 6900, cost: 3000 },
     ] })]);

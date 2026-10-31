@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
+import { readCostRows } from "@/lib/cost-rows";
 import { learnedYield, weightedPricePerUnit, yieldWindow } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
-import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
 import { InputError, amountOrZero, dateField, dbError, id, money, oneOf, optionalText, quantity, runAction, text } from "@/lib/server-action";
@@ -23,6 +23,7 @@ function revalidateCosts() {
   invalidateQueryCache("pooled_rate");
   revalidatePath("/ingredients");
   revalidatePath("/menus");
+  revalidatePath("/sales");
   revalidatePath("/sales/new");
   revalidatePath("/expenses");
   revalidatePath("/expenses/import-slips");
@@ -122,9 +123,8 @@ async function piecesSold(supabase: SupabaseClient, ingredientId: string, start:
  * cost per piece = price per กก. ÷ pieces per กก.; then menus using it are re-costed.
  */
 async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitIngredient) {
-  const { data, error } = await supabase.from("ingredient_purchases").select("purchased_at,price_satang,purchased_quantity")
-    .eq("ingredient_id", ingredient.id).order("purchased_at", { ascending: false }).limit(200);
-  if (error) dbError(error);
+  const data = await readCostRows((from, to) => supabase.from("ingredient_purchases").select("id,purchased_at,price_satang,purchased_quantity")
+    .eq("ingredient_id", ingredient.id).order("id").range(from, to));
   const purchases = (data as Row[]).map((p) => ({
     purchasedAt: String(p.purchased_at), price: Number(p.price_satang),
     quantity: p.purchased_quantity === null ? null : Number(p.purchased_quantity),
@@ -302,8 +302,7 @@ async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string
     dbError(error);
   }
 
-  const { data: purchases, error: sumError } = await supabase.from("packaging_purchases").select("price_satang,pack_quantity").eq("packaging_item_id", item.id);
-  if (sumError) dbError(sumError);
+  const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases").select("id,price_satang,pack_quantity").eq("packaging_item_id", item.id).order("id").range(from, to));
   let totalPrice = 0, totalPieces = 0;
   for (const p of purchases as Row[]) { totalPrice += Number(p.price_satang); totalPieces += Number(p.pack_quantity); }
   const unitCost = totalPieces > 0 ? roundCost(totalPrice / totalPieces) : 0;
@@ -624,7 +623,6 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
       notes.push(await refreshPerUnitCost(supabase, ingredient));
     }
 
-    await syncHistoricalCosts(supabase, { ownerId: user.id }).catch(() => undefined);
     revalidateCosts();
 
     return {

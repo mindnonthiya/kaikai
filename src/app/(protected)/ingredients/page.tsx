@@ -41,17 +41,24 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
   const [ingredients, packaging, purchases, latest, packPurchases, pooledRate] = await Promise.all([
     fetchIngredients(), fetchPackaging(), fetchRecentPurchases(20), fetchLatestPurchases(), fetchPackagingPurchases(), fetchPooledRate(),
   ]);
+
   const saleSettings = await fetchSaleSettings();
   const now = new Date();
   const today = bangkokDayKey(now, saleSettings.dayStartHour);
   const maxDate = bangkokDayKey(now);
   const latestPack = new Map<string, PackagingPurchaseRecord>();
-  for (const p of packPurchases) if (!latestPack.has(p.packagingItemId)) latestPack.set(p.packagingItemId, p);
+  const allPackByItem = new Map<string, PackagingPurchaseRecord[]>();
+  for (const p of packPurchases) {
+    if (!latestPack.has(p.packagingItemId)) latestPack.set(p.packagingItemId, p);
+    const list = allPackByItem.get(p.packagingItemId) ?? [];
+    list.push(p);
+    allPackByItem.set(p.packagingItemId, list);
+  }
 
   const activePackaging = packaging.filter((p) => p.isActive);
   const restockItems: RestockItem[] = activePackaging.map((p) => {
     const last = latestPack.get(p.id);
-    const defaults = resolvePackagingDefaultPack(p, last);
+    const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id));
     return {
       id: p.id, name: p.name, unit: p.unit, perOrder: p.perOrder,
       packPrice: defaults.packPrice,
@@ -214,7 +221,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <tbody>
               {packaging.map((p) => {
                 const last = latestPack.get(p.id);
-                const defaults = resolvePackagingDefaultPack(p, last);
+                const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id));
                 return <tr key={p.id}>
                   <td><strong>{p.name}</strong></td>
                   <td><span className={`status ${p.perOrder ? "success" : "muted"}`}>{p.perOrder ? "ต่อออเดอร์" : "ลงค่าใช้จ่าย"}</span></td>
