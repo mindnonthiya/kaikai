@@ -1,4 +1,6 @@
 import { Download, TrendingUp } from "lucide-react";
+import { syncHistoricalSalesCosts } from "@/app/actions/settings";
+import { ActionButton } from "@/components/action-form";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
@@ -20,6 +22,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const curSales = filterSales(sales, range.start, range.end);
   const curExpenses = filterExpenses(expenses, range.start, range.end);
   const current = summarize(curSales, curExpenses);
+
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
   const days = Math.round((range.end.getTime() - range.start.getTime()) / DAY_MS);
   const daily = dailySeries(curSales, curExpenses, range.start, days, undefined, dayStartHour).reverse();
@@ -36,7 +39,23 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const missingUtilities = UTILITY_CATEGORIES.filter((c) => !curExpenses.some((e) => e.category.trim() === c));
 
   return <>
-    <PageTitle eyebrow="ผลประกอบการ" title="รายงาน" description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ" action={<a className="primary-button" href={`/api/reports/export?range=${key}`}><Download size={17} /> ส่งออก CSV</a>} />
+    <PageTitle
+      eyebrow="ผลประกอบการ"
+      title="รายงาน"
+      description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ"
+      action={
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <ActionButton
+            action={syncHistoricalSalesCosts}
+            fields={{ force_all: "true" }}
+            label="ใช้ต้นทุนปัจจุบันคำนวณบิลย้อนหลัง"
+            pendingLabel="กำลังคำนวณ…"
+            className="secondary-button"
+          />
+          <a className="primary-button" href={`/api/reports/export?range=${key}`}><Download size={17} /> ส่งออก CSV</a>
+        </div>
+      }
+    />
     <RangeTabs basePath="/reports" options={[...RANGES]} active={key} />
     <div className="stat-grid main-stats">
       <StatCard label="ยอดขาย" value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), "ช่วงก่อน") ?? `${current.saleCount} รายการ`} tone="blue" icon={TrendingUp} />
@@ -52,21 +71,26 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     <div className="stat-grid mini-stats">
       <StatCard label="ค่าส่งที่เก็บได้" value={formatBaht(current.deliveryIncome)} detail={`${current.deliveryCount.toLocaleString("th-TH")} ออเดอร์ส่ง`} />
       <StatCard label="ค่าน้ำมัน" value={formatBaht(current.fuelExpenses)} detail="จากหน้าค่าใช้จ่าย หมวดค่าน้ำมัน" />
-      <StatCard label="กำไรจากการส่ง" value={formatBaht(current.deliveryIncome - current.fuelExpenses)} detail="ค่าส่ง − ค่าน้ำมัน" />
+      <StatCard label="ค่าส่งหักค่าน้ำมัน" value={formatBaht(current.deliveryIncome - current.fuelExpenses)} detail="ค่าส่ง − ค่าน้ำมัน" />
       <StatCard label="ต้นทุนบรรจุภัณฑ์" value={formatBaht(current.packagingCost)} detail={current.boxes ? `เฉลี่ย ${formatBaht(Math.round(current.packagingCost / current.boxes))}/กล่อง` : "รวมอยู่ในต้นทุนสินค้าแล้ว"} />
     </div>
     <div className="stat-grid mini-stats">
+      <StatCard label="ต้นทุนเฉลี่ย/ออเดอร์" value={formatBaht(current.averageCostPerOrder)} detail="ต้นทุนที่บันทึกในบิล รวมบรรจุภัณฑ์" />
+      <StatCard label="กำไรขั้นต้นเฉลี่ย/ออเดอร์" value={formatBaht(current.averageProfitPerOrder)} detail="ก่อนหักค่าใช้จ่ายดำเนินงาน" />
+      <StatCard label="ต้นทุนบริการ/รายการพิเศษ" value={formatBaht(current.otherDirectCost)} detail="รวมอยู่ในต้นทุนออเดอร์แล้ว แยกจากวัตถุดิบอาหาร" />
+    </div>
+    <div className="stat-grid mini-stats">
       <StatCard label="ค่าใช้จ่ายดำเนินงาน/กล่อง" value={perBox(current.operatingExpenses)} detail={`รวม ${formatBaht(current.operatingExpenses)} ÷ ${current.boxes.toLocaleString("th-TH")} กล่อง`} />
-      <StatCard label="กำไรสุทธิ/กล่อง" value={perBox(current.netProfit)} detail="หลังหักค่าใช้จ่ายดำเนินงาน" />
+      <StatCard label="กำไรรวม ÷ กล่องอาหาร" value={perBox(current.netProfit)} detail="รวมกำไรบริการและของเพิ่ม หลังหักค่าใช้จ่ายดำเนินงาน" />
       <StatCard label="ต้นทุนวัตถุดิบ (ประมาณ)" value={formatBaht(current.foodCost)} detail="คำนวณจากสูตร + % ตอนขาย" />
       <StatCard label="ซื้อวัตถุดิบจริง" value={formatBaht(actualFood)} detail={actualFood ? `ไก่ ${formatBaht(actualPerUnit)} · อื่น ๆ ${formatBaht(actualPooled)}` : "ยังไม่มีการซื้อในช่วงนี้"} />
     </div>
 
     <section className="panel spaced">
-      <div className="panel-head"><div><h2>กำไรสุทธิจากยอดซื้อจริง</h2><p>ใช้ยอดซื้อวัตถุดิบในช่วงนี้แทนต้นทุนประมาณ — ดูเทียบกันทั้งเดือนจะแม่นกว่ารายวัน (ซื้อมาตุนได้)</p></div></div>
+      <div className="panel-head"><div><h2>ส่วนต่างเมื่อใช้ยอดซื้อวัตถุดิบ</h2><p>ใช้เปรียบเทียบยอดซื้อกับต้นทุนสูตรเท่านั้น ยังไม่ใช่กำไรจากการใช้จริง เพราะไม่ได้ปรับสต็อกต้นงวดและปลายงวด</p></div></div>
       <div className="summary-row"><span>กำไรสุทธิ (ต้นทุนประมาณ)</span><strong>{formatBaht(current.netProfit)}</strong></div>
       <div className="summary-row"><span>{foodGap >= 0 ? "ซื้อจริงน้อยกว่าประมาณ" : "ซื้อจริงมากกว่าประมาณ"}</span><strong>{foodGap >= 0 ? "+" : "−"}{formatBaht(Math.abs(foodGap))}</strong></div>
-      <div className="summary-total"><span>กำไรสุทธิจากยอดซื้อจริง</span><strong>{formatBaht(netFromPurchases)}</strong></div>
+      <div className="summary-total"><span>ส่วนต่างเมื่อใช้ยอดซื้อวัตถุดิบ</span><strong>{formatBaht(netFromPurchases)}</strong></div>
       {missingUtilities.length > 0 && <p className="muted-note">ช่วงนี้ยังไม่มี {missingUtilities.join(" / ")} — บิลมาแล้วลงในหน้าค่าใช้จ่าย กำไรสุทธิจะลดลงตามจริง</p>}
     </section>
 
@@ -79,7 +103,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
           {!menus.length && <tr><td colSpan={6}><div className="empty-state">ยังไม่มียอดขายในช่วงนี้</div></td></tr>}
         </tbody>
       </table>
-      <p className="table-footnote">ต้นทุนรายเมนูใช้บรรจุภัณฑ์ตามสูตร ส่วนยอดด้านบนใช้บรรจุภัณฑ์ที่ให้จริงแต่ละออเดอร์ และยอดรายเมนูยังไม่หักส่วนลด ไม่รวมค่าส่ง ผลรวมจึงอาจต่างกันเล็กน้อย</p>
+      <p className="table-footnote">ส่วนลดแบ่งตามยอดขายแต่ละรายการ บรรจุภัณฑ์ที่ให้จริงแบ่งตามสัดส่วนสูตร ส่วนค่าส่ง ทิป และค่าธรรมเนียมแสดงแยกท้ายตาราง ผลรวมตรงกับกำไรขั้นต้นของออเดอร์</p>
     </section>
 
     <section className="panel table-panel spaced">

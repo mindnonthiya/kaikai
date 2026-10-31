@@ -60,6 +60,7 @@ export function calculateSale(input: {
   const productRevenue = lines.reduce((sum, line) => sum + line.revenue, 0);
   const cogs = lines.reduce((sum, line) => sum + line.cost, 0) + packagingCost;
   const netRevenue = productRevenue - discount + deliveryCharged + tip - paymentFee;
+  if (discount > productRevenue) throw new Error("ส่วนลดต้องไม่เกินยอดสินค้า");
   if (netRevenue < 0) throw new Error("รายได้สุทธิต้องไม่ติดลบ");
   const grossProfit = netRevenue - cogs;
   const boxes = input.items.reduce((sum, item) => sum + item.quantity, 0);
@@ -113,4 +114,38 @@ export function satangToBahtInput(value: number) {
 /** Like bahtToSatang but returns null instead of throwing (for live form previews). */
 export function tryBahtToSatang(value: string): Satang | null {
   try { return bahtToSatang(value || "0"); } catch { return null; }
+}
+
+/** Amount owed by a customer before the shop's payment processing fee. */
+export function customerAmountDue(sale: { productRevenue: number; discount: number; delivery: number; tip?: number }) {
+  return satang(sale.productRevenue - sale.discount + sale.delivery + (sale.tip ?? 0));
+}
+
+/** Exact largest-remainder allocation in whole satang, with stable tie breaking. */
+export function allocateSatang(total: number, weights: number[]): number[] {
+  assertSafeInteger(total, "ยอดแบ่ง");
+  if (!weights.length) return [];
+  weights.forEach(w => { assertSafeInteger(w, "น้ำหนัก"); if (w < 0) throw new Error("น้ำหนักห้ามติดลบ"); });
+  const effective = weights.some(w => w > 0) ? weights : weights.map(() => 1);
+  const denominator = effective.reduce((sum, w) => sum + BigInt(w), BigInt(0));
+  const amount = BigInt(Math.abs(total));
+  const numerators = effective.map(w => amount * BigInt(w));
+  const parts = numerators.map(n => Number(n / denominator));
+  const remainder = Math.abs(total) - parts.reduce((sum, n) => sum + n, 0);
+  const order = numerators.map((n, i) => ({ i, remainder: n % denominator })).sort((a, b) => a.remainder > b.remainder ? -1 : a.remainder < b.remainder ? 1 : a.i - b.i);
+  for (let i = 0; i < remainder; i++) parts[order[i].i]++;
+  return parts.map(n => total < 0 ? -n : n);
+}
+
+/** Match numeric(18,6) unit costs × numeric(16,4) quantities, rounded after summing. */
+export function roundedMaterialCost(lines: Array<{ unitCost: number; quantity: number }>) {
+  const scale = BigInt(10_000_000_000);
+  const sum = lines.reduce((total, line) => {
+    if (!Number.isFinite(line.unitCost) || !Number.isFinite(line.quantity) || line.unitCost < 0 || line.quantity < 0) throw new Error("ต้นทุนหรือจำนวนไม่ถูกต้อง");
+    const cost = Math.round(line.unitCost * 1_000_000);
+    const quantity = Math.round(line.quantity * 10_000);
+    assertSafeInteger(cost, "ต้นทุน"); assertSafeInteger(quantity, "จำนวน");
+    return total + BigInt(cost) * BigInt(quantity);
+  }, BigInt(0));
+  return satang(Number((sum + scale / BigInt(2)) / scale));
 }

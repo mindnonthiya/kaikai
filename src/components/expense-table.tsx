@@ -120,23 +120,46 @@ export function ExpenseTable({
         );
         if (matchedPack) {
           const rest = desc.slice(`ซื้อ${matchedPack.name}`.length).trim();
+          const defaultPerPack = Number((matchedPack.perPack || "1").replace(/,/g, "")) || 1;
           const multiPackMatch = rest.match(/^([\d,]+)\s*แพ็ก\s*\(([\d,.]+)/);
           const singlePackMatch = rest.match(/^([\d,.]+)/);
           if (multiPackMatch) {
             const packs = Math.max(1, parseInt(multiPackMatch[1].replace(/,/g, ""), 10) || 1);
             const totalPieces = Number(multiPackMatch[2].replace(/,/g, "")) || 1;
+            const rawPerPack = Math.round((totalPieces / packs) * 100) / 100;
+            const effectivePerPack =
+              rawPerPack;
             base.packaging[matchedPack.id] = {
               packs,
               priceBaht: satangToBahtInput(Math.round(r.amount / packs)),
-              perPack: String(Math.round((totalPieces / packs) * 100) / 100),
+              perPack: String(effectivePerPack),
             };
             continue;
           } else if (singlePackMatch) {
-            const pieces = Number(singlePackMatch[1].replace(/,/g, "")) || 1;
+            const rawNum = Number(singlePackMatch[1].replace(/,/g, "")) || 1;
+            const isPackWord = /แพ็ก/.test(rest);
+            if (isPackWord) {
+              const packs = Math.max(1, Math.round(rawNum));
+              base.packaging[matchedPack.id] = {
+                packs,
+                priceBaht: satangToBahtInput(Math.round(r.amount / packs)),
+                perPack: String(defaultPerPack),
+              };
+            } else {
+              const effectivePieces =
+                rawNum;
+              base.packaging[matchedPack.id] = {
+                packs: 1,
+                priceBaht: satangToBahtInput(r.amount),
+                perPack: String(effectivePieces),
+              };
+            }
+            continue;
+          } else {
             base.packaging[matchedPack.id] = {
               packs: 1,
               priceBaht: satangToBahtInput(r.amount),
-              perPack: String(pieces),
+              perPack: String(defaultPerPack),
             };
             continue;
           }

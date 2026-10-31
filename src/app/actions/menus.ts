@@ -153,6 +153,7 @@ export async function saveMenuRecipe(form: FormData): Promise<ActionState> {
         }
       } catch (err) {
         console.warn("Failed to sync historical sales costs for menu:", err);
+        syncedMessage = " แต่คำนวณบิลย้อนหลังไม่สำเร็จ กรุณาลองใหม่จากหน้ารายงาน";
       }
     }
 

@@ -14,6 +14,7 @@ export type Database = {
     Views: Record<string, never>;
     Functions: {
       create_sale: { Args: { payload: Json }; Returns: Json };
+      recalculate_order_costs: { Args: { p_menu_id?: string | null; p_force_all?: boolean }; Returns: Json };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

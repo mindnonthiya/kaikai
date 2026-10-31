@@ -1,7 +1,7 @@
 // Server-side data access. Reads through the signed-in user's session, so Row Level Security limits rows to that user.
 // When Supabase is not configured every function returns empty data (there is no sample data).
 import { cache } from "react";
-import { COSTING_WINDOW_DAYS, pooledIngredientBps } from "@/lib/analytics";
+import { COSTING_WINDOW_DAYS, pooledFoodRevenue, pooledIngredientBps } from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
 import { createClient } from "@/lib/supabase/server";
@@ -105,8 +105,8 @@ async function fetchAll(what: string, build: (from: number, to: number) => Promi
   }
 }
 
-const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
-const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
+const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,tip_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang,packaging_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
+const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang,packaging_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
 
 let cachedHasTipColumn: boolean | null = null;
 
@@ -139,7 +139,7 @@ function mapSale(row: Row): SaleRecord {
     packagingCost: num(row.packaging_cost_satang),
     netRevenue,
     cogs: num(row.cogs_satang),
-    grossProfit: num(row.gross_profit_satang),
+    grossProfit: netRevenue - num(row.cogs_satang),
     slipPath: strOrNull(one(row.slip_uploads)?.storage_path),
     items: rows(row.sale_items).map((item) => ({
       menuId: str(item.menu_id),
@@ -148,6 +148,7 @@ function mapSale(row: Row): SaleRecord {
       quantity: num(item.quantity),
       revenue: num(item.line_revenue_satang),
       cost: num(item.line_cost_satang),
+      packagingCost: num(item.packaging_cost_satang),
     })),
     payments: rows(row.payments).map((payment) => ({ method: str(payment.method) as PaymentMethod, amount: num(payment.amount_satang) })),
   };
@@ -446,20 +447,20 @@ export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<Po
   const supabase = await createClient();
   const now = Date.now();
   const first = await supabase.from("ingredient_purchases").select("purchased_at,ingredients!inner(costing)")
-    .eq("ingredients.costing", "pooled").order("purchased_at").limit(1);
+    .eq("ingredients.costing", "pooled").lte("purchased_at", new Date(now).toISOString()).order("purchased_at").limit(1);
   if (first.error) fail("การซื้อวัตถุดิบ", first.error);
   const firstAt = rows(first.data)[0]?.purchased_at;
   if (!firstAt) return setCached(cacheKey, { ...pooledIngredientBps(empty), ...empty }, 60_000);
   const start = new Date(Math.max(now - COSTING_WINDOW_DAYS * DAY_MS, Date.parse(str(firstAt))));
   const [purchases, sales] = await Promise.all([
     fetchAll("การซื้อวัตถุดิบ", (from, to) => supabase.from("ingredient_purchases").select("price_satang,ingredients!inner(costing)")
-      .eq("ingredients.costing", "pooled").gte("purchased_at", start.toISOString()).range(from, to)),
-    fetchAll("ข้อมูลการขาย", (from, to) => supabase.from("sales").select("product_revenue_satang")
-      .eq("status", "confirmed").gte("sold_at", start.toISOString()).range(from, to)),
+      .eq("ingredients.costing", "pooled").gte("purchased_at", start.toISOString()).lte("purchased_at", new Date(now).toISOString()).order("id").range(from, to)),
+    fetchAll("ข้อมูลการขาย", (from, to) => supabase.from("sale_items").select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at)")
+      .eq("sales.status", "confirmed").gte("sales.sold_at", start.toISOString()).lte("sales.sold_at", new Date(now).toISOString()).order("id").range(from, to)),
   ]);
   const input = {
     pooledPurchases: purchases.reduce((sum, r) => sum + num(r.price_satang), 0),
-    foodRevenue: sales.reduce((sum, r) => sum + num(r.product_revenue_satang), 0),
+    foodRevenue: pooledFoodRevenue(sales.map(r => ({ menuId: strOrNull(r.menu_id), category: strOrNull(r.menu_category_snapshot), name: str(r.menu_name_snapshot), revenue: num(r.line_revenue_satang) }))),
     historyDays: Math.floor((now - start.getTime()) / DAY_MS),
     initialBps,
   };

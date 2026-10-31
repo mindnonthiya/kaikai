@@ -26,12 +26,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
   const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate(saleSettings)]);
 
+  const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
   const current = summarize(filterSales(sales, range.start, range.end), filterExpenses(expenses, range.start, range.end));
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
-  const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
   const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now, dayStartHour), dayStartHour);
   const chartRevenue = chart.reduce((sum, p) => sum + p.revenue, 0);
-  const ranking = menuRanking(filterSales(sales, range.start, range.end)).filter((row) => !row.isAddon).slice(0, 3);
+  const ranking = menuRanking(filterSales(sales, range.start, range.end)).filter((row) => !row.isAddon && !row.isAdjustment).slice(0, 3);
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
   const warnings = menuCostWarnings(menus, 2000, pooled.bps);
   const label = range.label;
@@ -56,7 +56,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       <StatCard label={`กำไรสุทธิ${label}`} value={formatBaht(current.netProfit)} detail={current.revenue ? `${formatPercentBps(current.netMarginBps)} ของยอดขาย` : "ยังไม่มียอดขาย"} tone="green" icon={Wallet} />
     </section>
     <section className="stat-grid mini-stats">
-      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรเฉลี่ย ${formatBaht(current.averageProfitPerBox)}/กล่อง${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} />
+      <StatCard label="จำนวนกล่อง" value={`${current.boxes.toLocaleString("th-TH")} กล่อง`} detail={current.boxes ? `กำไรรวม ÷ กล่องอาหาร ${formatBaht(current.averageProfitPerBox)}${current.deliveryCount ? ` · ส่ง ${current.deliveryCount} ออเดอร์` : ""}` : undefined} />
       <StatCard label="ต้นทุนของที่ขาย" value={formatBaht(current.cogs)} detail="หักตามจำนวนจานที่ขายจริง" />
       <StatCard label="เงินเข้าบัญชี (สุทธิ)" value={formatBaht(current.netTransfer)} detail={`โอนเข้า ${formatBaht(current.payments.transfer)} − โอนออก ${formatBaht(current.expensePayments.transfer)}`} />
       <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} detail={current.outstanding ? "บิลที่ลูกค้ายังไม่โอนหรือโอนไม่ครบ" : "ได้รับเงินครบทุกบิล"} />

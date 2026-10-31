@@ -1,4 +1,5 @@
 // Builds the list used to tick off a day's records against the bank app statement.
+import { customerAmountDue } from "@/lib/money";
 import { countsAsRevenue } from "@/lib/analytics";
 import type { ExpenseRecord, SaleRecord } from "@/lib/data/types";
 
@@ -45,7 +46,7 @@ export function buildBankCheck(sales: SaleRecord[], expenses: ExpenseRecord[]): 
     }
     if (transfer > 0) incoming.push({ id: `s:${sale.id}`, direction: "in", at: sale.soldAt, hasTime: true, label, detail, amount: transfer, source: "sale", sourceId: sale.id });
     if (other > 0) notViaBank.push({ id: `s:${sale.id}:other`, direction: "in", at: sale.soldAt, hasTime: true, label, detail: "บันทึกเป็นเงินสด/อื่น ๆ", amount: other, source: "sale", sourceId: sale.id });
-    const due = sale.netRevenue - paid;
+    const due = customerAmountDue(sale) - paid;
     if (due > 0) outstanding.push({ id: sale.id, saleNumber: sale.saleNumber, customerName: sale.customerName, soldAt: sale.soldAt, amount: due });
   }
 

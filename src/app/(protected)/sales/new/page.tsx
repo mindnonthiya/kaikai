@@ -2,7 +2,7 @@ import Link from "next/link";
 import { PageTitle } from "@/components/page-title";
 import { SaleComposer, type MenuOption, type PackagingOption } from "./sale-composer";
 import { fetchMenus, fetchPackaging, fetchPooledRate, fetchPricePresets, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
-import { pooledCost } from "@/lib/analytics";
+import { menuFoodCost } from "@/lib/analytics";
 import { isAddonCategory, isServiceCategory } from "@/lib/data/types";
 
 export default async function NewSalePage() {
@@ -28,11 +28,11 @@ export default async function NewSalePage() {
         name: menu.name,
         category: menu.category,
         price: menu.price,
-        foodCost: isService ? 0 : Math.max(0, menu.cost - menu.packagingCost) + pooledCost(menu.price, pooled.bps),
+        foodCost: menuFoodCost(menu, pooled.bps),
         imagePath: menu.imagePath,
         isAddon,
         isService,
-        packaging: isService || isAddon
+        packaging: isService
           ? []
           : recipeItems
               .filter((item) => item.menuId === menu.id && item.packagingItemId && packagingIds.has(item.packagingItemId))

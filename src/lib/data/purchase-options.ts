@@ -12,44 +12,22 @@ import type { PackagingPurchaseRecord, PackagingRecord } from "./types";
 const bahtInput = (value: number) => (value > 0 ? satangToBahtInput(Math.round(value)) : "");
 const trimZeros = (value: number) => String(Math.round(value * 10_000) / 10_000);
 
-/**
- * Resolves default packPrice and perPack for a packaging item:
- * 1. Latest row in packaging_purchases (if any)
- * 2. Inferred from packaging_items.unitCost (unit_cost_satang) so deleting purchase history never wipes out known prices
- */
+/** Use recorded quantities; without history show the known price for one piece. */
 export function resolvePackagingDefaultPack(
   p: PackagingRecord,
-  last?: PackagingPurchaseRecord
+  last?: PackagingPurchaseRecord,
+  allPurchasesForItem?: PackagingPurchaseRecord[],
 ): { packPrice: string; perPack: string } {
-  if (last && last.packCount > 0 && last.packQuantity > 0) {
+  const purchase = last ?? allPurchasesForItem?.[0];
+  if (purchase && purchase.packCount > 0 && purchase.packQuantity > 0) {
     return {
-      packPrice: satangToBahtInput(Math.round(last.price / last.packCount)),
-      perPack: trimZeros(last.packQuantity / last.packCount),
+      packPrice: satangToBahtInput(Math.round(purchase.price / purchase.packCount)),
+      perPack: trimZeros(purchase.packQuantity / purchase.packCount),
     };
   }
-
-  if (p.unitCost > 0) {
-    const name = p.name.trim();
-    let inferredPerPack = 25;
-    if (name.includes("ถ้วย")) {
-      inferredPerPack = 50;
-    } else if (name.includes("กล่อง") || name.includes("ช้อน") || name.includes("ส้อม") || name.includes("ซ้อม")) {
-      inferredPerPack = 25;
-    } else {
-      const candidates = [25, 50, 100, 20, 10, 1];
-      const cleanMatch = candidates.find((size) => Math.round(p.unitCost * size) % 100 === 0);
-      inferredPerPack = cleanMatch ?? 1;
-    }
-    const inferredPackPriceSatang = Math.round(p.unitCost * inferredPerPack);
-    if (inferredPackPriceSatang > 0) {
-      return {
-        packPrice: satangToBahtInput(inferredPackPriceSatang),
-        perPack: trimZeros(inferredPerPack),
-      };
-    }
-  }
-
-  return { packPrice: "", perPack: "" };
+  return p.unitCost > 0
+    ? { packPrice: satangToBahtInput(Math.round(p.unitCost)), perPack: "1" }
+    : { packPrice: "", perPack: "" };
 }
 
 export type PurchaseCatalog = {
@@ -67,16 +45,20 @@ export async function fetchPurchaseCatalog(): Promise<PurchaseCatalog> {
   ]);
 
   const latestPack = new Map<string, PackagingPurchaseRecord>();
+  const allPackByItem = new Map<string, PackagingPurchaseRecord[]>();
   for (const p of packPurchases) {
     if (!latestPack.has(p.packagingItemId)) {
       latestPack.set(p.packagingItemId, p);
     }
+    const list = allPackByItem.get(p.packagingItemId) ?? [];
+    list.push(p);
+    allPackByItem.set(p.packagingItemId, list);
   }
 
   const activePackaging = packaging.filter((p) => p.isActive);
   const restockItems: RestockItem[] = activePackaging.map((p) => {
     const last = latestPack.get(p.id);
-    const defaults = resolvePackagingDefaultPack(p, last);
+    const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id));
     return {
       id: p.id,
       name: p.name,

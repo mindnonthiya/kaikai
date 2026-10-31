@@ -1,6 +1,6 @@
 import { hasSupabaseEnv } from "@/lib/env";
 import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
-import { FULFILLMENT_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isAddonCategory } from "@/lib/data/types";
+import { FULFILLMENT_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isDishCategory } from "@/lib/data/types";
 import { satangToBahtInput } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import { formatThaiDateTime, parseRange, resolveRange } from "@/lib/time";
@@ -28,14 +28,14 @@ export async function GET(request: Request) {
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const sales = await fetchSales(range.start, range.end);
 
-  const headers = ["เลขที่", "วันเวลา", "ลูกค้า", "รายการ", "จำนวนกล่อง", "รับเอง/ส่ง", "ช่องทางชำระ", "สถานะรายการ", "สถานะชำระ", "ยอดสินค้า (บาท)", "ส่วนลด (บาท)", "ค่าส่ง (บาท)", "ค่าธรรมเนียม (บาท)", "ยอดสุทธิ (บาท)", "ต้นทุน (บาท)", "ต้นทุนบรรจุภัณฑ์ (บาท)", "กำไรขั้นต้น (บาท)"];
+  const headers = ["เลขที่", "วันเวลา", "ลูกค้า", "รายการ", "จำนวนกล่อง", "รับเอง/ส่ง", "ช่องทางชำระ", "สถานะรายการ", "สถานะชำระ", "ยอดสินค้า (บาท)", "ส่วนลด (บาท)", "ค่าส่ง (บาท)", "ทิป (บาท)", "ค่าธรรมเนียม (บาท)", "ยอดสุทธิ (บาท)", "ต้นทุน (บาท)", "ต้นทุนบรรจุภัณฑ์ (บาท)", "กำไรขั้นต้น (บาท)"];
   const rows = [...sales].reverse().map((s) => [
     s.saleNumber, formatThaiDateTime(s.soldAt), s.customerName ?? "", s.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
-    s.items.filter((i) => !isAddonCategory(i.category)).reduce((n, i) => n + i.quantity, 0),
+    s.items.filter((i) => isDishCategory(i.category, i.name)).reduce((n, i) => n + i.quantity, 0),
     FULFILLMENT_LABELS[s.fulfillment],
     [...new Set(s.payments.map((p) => PAYMENT_METHOD_LABELS[p.method]))].join(", "),
     STATUS_LABELS[s.status], PAYMENT_STATUS_LABELS[s.paymentStatus],
-    satangToBahtInput(s.productRevenue), satangToBahtInput(s.discount), satangToBahtInput(s.delivery), satangToBahtInput(s.fee),
+    satangToBahtInput(s.productRevenue), satangToBahtInput(s.discount), satangToBahtInput(s.delivery), satangToBahtInput(s.tip ?? 0), satangToBahtInput(s.fee),
     satangToBahtInput(s.netRevenue), satangToBahtInput(s.cogs), satangToBahtInput(s.packagingCost), satangToBahtInput(s.grossProfit),
   ]);
   // BOM so Excel opens Thai text as UTF-8.

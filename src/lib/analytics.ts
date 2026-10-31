@@ -1,4 +1,5 @@
-import { FUEL_CATEGORY, isAddonCategory, type ExpenseRecord, type MenuRecord, type RecipeItemRecord, type SaleRecord } from "@/lib/data/types";
+import { allocateSatang, customerAmountDue, roundedMaterialCost } from "@/lib/money";
+import { FUEL_CATEGORY, isAddonCategory, isDishCategory, isServiceCategory, type ExpenseRecord, type MenuRecord, type RecipeItemRecord, type SaleRecord } from "@/lib/data/types";
 import { DAY_MS, bangkokDayKey, formatThaiShortDate, formatThaiWeekday, isWithin } from "@/lib/time";
 
 /** Only confirmed sales count toward revenue and profit. Cancelled/refunded/draft are excluded. */
@@ -30,6 +31,8 @@ export type Summary = {
   boxes: number;
   addons: number;
   averageProfitPerBox: number;
+  averageProfitPerOrder: number;
+  averageCostPerOrder: number;
   /** Net profit ÷ revenue in basis points (3720 = 37.2%). */
   netMarginBps: number;
   grossMarginBps: number;
@@ -50,25 +53,31 @@ export type Summary = {
   packagingCost: number;
   /** Estimated ingredient cost of the orders (cogs − packaging). */
   foodCost: number;
+  otherDirectCost: number;
 };
 
 export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summary {
   const active = sales.filter(countsAsRevenue);
-  let revenue = 0, cogs = 0, grossProfit = 0, boxes = 0, addons = 0, paid = 0, deliveryIncome = 0, deliveryCount = 0, tipIncome = 0, packagingCost = 0;
+  let revenue = 0, cogs = 0, grossProfit = 0, boxes = 0, addons = 0, outstanding = 0, deliveryIncome = 0, deliveryCount = 0, tipIncome = 0, packagingCost = 0, otherDirectCost = 0;
   const payments = { cash: 0, transfer: 0, other: 0 };
   for (const sale of active) {
     revenue += sale.netRevenue;
     cogs += sale.cogs;
-    grossProfit += sale.grossProfit;
+    grossProfit += sale.netRevenue - sale.cogs;
     deliveryIncome += sale.delivery;
     if (sale.fulfillment === "delivery") deliveryCount += 1;
     tipIncome += (sale.tip ?? 0);
     packagingCost += sale.packagingCost;
     for (const item of sale.items) {
+      if (isServiceCategory(item.category, item.name) || (item.category ?? "").trim() === "พิเศษ") {
+        otherDirectCost += Math.max(0, item.cost - (item.packagingCost ?? 0) * item.quantity);
+      }
       if (isAddonCategory(item.category)) addons += item.quantity;
-      else boxes += item.quantity;
+      else if (isDishCategory(item.category, item.name)) boxes += item.quantity;
     }
+    let paid = 0;
     for (const payment of sale.payments) { payments[payment.method] += payment.amount; paid += payment.amount; }
+    outstanding += Math.max(0, customerAmountDue(sale) - paid);
   }
   let operatingExpenses = 0, directExpenses = 0, fuelExpenses = 0;
   const expensePayments = { cash: 0, transfer: 0, other: 0 };
@@ -87,14 +96,16 @@ export function summarize(sales: SaleRecord[], expenses: ExpenseRecord[]): Summa
     saleCount: active.length,
     revenue, cogs, grossProfit, operatingExpenses, directExpenses, netProfit, boxes, addons,
     averageProfitPerBox: boxes ? Math.round(grossProfit / boxes) : 0,
+    averageProfitPerOrder: active.length ? Math.round(grossProfit / active.length) : 0,
+    averageCostPerOrder: active.length ? Math.round(cogs / active.length) : 0,
     netMarginBps: revenue ? Math.round((netProfit * 10_000) / revenue) : 0,
     grossMarginBps: revenue ? Math.round((grossProfit * 10_000) / revenue) : 0,
     payments,
-    outstanding: Math.max(0, revenue - paid),
+    outstanding,
     expensePayments,
     netTransfer: payments.transfer - expensePayments.transfer,
     deliveryIncome, deliveryCount, tipIncome, fuelExpenses, packagingCost,
-    foodCost: Math.max(0, cogs - packagingCost),
+    foodCost: Math.max(0, cogs - packagingCost - otherDirectCost), otherDirectCost,
   };
 }
 
@@ -130,7 +141,7 @@ export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], star
     if (!point) continue;
     point.saleCount += 1;
     point.revenue += sale.netRevenue;
-    point.grossProfit += sale.grossProfit;
+    point.grossProfit += sale.netRevenue - sale.cogs;
   }
   for (const expense of expenses) {
     if (!isOperatingExpense(expense)) continue;
@@ -141,25 +152,46 @@ export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], star
   return [...points.values()];
 }
 
-export type MenuRank = { menuId: string; name: string; isAddon: boolean; quantity: number; revenue: number; cost: number; profit: number; marginBps: number };
+export type MenuRank = { menuId: string; name: string; isAddon: boolean; isAdjustment?: boolean; quantity: number; revenue: number; cost: number; profit: number; marginBps: number };
 
-/** Uses the price/cost snapshots stored on each sale line, not today's menu price. */
+/** Allocate discounts and actual packaging in whole satang; keep order income separate. */
 export function menuRanking(sales: SaleRecord[]): MenuRank[] {
   const byMenu = new Map<string, MenuRank>();
-  for (const sale of sales) {
-    if (!countsAsRevenue(sale)) continue;
-    for (const item of sale.items) {
-      const row = byMenu.get(item.menuId) ?? { menuId: item.menuId, name: item.name, isAddon: isAddonCategory(item.category), quantity: 0, revenue: 0, cost: 0, profit: 0, marginBps: 0 };
-      row.quantity += item.quantity;
-      row.revenue += item.revenue;
-      row.cost += item.cost;
-      row.profit = row.revenue - row.cost;
-      byMenu.set(item.menuId, row);
-    }
+  const add = (id: string, name: string, isAddon: boolean, quantity: number, revenue: number, cost: number, isAdjustment = false) => {
+    const row = byMenu.get(id) ?? { menuId: id, name, isAddon, isAdjustment, quantity: 0, revenue: 0, cost: 0, profit: 0, marginBps: 0 };
+    row.quantity += quantity; row.revenue += revenue; row.cost += cost; row.profit = row.revenue - row.cost;
+    byMenu.set(id, row);
+  };
+  for (const sale of sales.filter(countsAsRevenue)) {
+    const discounts = allocateSatang(sale.discount, sale.items.map(i => i.revenue));
+    const packWeights = sale.items.map(i => (i.packagingCost ?? 0) * i.quantity);
+    const weights = packWeights.some(w => w > 0) ? packWeights : sale.items.map(i => isServiceCategory(i.category, i.name) ? 0 : i.quantity);
+    const packaging = allocateSatang(sale.packagingCost, weights);
+    let revenue = 0, cost = 0;
+    sale.items.forEach((item, index) => {
+      const itemRevenue = item.revenue - discounts[index];
+      const itemCost = Math.max(0, item.cost - packWeights[index]) + packaging[index];
+      const id = item.menuId || "custom:" + (item.category ?? "") + ":" + item.name;
+      add(id, item.name, isAddonCategory(item.category), item.quantity, itemRevenue, itemCost);
+      revenue += itemRevenue; cost += itemCost;
+    });
+    const extraRevenue = sale.netRevenue - revenue;
+    const extraCost = sale.cogs - cost;
+    if (extraRevenue || extraCost) add("order-adjustments", "ค่าส่ง / ทิป / ค่าธรรมเนียม / ส่วนปรับบิล", false, 0, extraRevenue, extraCost, true);
   }
   return [...byMenu.values()]
-    .map((row) => ({ ...row, marginBps: row.revenue ? Math.round((row.profit * 10_000) / row.revenue) : 0 }))
-    .sort((a, b) => Number(a.isAddon) - Number(b.isAddon) || b.profit - a.profit);
+    .map(row => ({ ...row, marginBps: row.revenue ? Math.round(row.profit * 10_000 / row.revenue) : 0 }))
+    .sort((a, b) => Number(a.isAdjustment) - Number(b.isAdjustment) || Number(a.isAddon) - Number(b.isAddon) || b.profit - a.profit);
+}
+
+/** Gross food sales only, matching the basis to which the pooled percentage is applied. */
+export function pooledFoodRevenue(items: Array<{ menuId: string | null; category: string | null; name: string; revenue: number }>) {
+  return items.filter(i => i.menuId && !isServiceCategory(i.category, i.name)).reduce((sum, i) => sum + i.revenue, 0);
+}
+
+/** Per-unit direct ingredients plus pooled food estimate, without order packaging. */
+export function menuFoodCost(menu: Pick<MenuRecord, "category" | "name" | "price" | "cost" | "packagingCost">, pooledBps: number) {
+  return Math.max(0, menu.cost - menu.packagingCost) + (isServiceCategory(menu.category, menu.name) ? 0 : pooledCost(menu.price, pooledBps));
 }
 
 export type CategoryTotal = { category: string; amount: number; count: number; shareBps: number };
@@ -188,17 +220,17 @@ export function recipeCostParts(
   ingredientCost: Map<string, number>,
   packagingCost: Map<string, number>,
 ) {
-  let ingredients = 0, packaging = 0;
+  const ingredients: Array<{ unitCost: number; quantity: number }> = [], packaging: Array<{ unitCost: number; quantity: number }> = [];
   for (const item of items) {
     if (item.ingredientId) {
       const unitCost = ingredientCost.get(item.ingredientId);
-      if (unitCost !== undefined) ingredients += item.quantity * unitCost;
+      if (unitCost !== undefined) ingredients.push({ unitCost, quantity: item.quantity });
     } else if (item.packagingItemId) {
       const unitCost = packagingCost.get(item.packagingItemId);
-      if (unitCost !== undefined) packaging += item.quantity * unitCost;
+      if (unitCost !== undefined) packaging.push({ unitCost, quantity: item.quantity });
     }
   }
-  return { ingredients: Math.round(ingredients), packaging: Math.round(packaging) };
+  return { ingredients: roundedMaterialCost(ingredients), packaging: roundedMaterialCost(packaging) };
 }
 
 /** Material cost of one dish from its recipe (ingredients + packaging), in whole satang. */
@@ -237,7 +269,7 @@ export function defaultOrderPackaging(lines: PackagingLine[]) {
 
 /** Cost of packaging lines; each line is rounded to whole satang (same rule as the database). */
 export function packagingLinesCost(lines: Array<{ unitCost: number; quantity: number }>) {
-  return lines.reduce((sum, line) => sum + (line.quantity > 0 ? Math.round(line.unitCost * line.quantity) : 0), 0);
+  return lines.reduce((sum, line) => sum + (line.quantity > 0 ? roundedMaterialCost([line]) : 0), 0);
 }
 
 /** Days of history needed before the pooled-ingredient % is calculated from real data. */
@@ -313,8 +345,8 @@ export function menuCostWarnings(menus: MenuRecord[], minMarginBps = 2000, poole
   return menus
     .filter((menu) => menu.isAvailable)
     .map((menu) => {
-      const cost = menu.cost + pooledCost(menu.price, pooledBps);
+      const cost = menuFoodCost(menu, pooledBps) + menu.packagingCost;
       return { menu, marginBps: menu.price ? Math.round(((menu.price - cost) * 10_000) / menu.price) : 0 };
     })
-    .filter(({ menu, marginBps }) => menu.cost === 0 || marginBps < minMarginBps);
+    .filter(({ menu, marginBps }) => (!isServiceCategory(menu.category, menu.name) && menu.cost === 0) || marginBps < minMarginBps);
 }
