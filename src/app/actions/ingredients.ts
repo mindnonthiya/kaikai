@@ -341,7 +341,17 @@ export async function updatePackaging(form: FormData): Promise<ActionState> {
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
-    const { error } = await supabase.from("packaging_items").update({ name, unit, per_order: perOrder, updated_at: new Date().toISOString() }).eq("id", packagingId);
+    const hasPrice = String(form.get("pack_price") ?? "").trim() !== "";
+    const hasQuantity = String(form.get("pack_quantity") ?? "").trim() !== "";
+    const updateFields: Row = { name, unit, per_order: perOrder, updated_at: new Date().toISOString() };
+    if (hasPrice && hasQuantity) {
+      const packPrice = money(form, "pack_price", "ราคาต่อแพ็ก", { required: true });
+      const packQty = quantity(form, "pack_quantity", "จำนวนต่อแพ็ก")!;
+      if (packQty > 0) {
+        updateFields.unit_cost_satang = roundCost(packPrice / packQty);
+      }
+    }
+    const { error } = await supabase.from("packaging_items").update(updateFields).eq("id", packagingId);
     if (error) dbError(error, { unique: `มีบรรจุภัณฑ์ชื่อ “${name}” อยู่แล้ว` });
     await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packagingId));
     revalidateCosts();
