@@ -5,9 +5,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { weightedPricePerUnit } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
+import type { ExpenseKind, PaymentMethod } from "@/lib/data/types";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { InputError, dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
+import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
+import { saveItemizedExpenseAction, type ItemizedPurchasePayload } from "./ingredients";
 
 const KINDS = ["direct", "operating", "one_time", "recurring"] as const;
 const METHODS = ["cash", "transfer", "other"] as const;
@@ -65,7 +68,12 @@ export async function saveExpense(form: FormData): Promise<ActionState> {
   });
 }
 
-async function deleteExpensesByIds(supabase: SupabaseClient, ownerId: string, expenseIds: string[]) {
+async function deleteExpensesByIds(
+  supabase: SupabaseClient,
+  ownerId: string,
+  expenseIds: string[],
+  options?: { keepStorageFiles?: boolean }
+) {
   const uniqueIds = Array.from(new Set(expenseIds.map((x) => x.trim()).filter(Boolean)));
   if (uniqueIds.length === 0) throw new InputError("กรุณาเลือกรายการที่ต้องการลบ");
 
@@ -187,13 +195,15 @@ async function deleteExpensesByIds(supabase: SupabaseClient, ownerId: string, ex
   if (error) dbError(error);
 
   // 4. Remove storage files if no other expenses share their receipt_path
-  for (const receiptPath of receiptPathsToCheck) {
-    const { count } = await supabase
-      .from("expenses")
-      .select("id", { count: "exact", head: true })
-      .eq("receipt_path", receiptPath);
-    if (!count || count === 0) {
-      await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
+  if (!options?.keepStorageFiles) {
+    for (const receiptPath of receiptPathsToCheck) {
+      const { count } = await supabase
+        .from("expenses")
+        .select("id", { count: "exact", head: true })
+        .eq("receipt_path", receiptPath);
+      if (!count || count === 0) {
+        await supabase.storage.from("sale-slips").remove([receiptPath]).catch(() => undefined);
+      }
     }
   }
 
@@ -267,6 +277,218 @@ export async function deleteExpensesBulkAction(expenseIds: string[]): Promise<Ac
   return runAction(async ({ supabase, user }) => {
     await deleteExpensesByIds(supabase, user.id, expenseIds);
     return { ok: true, message: `ลบ ${expenseIds.length} รายการเรียบร้อยแล้ว` };
+  });
+}
+
+export type UpdateExpensePayload = {
+  id: string;
+  spentAt: string; // YYYY-MM-DD
+  description: string;
+  category: string;
+  kind: ExpenseKind;
+  amountSatang: number;
+  payee?: string | null;
+  paymentMethod: PaymentMethod;
+};
+
+/**
+ * Updates an existing expense row and keeps any linked packaging_purchases / ingredient_purchases row in sync.
+ */
+export async function updateExpenseAction(payload: UpdateExpensePayload): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    const expenseId = payload.id?.trim();
+    if (!expenseId) throw new InputError("ไม่พบรหัสรายการค่าใช้จ่าย");
+    const description = payload.description?.trim().slice(0, 200);
+    if (!description) throw new InputError("กรุณากรอกรายละเอียด");
+    const category = payload.category?.trim().slice(0, 60);
+    if (!category) throw new InputError("กรุณากรอกหมวดหมู่");
+    const kind: ExpenseKind = KINDS.includes(payload.kind) ? payload.kind : "operating";
+    const paymentMethod: PaymentMethod = METHODS.includes(payload.paymentMethod) ? payload.paymentMethod : "transfer";
+    const amountSatang = Math.round(Number(payload.amountSatang) || 0);
+    if (amountSatang <= 0) throw new InputError("จำนวนเงินต้องมากกว่า 0");
+    const payee = payload.payee?.trim() ? payload.payee.trim().slice(0, 120) : null;
+
+    let spentAtDate: Date;
+    try {
+      spentAtDate = fromBangkokDateInput(payload.spentAt || bangkokDayKey(new Date()));
+    } catch {
+      throw new InputError("วันที่จ่ายไม่ถูกต้อง");
+    }
+    const spentAtIso = spentAtDate.toISOString();
+
+    const { data: existing, error: readErr } = await supabase
+      .from("expenses")
+      .select("id, spent_at, category, amount_satang, description, receipt_path")
+      .eq("id", expenseId)
+      .maybeSingle();
+    if (readErr) dbError(readErr);
+    if (!existing) throw new InputError("ไม่พบรายการค่าใช้จ่ายที่ต้องการแก้ไข");
+
+    let didUpdatePurchase = false;
+
+    // 1. Sync linked packaging_purchases if any
+    const { data: linkedPacks } = await supabase
+      .from("packaging_purchases")
+      .select("id, packaging_item_id")
+      .eq("expense_id", expenseId);
+
+    if (linkedPacks && linkedPacks.length > 0) {
+      const p = linkedPacks[0] as { id: unknown; packaging_item_id: unknown };
+      const packItemId = String(p.packaging_item_id);
+      await supabase
+        .from("packaging_purchases")
+        .update({
+          purchased_at: spentAtIso,
+          price_satang: amountSatang,
+          vendor: payee,
+        })
+        .eq("id", String(p.id));
+      didUpdatePurchase = true;
+
+      const { data: purchases } = await supabase
+        .from("packaging_purchases")
+        .select("price_satang, pack_quantity")
+        .eq("packaging_item_id", packItemId);
+      if (purchases && purchases.length > 0) {
+        let totalPrice = 0;
+        let totalPieces = 0;
+        for (const row of purchases as Array<{ price_satang: unknown; pack_quantity: unknown }>) {
+          totalPrice += Number(row.price_satang);
+          totalPieces += Number(row.pack_quantity);
+        }
+        if (totalPieces > 0) {
+          const unitCost = roundCost(totalPrice / totalPieces);
+          await supabase
+            .from("packaging_items")
+            .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
+            .eq("id", packItemId);
+          await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packItemId));
+        }
+      }
+    }
+
+    // 2. Sync matching ingredient_purchases if any
+    if (existing.category === "วัตถุดิบ" && String(existing.description ?? "").startsWith("ซื้อ")) {
+      const oldDesc = String(existing.description);
+      const { data: ings } = await supabase
+        .from("ingredients")
+        .select("id, name, costing, units_per_purchase_unit");
+      if (ings && ings.length > 0) {
+        const sortedIngs = [...ings].sort((a, b) => String(b.name).length - String(a.name).length);
+        const matchedIng = sortedIngs.find((ing) => {
+          const name = String(ing.name);
+          return oldDesc === `ซื้อ${name}` || oldDesc.startsWith(`ซื้อ${name} `);
+        });
+        if (matchedIng) {
+          let query = supabase
+            .from("ingredient_purchases")
+            .select("id")
+            .eq("ingredient_id", String(matchedIng.id))
+            .eq("purchased_at", existing.spent_at)
+            .eq("price_satang", existing.amount_satang);
+
+          if (existing.receipt_path) {
+            query = query.eq("receipt_path", existing.receipt_path);
+          }
+
+          const { data: ingPurchases } = await query
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (ingPurchases && ingPurchases.length > 0) {
+            await supabase
+              .from("ingredient_purchases")
+              .update({
+                purchased_at: spentAtIso,
+                price_satang: amountSatang,
+                vendor: payee,
+              })
+              .eq("id", String((ingPurchases[0] as { id: unknown }).id));
+            didUpdatePurchase = true;
+
+            if (String(matchedIng.costing) === "per_unit") {
+              const ingId = String(matchedIng.id);
+              const unitsPerPurchaseUnit = Number(matchedIng.units_per_purchase_unit) || 1;
+              const { data: purchases } = await supabase
+                .from("ingredient_purchases")
+                .select("purchased_at, price_satang, purchased_quantity")
+                .eq("ingredient_id", ingId)
+                .order("purchased_at", { ascending: false })
+                .limit(200);
+              if (purchases && purchases.length > 0) {
+                const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
+                  purchasedAt: String(p.purchased_at),
+                  price: Number(p.price_satang),
+                  quantity: p.purchased_quantity === null ? null : Number(p.purchased_quantity),
+                }));
+                const pricePerUnit = roundCost(weightedPricePerUnit(mapped));
+                const unitCost = roundCost(pricePerUnit / unitsPerPurchaseUnit);
+                await supabase
+                  .from("ingredients")
+                  .update({
+                    price_per_purchase_unit_satang: pricePerUnit,
+                    weighted_unit_cost_satang: unitCost,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("id", ingId);
+                await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingId));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Update the expense row itself
+    const { error: updateErr } = await supabase
+      .from("expenses")
+      .update({
+        spent_at: spentAtIso,
+        description,
+        category,
+        kind,
+        amount_satang: amountSatang,
+        payee,
+        payment_method: paymentMethod,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", expenseId);
+    if (updateErr) dbError(updateErr);
+
+    if (didUpdatePurchase) {
+      await syncHistoricalCosts(supabase, { ownerId: user.id }).catch(() => undefined);
+    }
+
+    revalidateExpenses();
+    return { ok: true, message: "บันทึกการแก้ไขเรียบร้อยแล้ว" };
+  });
+}
+
+/**
+ * Replaces one or more existing expense rows (e.g. from the same slip) with a new itemized breakdown,
+ * preserving the existing receipt_path in Supabase Storage.
+ */
+export async function replaceExpenseWithItemizedAction(
+  expenseIdsToReplace: string[],
+  payload: ItemizedPurchasePayload
+): Promise<ActionState> {
+  return runAction(async ({ supabase, user }) => {
+    const uniqueIds = Array.from(new Set(expenseIdsToReplace.map((x) => x.trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) throw new InputError("ไม่พบรายการเดิมที่ต้องการแก้ไข");
+
+    // 1. Delete old rows while keeping the slip file in storage
+    await deleteExpensesByIds(supabase, user.id, uniqueIds, { keepStorageFiles: true });
+
+    // 2. Save the new itemized breakdown
+    const res = await saveItemizedExpenseAction(payload);
+    if (!res.ok) {
+      throw new InputError(res.error ?? "บันทึกรายการใหม่ไม่สำเร็จ");
+    }
+    revalidateExpenses();
+    return {
+      ok: true,
+      message: `อัปเดตรายการในสลิปใหม่เรียบร้อยแล้ว · ${res.message ?? ""}`,
+    };
   });
 }
 

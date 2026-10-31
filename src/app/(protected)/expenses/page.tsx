@@ -78,7 +78,15 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <button className="secondary-button">ค้นหา</button>
         {q && <Link className="link-button" href={`/expenses?range=${key}`}>ล้าง</Link>}
       </form>
-      <ExpenseTable expenses={expenses} searchQuery={q} />
+      <ExpenseTable
+        expenses={expenses}
+        searchQuery={q}
+        categories={CATEGORIES}
+        perUnit={catalog.perUnit}
+        pooled={catalog.pooled}
+        restockItems={catalog.restockItems}
+        maxDate={maxDate}
+      />
     </section>
   </>;
 }
