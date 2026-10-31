@@ -183,7 +183,14 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       if (costing === "pooled") {
         const amount = money(form, `amount_${ingredientId}`, `ราคา${name}`);
         if (amount > 0) {
-          rows.push({ owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: amount, vendor });
+          rows.push({
+            owner_id: user.id,
+            ingredient_id: ingredientId,
+            purchased_at: purchasedAt,
+            price_satang: amount,
+            vendor,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          });
           expensesToInsert.push({
             owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
             description: `ซื้อ${name}`, payee: vendor, payment_method: paymentMethod,
@@ -201,6 +208,7 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       rows.push({
         owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: priceSatang,
         purchased_quantity: qty, usable_quantity: qty, purchase_unit: unit, vendor,
+        ...(receiptPath ? { receipt_path: receiptPath } : {}),
       });
       expensesToInsert.push({
         owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
@@ -486,6 +494,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
           usable_quantity: item.quantity,
           purchase_unit: unit,
           vendor,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
         });
         expensesToInsert.push({
           owner_id: user.id,
@@ -523,6 +532,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
           purchased_at: purchasedAtIso,
           price_satang: amount,
           vendor,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
         });
         expensesToInsert.push({
           owner_id: user.id,
