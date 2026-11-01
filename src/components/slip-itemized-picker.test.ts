@@ -33,6 +33,19 @@ const samplePackaging = [
 ];
 
 describe("SlipItemizedPicker calculations", () => {
+  it("does not treat an old unit price as the price and size of a new pack", () => {
+    const withoutHistory = [{ ...samplePackaging[0], packPrice: "", perPack: "" }];
+    const state = createInitialItemizedState([], withoutHistory);
+    state.packaging["pack-box"] = { packs: 1, priceBaht: "65", perPack: "" };
+    expect(computeItemizedSummary(state, [], [], withoutHistory).packagingItems).toEqual([]);
+
+    state.packaging["pack-box"].perPack = "25";
+    const result = computeItemizedSummary(state, [], [], withoutHistory);
+    expect(result.packagingItems).toEqual([{ packagingId: "pack-box", packs: 1, packPriceSatang: 6500, perPackQuantity: 25 }]);
+    expect(result.totalSatang).toBe(6500);
+    expect(result.packagingItems[0].packPriceSatang / result.packagingItems[0].perPackQuantity).toBe(260);
+  });
+
   it("computes total satang and breakdown across per-unit, pooled, packaging, and extra expenses", () => {
     const state = createInitialItemizedState(samplePerUnit, samplePackaging);
 

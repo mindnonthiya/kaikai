@@ -12,22 +12,20 @@ import type { PackagingPurchaseRecord, PackagingRecord } from "./types";
 const bahtInput = (value: number) => (value > 0 ? satangToBahtInput(Math.round(value)) : "");
 const trimZeros = (value: number) => String(Math.round(value * 10_000) / 10_000);
 
-/** Use recorded quantities; without history show the known price for one piece. */
+/** A unit price cannot establish pack size. Require pack inputs again after history is removed. */
 export function resolvePackagingDefaultPack(
   p: PackagingRecord,
   last?: PackagingPurchaseRecord,
   allPurchasesForItem?: PackagingPurchaseRecord[],
 ): { packPrice: string; perPack: string } {
-  const purchase = last ?? allPurchasesForItem?.[0];
+  const purchase = last ?? allPurchasesForItem?.find((row) => row.packagingItemId === p.id);
   if (purchase && purchase.packCount > 0 && purchase.packQuantity > 0) {
     return {
       packPrice: satangToBahtInput(Math.round(purchase.price / purchase.packCount)),
       perPack: trimZeros(purchase.packQuantity / purchase.packCount),
     };
   }
-  return p.unitCost > 0
-    ? { packPrice: satangToBahtInput(Math.round(p.unitCost)), perPack: "1" }
-    : { packPrice: "", perPack: "" };
+  return { packPrice: "", perPack: "" };
 }
 
 export type PurchaseCatalog = {

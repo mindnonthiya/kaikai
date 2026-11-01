@@ -85,6 +85,21 @@ begin
   perform pg_temp.assert_money('all 1005 zero-pack orders',(select count(*) from public.sales where cogs_satang=4000 and product_revenue_satang=6900),1005);
   raise notice 'PASS: >1000 bills, >1000 lines in one bill, menu-scoped totals';
 end $$;
+-- Legacy imports had a positive default total but no detailed packaging rows.
+do $$
+declare legacy uuid;
+begin
+  legacy := (public.create_sale('{"items":[{"menu_id":"10000000-0000-4000-8000-000000000001","quantity":1}],"packaging":[],"pooled_ingredient_bps":1250,"payment_amount_satang":6900}')->>'sale_id')::uuid;
+  update public.sales set packaging_cost_satang=4600,cogs_satang=9463,gross_profit_satang=net_revenue_satang-9463 where id=legacy;
+  perform public.recalculate_order_costs('10000000-0000-4000-8000-000000000001',false);
+  perform pg_temp.assert_money('missing-cost repair does not reprice a complete legacy bill',(select packaging_cost_satang from public.sales where id=legacy),4600);
+  perform public.recalculate_order_costs('10000000-0000-4000-8000-000000000001',true);
+  perform pg_temp.assert_money('explicit full refresh repairs legacy default packaging',(select packaging_cost_satang from public.sales where id=legacy),470);
+  perform pg_temp.assert_money('legacy ingredients and pooled cost are preserved',(select cogs_satang from public.sales where id=legacy),5333);
+  perform pg_temp.assert_money('does not fabricate actual packaging quantities',(select count(*) from public.sale_packaging where sale_id=legacy),0);
+  perform pg_temp.assert_money('repeated legacy correction is idempotent',(public.recalculate_order_costs('10000000-0000-4000-8000-000000000001',true)->>'affected_sales_count')::bigint,0);
+  raise notice 'PASS: positive untracked legacy packaging reprices; explicit zero stays zero';
+end $$;
 reset role;
 -- Simulate a failure after line changes; PostgreSQL must roll everything back.
 create function pg_temp.fail_cost_update() returns trigger language plpgsql as $$

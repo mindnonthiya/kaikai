@@ -9,8 +9,9 @@ describe("packaging purchase defaults", () => {
     const purchase = { price: 1500, packCount: 1, packQuantity: 1 } as PackagingPurchaseRecord;
     expect(resolvePackagingDefaultPack(item, purchase)).toEqual({ packPrice: "15.00", perPack: "1" });
   });
-  it("does not infer quantities or divide a known piece price by a guessed pack size", () => {
-    expect(resolvePackagingDefaultPack(item)).toEqual({ packPrice: "15.00", perPack: "1" });
+  it("requires pack inputs when purchase history is gone even if a unit price remains", () => {
+    expect(resolvePackagingDefaultPack(item)).toEqual({ packPrice: "", perPack: "" });
+    expect(resolvePackagingDefaultPack({ ...item, unitCost: 260 })).toEqual({ packPrice: "", perPack: "" });
   });
   it("keeps quantities explicitly recorded for multiple packs", () => {
     const purchase = { price: 13000, packCount: 2, packQuantity: 100 } as PackagingPurchaseRecord;

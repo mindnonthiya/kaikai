@@ -18,7 +18,7 @@ try {
     Invoke-CostDocker cp "$costRoot/supabase/migrations" "${costContainer}:/tmp/migrations"
     Invoke-CostDocker cp "$costRoot/scripts/fixtures/order-costing.sql" "${costContainer}:/tmp/test.sql"
     Invoke-CostDocker exec $costContainer psql -U postgres -v ON_ERROR_STOP=1 -q -f /tmp/bootstrap.sql
-    $costMigrations = @('202610130001_initial_schema.sql','202610130002_app_data.sql','202610140001_packaging_delivery.sql','202610150001_costing_v2.sql','202610150005_sale_tips_and_custom_items.sql','202610260001_keep_pooled_cost_in_cost_recalculation.sql','202611010001_order_cost_consistency.sql')
+    $costMigrations = @('202610130001_initial_schema.sql','202610130002_app_data.sql','202610140001_packaging_delivery.sql','202610150001_costing_v2.sql','202610150005_sale_tips_and_custom_items.sql','202610260001_keep_pooled_cost_in_cost_recalculation.sql','202611010001_order_cost_consistency.sql','202611010002_refresh_legacy_packaging_costs.sql')
     foreach ($costMigration in $costMigrations) {
         Invoke-CostDocker exec $costContainer psql -U postgres -v ON_ERROR_STOP=1 -q -f "/tmp/migrations/$costMigration"
     }

@@ -83,7 +83,7 @@ export function PackagingRestockTable({ items }: { items: RestockItem[] }) {
         const hasDefaults = Boolean(
           item.packPrice.trim() !== "" && item.perPack.trim() !== ""
         );
-        const isEditing = !hasDefaults || editingIds.has(item.id);
+        const isEditing = !hasDefaults || Number(item.perPack) <= 1 || editingIds.has(item.id);
         const isModified =
           hasDefaults &&
           (row.price !== item.packPrice || row.perPack !== item.perPack);
