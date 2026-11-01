@@ -83,16 +83,7 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
         .select("id").single();
       if (error) dbError(error, unique);
       savedId = String((data as Row).id);
-      // A new dish starts with 1 of every per-order packaging item (box, spoon, sauce cup); add-ons start empty.
-      if (category === DISH_CATEGORY) {
-        const { data: packs, error: packError } = await supabase.from("packaging_items").select("id").eq("is_active", true).eq("per_order", true);
-        if (packError) dbError(packError);
-        const recipe = (packs as Row[]).map((p) => ({ owner_id: user.id, menu_id: savedId, packaging_item_id: String(p.id), quantity: 1 }));
-        if (recipe.length) {
-          const { error: recipeError } = await supabase.from("menu_recipe_items").insert(recipe);
-          if (recipeError) dbError(recipeError);
-        }
-      }
+      // Packaging is selected in each menu's recipe; creating a menu does not attach all supplies.
     }
     await recalculateMenuCosts(supabase, [savedId!]);
     revalidateMenus();

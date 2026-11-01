@@ -20,6 +20,8 @@ The pooled percentage is estimated from recorded pooled purchases / gross sales 
 
 Install `supabase/migrations/202611010001_order_cost_consistency.sql` after prior migrations on each database before using this version. It installs functions and indexes without repricing existing orders. Historical correction remains explicit.
 
+Also install `supabase/migrations/202611010002_refresh_legacy_packaging_costs.sql` for older imports that have a positive packaging total but no detailed packaging rows. A full recalculation refreshes those positive totals using current recipe packaging costs and quantities sold. It does not invent actual packaging counts. Recorded zero totals without tracking rows stay zero. Correct purchase quantities and recipe settings before repricing any historical bill.
+
 ## Verification
 
 `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`.

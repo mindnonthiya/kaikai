@@ -26,7 +26,7 @@ function MenuFields({ menu }: { menu?: MenuRecord }) {
     </label>
     <label>ราคาขาย / ค่าบริการ (บาท)<input name="price" inputMode="decimal" defaultValue={menu ? satangToBahtInput(menu.price) : ""} required placeholder="69" /></label>
     <MenuImageField currentImage={menu?.imagePath} />
-    {!menu && <p className="field-hint wide">เมนูหลักใหม่ใส่บรรจุภัณฑ์ต่อออเดอร์ให้อัตโนมัติ · จ็อบเสริม/บริการไม่นับเป็นกล่องและไม่มีสูตรอาหาร</p>}
+    {!menu && <p className="field-hint wide">เพิ่มเมนูแล้ว เลือกวัตถุดิบและบรรจุภัณฑ์ในสูตรของเมนูนั้นเอง · จ็อบเสริม/บริการไม่นับเป็นกล่อง</p>}
   </>;
 }
 

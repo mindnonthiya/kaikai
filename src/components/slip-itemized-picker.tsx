@@ -570,7 +570,7 @@ export function SlipItemizedPicker({
                 const hasDefaults = Boolean(
                   item.packPrice.trim() !== "" && item.perPack.trim() !== ""
                 );
-                const isEditingPack = !hasDefaults || editingPackIds.has(item.id);
+                const isEditingPack = !hasDefaults || Number(item.perPack) <= 1 || editingPackIds.has(item.id);
                 const isPackModified =
                   hasDefaults &&
                   (row.priceBaht !== item.packPrice || row.perPack !== item.perPack);
