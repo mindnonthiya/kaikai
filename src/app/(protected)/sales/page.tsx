@@ -11,7 +11,7 @@ import { PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isDishCategory, type Sale
 import { customerAmountDue, formatBaht } from "@/lib/money";
 import { formatThaiShortDate, formatTime, parseRange, resolveRange } from "@/lib/time";
 
-const RANGES = ["today", "7d", "month", "last-month"] as const;
+const RANGES = ["today", "7d", "month", "last-month", "all"] as const;
 
 function statusBadge(sale: SaleRecord) {
   if (sale.status === "cancelled") return <span className="status muted">ยกเลิกแล้ว</span>;

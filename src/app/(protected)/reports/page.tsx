@@ -4,28 +4,45 @@ import { ActionButton } from "@/components/action-form";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
-import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, percentChange, summarize } from "@/lib/analytics";
+import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, monthlySeries, percentChange, summarize } from "@/lib/analytics";
 import { fetchExpenses, fetchIngredientPurchases, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { UTILITY_CATEGORIES } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
-import { DAY_MS, parseRange, previousRange, resolveRange } from "@/lib/time";
+import { DAY_MS, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
 
-const RANGES = ["7d", "month", "last-month"] as const;
+const RANGES = ["7d", "month", "last-month", "all"] as const;
 
 export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const key = parseRange((await searchParams).range, [...RANGES], "month");
+  const now = new Date();
   const saleSettings = await fetchSaleSettings();
   const dayStartHour = saleSettings.dayStartHour ?? 0;
-  const range = resolveRange(key, new Date(), dayStartHour);
-  const prev = previousRange(range);
-  const [sales, expenses, purchases] = await Promise.all([fetchSales(prev.start, range.end), fetchExpenses(prev.start, range.end), fetchIngredientPurchases(range.start, range.end)]);
+  const range = resolveRange(key, now, dayStartHour);
+  const prev = previousRange(range, dayStartHour);
+  const [sales, expenses, purchases] = await Promise.all([
+    fetchSales(prev.start, range.end),
+    fetchExpenses(prev.start, range.end),
+    fetchIngredientPurchases(range.start, range.end),
+  ]);
   const curSales = filterSales(sales, range.start, range.end);
   const curExpenses = filterExpenses(expenses, range.start, range.end);
   const current = summarize(curSales, curExpenses);
 
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
-  const days = Math.round((range.end.getTime() - range.start.getTime()) / DAY_MS);
-  const daily = dailySeries(curSales, curExpenses, range.start, days, undefined, dayStartHour).reverse();
+
+  let dailyStart = range.start;
+  if (key === "all") {
+    const timestamps = [
+      ...curSales.map((s) => Date.parse(s.soldAt)),
+      ...curExpenses.map((e) => Date.parse(e.spentAt)),
+    ].filter((t) => Number.isFinite(t));
+    dailyStart = timestamps.length > 0
+      ? startOfBangkokDay(new Date(Math.min(...timestamps)), dayStartHour)
+      : startOfBangkokMonth(now, 0, dayStartHour);
+  }
+  const days = Math.max(1, Math.round((range.end.getTime() - dailyStart.getTime()) / DAY_MS));
+  const daily = dailySeries(curSales, curExpenses, dailyStart, days, undefined, dayStartHour).reverse();
+  const monthly = monthlySeries(curSales, curExpenses, dayStartHour);
   const menus = menuRanking(curSales);
   const categories = expensesByCategory(curExpenses);
 
@@ -58,7 +75,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     />
     <RangeTabs basePath="/reports" options={[...RANGES]} active={key} />
     <div className="stat-grid main-stats">
-      <StatCard label="ยอดขาย" value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), "ช่วงก่อน") ?? `${current.saleCount} รายการ`} tone="blue" icon={TrendingUp} />
+      <StatCard label="ยอดขาย" value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), "ช่วงก่อน") ?? `${current.saleCount.toLocaleString("th-TH")} รายการ`} tone="blue" icon={TrendingUp} />
       <StatCard label="กำไรขั้นต้น" value={formatBaht(current.grossProfit)} detail={current.revenue ? `${formatPercentBps(current.grossMarginBps)} margin` : undefined} tone="green" />
       <StatCard label="กำไรสุทธิ" value={formatBaht(current.netProfit)} detail={`หลังหักค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" />
     </div>
@@ -105,6 +122,19 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       </table>
       <p className="table-footnote">ส่วนลดแบ่งตามยอดขายแต่ละรายการ บรรจุภัณฑ์ที่ให้จริงแบ่งตามสัดส่วนสูตร ส่วนค่าส่ง ทิป และค่าธรรมเนียมแสดงแยกท้ายตาราง ผลรวมตรงกับกำไรขั้นต้นของออเดอร์</p>
     </section>
+
+    {(key === "all" || monthly.length > 1) && (
+      <section className="panel table-panel spaced">
+        <div className="table-title"><h2>สรุปรายเดือน</h2><span>{monthly.length} เดือน</span></div>
+        <table className="data-table">
+          <thead><tr><th>เดือน</th><th className="num">รายการ</th><th className="num">จำนวนกล่อง</th><th className="num">ยอดขาย</th><th className="num">กำไรขั้นต้น</th><th className="num">ค่าใช้จ่ายดำเนินงาน</th><th className="num">กำไรสุทธิ</th></tr></thead>
+          <tbody>
+            {monthly.map((m) => <tr key={m.key}><td><strong>{m.label}</strong></td><td className="num">{m.saleCount.toLocaleString("th-TH")}</td><td className="num">{m.boxes.toLocaleString("th-TH")}</td><td className="num">{formatBaht(m.revenue)}</td><td className="num">{formatBaht(m.grossProfit)}</td><td className="num">{formatBaht(m.operatingExpenses)}</td><td className={`num ${m.netProfit < 0 ? "negative" : ""}`}><strong>{formatBaht(m.netProfit)}</strong></td></tr>)}
+            {!monthly.length && <tr><td colSpan={7}><div className="empty-state">ยังไม่มีข้อมูลรายเดือน</div></td></tr>}
+          </tbody>
+        </table>
+      </section>
+    )}
 
     <section className="panel table-panel spaced">
       <div className="table-title"><h2>ยอดขายรายวัน</h2><span>{days} วัน</span></div>

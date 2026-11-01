@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
   }
-  const key = parseRange(new URL(request.url).searchParams.get("range") ?? undefined, ["today", "7d", "month", "last-month"], "month");
+  const key = parseRange(new URL(request.url).searchParams.get("range") ?? undefined, ["today", "7d", "month", "last-month", "all"], "month");
   const saleSettings = await fetchSaleSettings();
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const sales = await fetchSales(range.start, range.end);

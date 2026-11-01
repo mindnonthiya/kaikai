@@ -27,7 +27,7 @@ export function normalizeDayStartHour(hour: unknown): number {
   return Number.isInteger(n) && n >= 0 && n <= 12 ? n : DEFAULT_DAY_START_HOUR;
 }
 
-export type RangeKey = "today" | "yesterday" | "7d" | "month" | "last-month";
+export type RangeKey = "today" | "yesterday" | "7d" | "month" | "last-month" | "all";
 export type DateRange = { key: RangeKey; start: Date; end: Date; label: string; dayStartHour?: number };
 
 export const RANGE_LABELS: Record<RangeKey, string> = {
@@ -36,6 +36,7 @@ export const RANGE_LABELS: Record<RangeKey, string> = {
   "7d": "7 วัน",
   month: "เดือนนี้",
   "last-month": "เดือนก่อน",
+  all: "ทั้งหมด",
 };
 
 export function formatThaiDate(date: Date | string) {
@@ -63,6 +64,11 @@ export function formatThaiShortDate(date: Date | string) {
   return new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", timeZone: APP_TIME_ZONE }).format(new Date(date));
 }
 
+/** e.g. "ตุลาคม 2569" */
+export function formatThaiMonthYear(date: Date | string) {
+  return new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: APP_TIME_ZONE }).format(new Date(date));
+}
+
 /** e.g. "อ." */
 export function formatThaiWeekday(date: Date | string) {
   return new Intl.DateTimeFormat("th-TH", { weekday: "narrow", timeZone: APP_TIME_ZONE }).format(new Date(date));
@@ -76,6 +82,11 @@ export function formatTime(date: Date | string) {
 export function bangkokDayKey(date: Date | string, dayStartHour = DEFAULT_DAY_START_HOUR) {
   const hour = normalizeDayStartHour(dayStartHour);
   return new Date(new Date(date).getTime() + OFFSET_MS - hour * HOUR_MS).toISOString().slice(0, 10);
+}
+
+/** Business month in Bangkok as "YYYY-MM". */
+export function bangkokMonthKey(date: Date | string, dayStartHour = DEFAULT_DAY_START_HOUR) {
+  return bangkokDayKey(date, dayStartHour).slice(0, 7);
 }
 
 /** Formats Date as "YYYY-MM-DDTHH:mm" for <input type="datetime-local"> in Bangkok timezone. */
@@ -132,12 +143,16 @@ export function resolveRange(key: RangeKey, now = new Date(), dayStartHour = DEF
     case "7d": return { key, label, start: new Date(today.getTime() - 6 * DAY_MS), end: tomorrow, dayStartHour: hour };
     case "month": return { key, label, start: startOfBangkokMonth(now, 0, hour), end: tomorrow, dayStartHour: hour };
     case "last-month": return { key, label, start: startOfBangkokMonth(now, -1, hour), end: startOfBangkokMonth(now, 0, hour), dayStartHour: hour };
+    case "all": return { key, label, start: startOfBangkokDay(new Date(Date.UTC(2020, 0, 1)), hour), end: tomorrow, dayStartHour: hour };
   }
 }
 
 /** The period of the same length that ends where `range` starts (used for "% vs previous"). */
 export function previousRange(range: DateRange, dayStartHour = range.dayStartHour ?? DEFAULT_DAY_START_HOUR): { start: Date; end: Date } {
   const hour = normalizeDayStartHour(dayStartHour);
+  if (range.key === "all") {
+    return { start: range.start, end: range.start };
+  }
   if (range.key === "month" || range.key === "last-month") {
     // Month-to-date compares with the same number of days at the start of the previous month.
     const prevStart = startOfBangkokMonth(range.start, -1, hour);

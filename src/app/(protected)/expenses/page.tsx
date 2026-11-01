@@ -12,7 +12,7 @@ import { FUEL_CATEGORY } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { bangkokDayKey, parseRange, resolveRange } from "@/lib/time";
 
-const RANGES = ["today", "7d", "month", "last-month"] as const;
+const RANGES = ["today", "7d", "month", "last-month", "all"] as const;
 const CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "บรรจุภัณฑ์", "วัตถุดิบ", "ค่าเช่า", "ค่าแรง", "การตลาด", "อุปกรณ์", "อื่น ๆ"];
 
 export default async function ExpensesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string }> }) {

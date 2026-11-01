@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  dailySeries, defaultOrderPackaging, expensesByCategory, learnedYield, menuCostWarnings, menuRanking, packagingLinesCost, percentChange,
+  dailySeries, defaultOrderPackaging, expensesByCategory, learnedYield, menuCostWarnings, menuRanking, monthlySeries, packagingLinesCost, percentChange,
   pooledCost, pooledIngredientBps, recipeCostParts, recipeMaterialCost, summarize, weightedPricePerUnit, yieldWindow,
 } from "./analytics";
 import type { ExpenseRecord, MenuRecord, SaleRecord } from "./data/types";
@@ -265,5 +265,20 @@ describe("Bangkok time ranges", () => {
       6,
     );
     expect(points.map((p) => [p.key, p.revenue])).toEqual([["2026-10-12", 5000], ["2026-10-13", 8000]]);
+    const all = resolveRange("all", now);
+    expect(all.label).toBe("ทั้งหมด");
+    const prev = previousRange(all);
+    expect(prev.start.getTime()).toBe(prev.end.getTime());
+    const months = monthlySeries(
+      [
+        sale({ id: "oct", soldAt: "2026-10-15T05:00:00.000Z", netRevenue: 10000, cogs: 4000 }),
+        sale({ id: "nov", soldAt: "2026-11-01T05:00:00.000Z", netRevenue: 5000, cogs: 2000 }),
+      ],
+      [],
+    );
+    expect(months.map((m) => [m.key, m.revenue, m.grossProfit])).toEqual([
+      ["2026-11", 5000, 3000],
+      ["2026-10", 10000, 6000],
+    ]);
   });
 });
