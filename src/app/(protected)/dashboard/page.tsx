@@ -8,8 +8,8 @@ import { fetchExpenses, fetchMenus, fetchPooledRate, fetchSaleSettings, fetchSal
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatThaiShortDate, formatTime, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
 
-const RANGES = ["today", "yesterday", "7d", "month"] as const;
-const COMPARE_LABEL = { today: "เมื่อวาน", yesterday: "วันก่อนหน้า", "7d": "7 วันก่อน", month: "ช่วงเดียวกันเดือนก่อน", "last-month": "เดือนก่อนหน้า" } as const;
+const RANGES = ["today", "yesterday", "7d", "month", "last-month", "all"] as const;
+const COMPARE_LABEL = { today: "เมื่อวาน", yesterday: "วันก่อนหน้า", "7d": "7 วันก่อน", month: "ช่วงเดียวกันเดือนก่อน", "last-month": "เดือนก่อนหน้า", all: "ก่อนหน้า" } as const;
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const key = parseRange((await searchParams).range, [...RANGES], "today");
@@ -17,16 +17,18 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const saleSettings = await fetchSaleSettings();
   const dayStartHour = saleSettings.dayStartHour ?? 0;
   const range = resolveRange(key, now, dayStartHour);
-  const prev = previousRange(range);
+  const allRange = resolveRange("all", now, dayStartHour);
+  const prev = previousRange(range, dayStartHour);
   const today = startOfBangkokDay(now, dayStartHour);
   const chartStart = new Date(today.getTime() - 6 * DAY_MS);
   const monthStart = startOfBangkokMonth(now, 0, dayStartHour);
-  const windowStart = new Date(Math.min(prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
+  const windowStart = new Date(Math.min(allRange.start.getTime(), prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
   const windowEnd = new Date(today.getTime() + DAY_MS);
 
   const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate(saleSettings)]);
 
   const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
+  const allTime = summarize(filterSales(sales, allRange.start, windowEnd), filterExpenses(expenses, allRange.start, windowEnd));
   const current = summarize(filterSales(sales, range.start, range.end), filterExpenses(expenses, range.start, range.end));
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
   const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now, dayStartHour), dayStartHour);
@@ -35,6 +37,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const recent = sales.filter((s) => s.status === "confirmed").slice(0, 4);
   const warnings = menuCostWarnings(menus, 2000, pooled.bps);
   const label = range.label;
+  const expenseLabel = key === "all" ? "ค่าใช้จ่ายรวมทั้งหมด" : `ค่าใช้จ่ายทั้งหมด${label}`;
   const totalExpenses = current.operatingExpenses + current.directExpenses;
 
   return <>
@@ -52,7 +55,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     <RangeTabs basePath="/dashboard" options={[...RANGES]} active={key} />
     <section className="stat-grid main-stats">
       <StatCard label={`ยอดขาย${label}`} value={formatBaht(current.revenue)} detail={formatChange(percentChange(current.revenue, previous.revenue), COMPARE_LABEL[key]) ?? `${current.saleCount.toLocaleString("th-TH")} รายการ`} tone="blue" icon={TrendingUp} />
-      <StatCard label={`ค่าใช้จ่ายทั้งหมด${label}`} value={formatBaht(totalExpenses)} detail={current.directExpenses ? `ของสด/กล่อง ${formatBaht(current.directExpenses)} · ค่าร้าน ${formatBaht(current.operatingExpenses)}` : `ค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" icon={WalletCards} />
+      <StatCard label={expenseLabel} value={formatBaht(totalExpenses)} detail={current.directExpenses ? `ของสด/กล่อง ${formatBaht(current.directExpenses)} · ค่าร้าน ${formatBaht(current.operatingExpenses)}` : `ค่าใช้จ่ายดำเนินงาน ${formatBaht(current.operatingExpenses)}`} tone="amber" icon={WalletCards} />
       <StatCard label={`กำไรสุทธิ${label}`} value={formatBaht(current.netProfit)} detail={current.revenue ? `${formatPercentBps(current.netMarginBps)} ของยอดขาย` : "ยังไม่มียอดขาย"} tone="green" icon={Wallet} />
     </section>
     <section className="stat-grid mini-stats">
@@ -63,12 +66,22 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     </section>
     <section className="dashboard-grid">
       <article className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขายและกำไร</h2><p>7 วันล่าสุด · {formatThaiShortDate(chartStart)} – {formatThaiShortDate(today)}</p></div><span className="metric-up">{formatBaht(chartRevenue)}</span></div><SalesChart points={chart} /></article>
-      <article className="panel"><div className="panel-head"><div><h2>ภาพรวมเดือนนี้</h2><p>{formatThaiShortDate(monthStart)} – {formatThaiShortDate(today)}</p></div></div>
+      <article className="panel">
+        <div className="panel-head"><div><h2>ภาพรวมเดือนนี้</h2><p>{formatThaiShortDate(monthStart)} – {formatThaiShortDate(today)}</p></div></div>
         <div className="month-total"><span>ยอดขาย</span><strong>{formatBaht(month.revenue)}</strong></div>
         <div className="month-total"><span>ค่าใช้จ่ายทั้งหมด</span><strong>{formatBaht(month.operatingExpenses + month.directExpenses)}</strong></div>
         <div className="month-total green"><span>กำไรสุทธิ</span><strong>{formatBaht(month.netProfit)}</strong></div>
         <div className="progress-row"><span>{month.saleCount.toLocaleString("th-TH")} รายการ · {month.boxes.toLocaleString("th-TH")} กล่อง</span><b>{month.revenue ? formatPercentBps(month.netMarginBps) : "–"}</b></div>
         <div className="progress"><i style={{ width: `${Math.min(100, Math.max(0, month.netMarginBps / 100))}%` }} /></div>
+
+        <div style={{ borderTop: "1px solid var(--border, rgba(0,0,0,0.08))", marginTop: 18, paddingTop: 16 }}>
+          <div className="panel-head" style={{ marginBottom: 8 }}><div><h2>รวมทั้งหมด (ทุกเดือน)</h2><p>ยอดสะสมตั้งแต่เริ่มบันทึกในระบบ</p></div></div>
+          <div className="month-total"><span>ยอดขายรวม</span><strong>{formatBaht(allTime.revenue)}</strong></div>
+          <div className="month-total"><span>ค่าใช้จ่ายรวม</span><strong>{formatBaht(allTime.operatingExpenses + allTime.directExpenses)}</strong></div>
+          <div className="month-total green"><span>กำไรสุทธิรวม</span><strong>{formatBaht(allTime.netProfit)}</strong></div>
+          <div className="progress-row"><span>{allTime.saleCount.toLocaleString("th-TH")} รายการ · {allTime.boxes.toLocaleString("th-TH")} กล่อง</span><b>{allTime.revenue ? formatPercentBps(allTime.netMarginBps) : "–"}</b></div>
+          <div className="progress"><i style={{ width: `${Math.min(100, Math.max(0, allTime.netMarginBps / 100))}%` }} /></div>
+        </div>
       </article>
     </section>
     <section className="dashboard-grid lower">

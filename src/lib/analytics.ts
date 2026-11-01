@@ -1,6 +1,6 @@
 import { allocateSatang, customerAmountDue, roundedMaterialCost } from "@/lib/money";
 import { FUEL_CATEGORY, isAddonCategory, isDishCategory, isServiceCategory, type ExpenseRecord, type MenuRecord, type RecipeItemRecord, type SaleRecord } from "@/lib/data/types";
-import { DAY_MS, bangkokDayKey, formatThaiShortDate, formatThaiWeekday, isWithin } from "@/lib/time";
+import { DAY_MS, bangkokDayKey, bangkokMonthKey, formatThaiMonthYear, formatThaiShortDate, formatThaiWeekday, isWithin } from "@/lib/time";
 
 /** Only confirmed sales count toward revenue and profit. Cancelled/refunded/draft are excluded. */
 export const countsAsRevenue = (sale: SaleRecord) => sale.status === "confirmed";
@@ -150,6 +150,60 @@ export function dailySeries(sales: SaleRecord[], expenses: ExpenseRecord[], star
   }
   for (const point of points.values()) point.netProfit = point.grossProfit - point.operatingExpenses;
   return [...points.values()];
+}
+
+export type MonthPoint = {
+  key: string;
+  label: string;
+  saleCount: number;
+  boxes: number;
+  revenue: number;
+  grossProfit: number;
+  operatingExpenses: number;
+  directExpenses: number;
+  netProfit: number;
+};
+
+/** One point per Bangkok calendar month that has sales or expenses, newest month first. */
+export function monthlySeries(sales: SaleRecord[], expenses: ExpenseRecord[], dayStartHour = 0): MonthPoint[] {
+  const points = new Map<string, MonthPoint>();
+  const ensure = (key: string) => {
+    let p = points.get(key);
+    if (!p) {
+      p = {
+        key,
+        label: formatThaiMonthYear(`${key}-15T12:00:00+07:00`),
+        saleCount: 0,
+        boxes: 0,
+        revenue: 0,
+        grossProfit: 0,
+        operatingExpenses: 0,
+        directExpenses: 0,
+        netProfit: 0,
+      };
+      points.set(key, p);
+    }
+    return p;
+  };
+  for (const sale of sales) {
+    if (!countsAsRevenue(sale)) continue;
+    const point = ensure(bangkokMonthKey(sale.soldAt, dayStartHour));
+    point.saleCount += 1;
+    point.revenue += sale.netRevenue;
+    point.grossProfit += sale.netRevenue - sale.cogs;
+    for (const item of sale.items) {
+      if (isDishCategory(item.category, item.name)) point.boxes += item.quantity;
+    }
+  }
+  for (const expense of expenses) {
+    const point = ensure(bangkokMonthKey(expense.spentAt, dayStartHour));
+    if (isOperatingExpense(expense)) point.operatingExpenses += expense.amount;
+    else point.directExpenses += expense.amount;
+  }
+  for (const point of points.values()) {
+    point.netProfit = point.grossProfit - point.operatingExpenses;
+  }
+  return [...points.values()].sort((a, b) => b.key.localeCompare(a.key));
 }
 
 export type MenuRank = { menuId: string; name: string; isAddon: boolean; isAdjustment?: boolean; quantity: number; revenue: number; cost: number; profit: number; marginBps: number };
