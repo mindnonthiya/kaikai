@@ -6,6 +6,7 @@ import { LogOut, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Brand } from "./brand";
 import { navItems } from "./icons";
+import { PwaDrawerInstallButton } from "./pwa-install";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 
@@ -67,6 +68,7 @@ export function AppShell({
               <Icon size={20} strokeWidth={2} /><span>{label}</span>
             </Link>
           ))}
+          <PwaDrawerInstallButton onNavigate={() => setOpen(false)} />
           <button
             type="button"
             className="side-nav-logout"

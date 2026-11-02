@@ -4,6 +4,7 @@ import { ActionForm } from "@/components/action-form";
 import { LogoutButton } from "@/components/logout-button";
 import { PresetManager } from "@/components/preset-manager";
 import { ProfileAvatarField } from "@/components/profile-avatar-field";
+import { PwaSettingsCard } from "@/components/pwa-install";
 import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
 import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
@@ -109,6 +110,8 @@ export default async function SettingsPage() {
         </div>
         <p className="privacy-note"><ShieldCheck size={17} />ข้อมูลของแต่ละบัญชีแยกกันด้วย Row Level Security และสลิปเก็บใน Private Storage</p>
       </section>
+
+      <PwaSettingsCard />
     </div>
   </>;
 }
