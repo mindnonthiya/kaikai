@@ -14,6 +14,11 @@ const PUBLIC_PATHS = [
   "/.well-known/",
   "/ai-catalog.json",
   "/favicon.ico",
+  "/apple-touch-icon.png",
+  "/manifest.webmanifest",
+  "/manifest.json",
+  "/sw.js",
+  "/icons/",
 ];
 /** Signed-in users are sent from these to the dashboard. */
 const GUEST_ONLY_PATHS = ["/login", "/signup", "/forgot-password"];

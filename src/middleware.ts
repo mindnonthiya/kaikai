@@ -13,6 +13,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   // Exclude static assets, icons, and discovery files so bots and crawlers get them directly without auth redirect
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|llms.txt|llms-full.txt|ai-catalog.json|.*\\.png$|.*\\.jpg$|.*\\.svg$|.*\\.webp$|\\.well-known).*)",
+    "/((?!_next/static|_next/image|favicon.ico|apple-touch-icon.png|manifest.webmanifest|manifest.json|sw.js|icons/|robots.txt|sitemap.xml|llms.txt|llms-full.txt|ai-catalog.json|.*\\.png$|.*\\.jpg$|.*\\.svg$|.*\\.webp$|\\.well-known).*)",
   ],
 };
