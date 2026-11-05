@@ -62,6 +62,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         perUnit={catalog.perUnit}
         pooled={catalog.pooled}
         restockItems={catalog.restockItems}
+        dayStartHour={saleSettings.dayStartHour}
       />
       <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
     </details>
@@ -85,6 +86,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         perUnit={catalog.perUnit}
         pooled={catalog.pooled}
         restockItems={catalog.restockItems}
+        dayStartHour={saleSettings.dayStartHour}
         maxDate={maxDate}
       />
     </section>

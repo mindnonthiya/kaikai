@@ -52,6 +52,7 @@ export default async function BatchExpenseSlipImportPage() {
         perUnit={catalog.perUnit}
         pooled={catalog.pooled}
         restockItems={catalog.restockItems}
+        dayStartHour={saleSettings.dayStartHour}
       />
     </>
   );

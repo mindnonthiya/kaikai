@@ -634,3 +634,60 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
     };
   });
 }
+
+
+export async function toggleIngredientActive(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase }) => {
+    const ingredientId = id(form);
+    const active = form.get("is_active") === "true";
+    const { error } = await supabase
+      .from("ingredients")
+      .update({ is_active: active, updated_at: new Date().toISOString() })
+      .eq("id", ingredientId);
+    if (error) dbError(error);
+    revalidateCosts();
+    return { ok: true, message: active ? "เปิดใช้งานวัตถุดิบแล้ว" : "ซ่อนวัตถุดิบจากการสั่งซื้อแล้ว" };
+  });
+}
+
+export async function deleteIngredient(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase }) => {
+    const ingredientId = id(form);
+    const { error } = await supabase.from("ingredients").delete().eq("id", ingredientId);
+    if (error) {
+      dbError(error, {
+        foreignKey: "ลบไม่ได้เพราะมีประวัติการซื้อหรือผูกอยู่ในสูตรเมนูแล้ว — แนะนำให้กด “ซ่อน” แทน",
+      });
+    }
+    revalidateCosts();
+    return { ok: true, message: "ลบวัตถุดิบแล้ว" };
+  });
+}
+
+export async function togglePackagingActive(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase }) => {
+    const packagingId = id(form);
+    const active = form.get("is_active") === "true";
+    const { error } = await supabase
+      .from("packaging_items")
+      .update({ is_active: active, updated_at: new Date().toISOString() })
+      .eq("id", packagingId);
+    if (error) dbError(error);
+    revalidateCosts();
+    return { ok: true, message: active ? "เปิดใช้งานบรรจุภัณฑ์แล้ว" : "ซ่อนบรรจุภัณฑ์แล้ว" };
+  });
+}
+
+export async function deletePackaging(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase }) => {
+    const packagingId = id(form);
+    const { error } = await supabase.from("packaging_items").delete().eq("id", packagingId);
+    if (error) {
+      dbError(error, {
+        foreignKey: "ลบไม่ได้เพราะมีประวัติการซื้อหรือใช้อยู่ในบิลขายแล้ว — แนะนำให้กด “ซ่อน” แทน",
+      });
+    }
+    revalidateCosts();
+    return { ok: true, message: "ลบบรรจุภัณฑ์แล้ว" };
+  });
+}

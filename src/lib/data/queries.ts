@@ -141,6 +141,7 @@ function mapSale(row: Row): SaleRecord {
     cogs: num(row.cogs_satang),
     grossProfit: netRevenue - num(row.cogs_satang),
     slipPath: strOrNull(one(row.slip_uploads)?.storage_path),
+    slipPaths: rows(row.slip_uploads).map((s) => str(s.storage_path)).filter(Boolean),
     items: rows(row.sale_items).map((item) => ({
       menuId: str(item.menu_id),
       name: str(item.menu_name_snapshot),

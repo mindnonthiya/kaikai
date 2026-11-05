@@ -10,7 +10,7 @@ import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatTime, fromBangkokDateInput, startOfBangkokDay } from "@/lib/time";
 import { ActionButton } from "@/components/action-form";
 import { setExpensePaymentMethod } from "@/app/actions/expenses";
-import { markSalePaidByTransfer } from "@/app/actions/sales";
+import { markSalePaid, markSalePaidByTransfer } from "@/app/actions/sales";
 
 export default async function BankCheckPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const params = await searchParams;
@@ -75,7 +75,16 @@ export default async function BankCheckPage({ searchParams }: { searchParams: Pr
             {check.outstanding.map((o) => (
               <li key={o.id}>
                 <span><strong>#{o.saleNumber} · {o.customerName ?? "ลูกค้าทั่วไป"}</strong><small>{formatTime(o.soldAt)}</small></span>
-                <strong>{formatBaht(o.amount)}</strong>
+                <span className="bank-side-actions">
+                  <strong>{formatBaht(o.amount)}</strong>
+                  <ActionButton
+                    action={markSalePaid}
+                    fields={{ id: o.id, method: "transfer" }}
+                    label="รับโอนแล้ว"
+                    pendingLabel="กำลังบันทึก…"
+                    confirmText={`ยืนยันว่าได้รับเงินโอนบิล #${o.saleNumber} (${formatBaht(o.amount)}) แล้ว?`}
+                  />
+                </span>
               </li>
             ))}
             {!check.outstanding.length && <li className="empty-state">ได้รับเงินครบทุกบิล</li>}

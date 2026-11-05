@@ -4,12 +4,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
+import { revalidateSalesAction } from "@/app/actions/sales";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
 import type { Fulfillment, PricePreset } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 import { compressSlipImage } from "@/lib/image-compression";
+import {
+  collectSlipReferenceNumbers,
+  formatMultiSlipBreakdownNote,
+  sumSlipAmountsSatang,
+} from "@/lib/slip-merge";
 import { fromBangkokDateTimeInput, toBangkokDateTimeInput } from "@/lib/time";
 
 type Cart = Record<string, number>;
@@ -29,6 +35,18 @@ export type MenuOption = {
   packaging: Array<{ packagingId: string; quantity: number }>;
 };
 export type PackagingOption = { id: string; name: string; unit: string; unitCost: number };
+
+type AttachedSlipEntry = {
+  id: string;
+  file: File;
+  hash: string;
+  amountSatang: number;
+  transferredAt?: string;
+  bank?: string;
+  referenceNumber?: string;
+  isDuplicate?: boolean;
+  duplicateReason?: string;
+};
 
 const SLIP_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 const MAX_SLIP_BYTES = 10 * 1024 * 1024;
@@ -73,7 +91,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
   const [paidAmount, setPaidAmount] = useState("");
   const [customer, setCustomer] = useState("");
   const [soldAt, setSoldAt] = useState(() => toBangkokDateTimeInput());
-  const [slip, setSlip] = useState<File | null>(null);
+  const [attachedSlips, setAttachedSlips] = useState<AttachedSlipEntry[]>([]);
   const [result, setResult] = useState<{ ok: boolean; text: string; saleId?: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -190,99 +208,176 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
     setCustomItems((prev) => prev.filter((item) => item.id !== id));
   }
 
+  function applyCombinedSlipsToOrder(nextSlips: AttachedSlipEntry[]) {
+    if (nextSlips.length === 0) return;
+    const totalSlipSatang = sumSlipAmountsSatang(
+      nextSlips[0].amountSatang,
+      nextSlips.slice(1)
+    );
+    if (totalSlipSatang <= 0) return;
+
+    const matched = presets.find((p) => p.amountSatang === totalSlipSatang);
+    const breakdownText =
+      nextSlips.length > 1
+        ? ` (${formatMultiSlipBreakdownNote(nextSlips[0].amountSatang, nextSlips.slice(1))})`
+        : "";
+
+    if (matched) {
+      const newCart: Cart = {};
+      for (const it of matched.items) {
+        newCart[it.menuId] = it.quantity;
+      }
+      setCart(newCart);
+      setFulfillment(matched.fulfillment);
+      if (matched.fulfillment === "delivery") {
+        setDelivery(formatBaht(matched.deliveryChargedSatang, false));
+      }
+      let presetItemsTotal = 0;
+      for (const it of matched.items) {
+        const m = menus.find((menu) => menu.id === it.menuId);
+        if (m) presetItemsTotal += m.price * it.quantity;
+      }
+      const deliveryFee = matched.fulfillment === "delivery" ? matched.deliveryChargedSatang : 0;
+      const diff = totalSlipSatang - (presetItemsTotal + deliveryFee);
+      setTip(diff > 0 ? formatBaht(diff, false) : "0");
+      setResult({
+        ok: true,
+        text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ${diff > 0 ? ` (ทิป/โอนเกิน +${formatBaht(diff)})` : ""}`,
+      });
+    } else {
+      let cartFoodTotal = 0;
+      for (const m of selected) {
+        cartFoodTotal += m.price * (cart[m.id] ?? 0);
+      }
+      for (const c of customItems) {
+        cartFoodTotal += c.price * c.quantity;
+      }
+      const delFee = fulfillment === "delivery" ? (tryBahtToSatang(delivery) ?? 0) : 0;
+      const diff = totalSlipSatang - (cartFoodTotal + delFee);
+      if (cartFoodTotal > 0 && diff >= 0) {
+        setTip(diff > 0 ? formatBaht(diff, false) : "0");
+      }
+      setResult({
+        ok: true,
+        text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText}${cartFoodTotal > 0 && diff > 0 ? ` (คำนวณทิปให้อัตโนมัติ +${formatBaht(diff)})` : ""}`,
+      });
+    }
+  }
+
   async function chooseSlip(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
+    const fileList = event.target.files ? Array.from(event.target.files) : [];
     event.target.value = "";
-    if (!file) return;
-    if (!SLIP_TYPES[file.type]) return setResult({ ok: false, text: "รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP" });
-    if (file.size > MAX_SLIP_BYTES) return setResult({ ok: false, text: "ไฟล์สลิปต้องไม่เกิน 10 MB" });
+    if (fileList.length === 0) return;
+
+    for (const f of fileList) {
+      if (!SLIP_TYPES[f.type]) return setResult({ ok: false, text: "รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP" });
+      if (f.size > MAX_SLIP_BYTES) return setResult({ ok: false, text: "ไฟล์สลิปต้องไม่เกิน 10 MB" });
+    }
 
     try {
       setResult({ ok: true, text: "กำลังบีบอัดรูปและอ่านข้อมูลสลิป…" });
-      const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
-      setSlip(compressed.file);
+      const newEntries: AttachedSlipEntry[] = [];
+      let duplicateWarning: string | null = null;
+      let firstTransferredAt: string | undefined;
 
-      // Analyze slip via API
-      const formData = new FormData();
-      formData.append("file", compressed.file);
-      formData.append("hash", compressed.hash);
+      for (const file of fileList) {
+        const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
+        const formData = new FormData();
+        formData.append("file", compressed.file);
+        formData.append("hash", compressed.hash);
 
-      const res = await fetch("/api/slip/analyze", { method: "POST", body: formData });
-      const json = await res.json();
+        const res = await fetch("/api/slip/analyze", { method: "POST", body: formData });
+        const json = await res.json();
 
-      if (json.isDuplicate) {
-        setResult({
-          ok: false,
-          text: json.duplicateReason
+        const amtSatang = json.ok && json.result?.amountSatang ? Number(json.result.amountSatang) : 0;
+        if (json.ok && json.result?.transferredAt && !firstTransferredAt) {
+          firstTransferredAt = String(json.result.transferredAt);
+        }
+        if (json.isDuplicate && !duplicateWarning) {
+          duplicateWarning = json.duplicateReason
             ? `${json.duplicateReason} — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`
-            : `สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? "เดิม"}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`,
+            : `สลิปนี้เคยใช้แล้ว (บิล #${json.duplicateSaleNumber ?? "เดิม"}) — ตรวจสอบว่าไม่ได้บันทึกซ้ำ`;
+        }
+
+        newEntries.push({
+          id: crypto.randomUUID(),
+          file: compressed.file,
+          hash: compressed.hash,
+          amountSatang: amtSatang,
+          transferredAt: json.result?.transferredAt,
+          bank: json.result?.bank,
+          referenceNumber: json.result?.referenceNumber,
+          isDuplicate: Boolean(json.isDuplicate),
+          duplicateReason: json.duplicateReason,
         });
+      }
+
+      if (attachedSlips.length === 0 && firstTransferredAt) {
+        const parsedDate = new Date(firstTransferredAt);
+        if (!Number.isNaN(parsedDate.getTime())) {
+          setSoldAt(toBangkokDateTimeInput(parsedDate));
+        }
+      }
+
+      const combinedSlips = [...attachedSlips, ...newEntries];
+      setAttachedSlips(combinedSlips);
+
+      if (duplicateWarning) {
+        setResult({ ok: false, text: duplicateWarning });
         return;
       }
 
-      if (json.ok && json.result?.amountSatang) {
-        const amtSatang = json.result.amountSatang;
-        const matched = presets.find((p) => p.amountSatang === amtSatang);
-
-        if (matched) {
-          const newCart: Cart = {};
-          for (const it of matched.items) {
-            newCart[it.menuId] = it.quantity;
-          }
-          setCart(newCart);
-          setFulfillment(matched.fulfillment);
-          if (matched.fulfillment === "delivery") {
-            setDelivery(formatBaht(matched.deliveryChargedSatang, false));
-          }
-          let presetItemsTotal = 0;
-          for (const it of matched.items) {
-            const m = menus.find((menu) => menu.id === it.menuId);
-            if (m) presetItemsTotal += m.price * it.quantity;
-          }
-          const deliveryFee = matched.fulfillment === "delivery" ? matched.deliveryChargedSatang : 0;
-          const diff = amtSatang - (presetItemsTotal + deliveryFee);
-          if (diff > 0) {
-            setTip(formatBaht(diff, false));
-          } else {
-            setTip("0");
-          }
-          setResult({
-            ok: true,
-            text: `ตรวจพบยอด ${formatBaht(amtSatang)} · จับคู่สูตร "${matched.name}" ให้อัตโนมัติ${diff > 0 ? ` (ทิป/โอนเกิน +${formatBaht(diff)})` : ""} (สลิปบีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
-          });
-        } else {
-          let cartFoodTotal = 0;
-          for (const m of selected) {
-            cartFoodTotal += m.price * (cart[m.id] ?? 0);
-          }
-          const delFee = fulfillment === "delivery" ? (tryBahtToSatang(delivery) ?? 0) : 0;
-          const diff = amtSatang - (cartFoodTotal + delFee);
-          if (cartFoodTotal > 0 && diff > 0) {
-            setTip(formatBaht(diff, false));
-          }
-          setResult({
-            ok: true,
-            text: `ตรวจพบยอดเงิน ${formatBaht(amtSatang)} ในสลิป${cartFoodTotal > 0 && diff > 0 ? ` (คำนวณทิปให้อัตโนมัติ +${formatBaht(diff)})` : ""} (บีบอัดเหลือ ${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
-          });
-        }
+      const totalSatang = sumSlipAmountsSatang(
+        combinedSlips[0]?.amountSatang ?? 0,
+        combinedSlips.slice(1)
+      );
+      if (totalSatang > 0) {
+        applyCombinedSlipsToOrder(combinedSlips);
       } else {
         setResult({
           ok: true,
-          text: `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB · บีบอัดเพื่อประหยัดพื้นที่)`,
+          text: `แนบสลิปเรียบร้อย (${combinedSlips.length} ใบ · บีบอัดเพื่อประหยัดพื้นที่)`,
         });
       }
     } catch (err: unknown) {
       console.error("Slip compression/analysis error:", err);
-      setSlip(file);
+      const fallbackEntries = await Promise.all(
+        fileList.map(async (f) => ({
+          id: crypto.randomUUID(),
+          file: f,
+          hash: await sha256Hex(f),
+          amountSatang: 0,
+        }))
+      );
+      setAttachedSlips((prev) => [...prev, ...fallbackEntries]);
       setResult(null);
     }
+  }
+
+  function removeAttachedSlip(id: string) {
+    const nextSlips = attachedSlips.filter((s) => s.id !== id);
+    setAttachedSlips(nextSlips);
+    if (nextSlips.length > 0) {
+      applyCombinedSlipsToOrder(nextSlips);
+    } else {
+      setResult(null);
+    }
+  }
+
+  function updateAttachedSlipAmount(id: string, bahtStr: string) {
+    const parsedSatang = tryBahtToSatang(bahtStr) ?? 0;
+    const nextSlips = attachedSlips.map((s) =>
+      s.id === id ? { ...s, amountSatang: parsedSatang } : s
+    );
+    setAttachedSlips(nextSlips);
+    applyCombinedSlipsToOrder(nextSlips);
   }
 
 
   function resetForm() {
     setCart({}); setAdjust({}); setCustomItems([]); setShowCustomForm(false);
     setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setTip("0"); setFee("0");
-    setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setSlip(null);
+    setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setAttachedSlips([]);
     setSoldAt(toBangkokDateTimeInput());
   }
 
@@ -294,19 +389,44 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
     const supabase = createClient();
     let slipPayload: Record<string, unknown> | undefined;
     let uploadedPath: string | null = null;
+    const extraUploadedPaths: string[] = [];
     try {
-      if (slip && payment === "transfer") {
-        if (!(await hasImageSignature(slip))) throw new Error("ไฟล์สลิปไม่ใช่รูปภาพที่ถูกต้อง");
-        const { data: { user } } = await supabase.auth.getUser();
+      const primarySlip = attachedSlips[0] ?? null;
+      const extraSlips = attachedSlips.slice(1);
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (primarySlip && payment === "transfer") {
+        if (!(await hasImageSignature(primarySlip.file))) throw new Error("ไฟล์สลิปไม่ใช่รูปภาพที่ถูกต้อง");
         if (!user) throw new Error("หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่");
-        const hash = await sha256Hex(slip);
-        uploadedPath = `${user.id}/${crypto.randomUUID()}.${SLIP_TYPES[slip.type]}`;
-        const { error: uploadError } = await supabase.storage.from("sale-slips").upload(uploadedPath, slip, { contentType: slip.type, upsert: false });
+        const hash = primarySlip.hash || (await sha256Hex(primarySlip.file));
+        const finalHash = primarySlip.isDuplicate
+          ? `${hash}-ov-${crypto.randomUUID().slice(0, 8)}`
+          : hash;
+        uploadedPath = `${user.id}/${crypto.randomUUID()}.${SLIP_TYPES[primarySlip.file.type] ?? "webp"}`;
+        const { error: uploadError } = await supabase.storage
+          .from("sale-slips")
+          .upload(uploadedPath, primarySlip.file, { contentType: primarySlip.file.type, upsert: false });
         if (uploadError) { uploadedPath = null; throw new Error(`อัปโหลดสลิปไม่สำเร็จ: ${uploadError.message}`); }
-        slipPayload = { storage_path: uploadedPath, mime_type: slip.type, size_bytes: slip.size, file_hash_sha256: hash };
+        slipPayload = {
+          storage_path: uploadedPath,
+          mime_type: primarySlip.file.type,
+          size_bytes: primarySlip.file.size,
+          file_hash_sha256: finalHash,
+        };
       }
 
+      const multiSlipNote =
+        primarySlip && extraSlips.length > 0
+          ? formatMultiSlipBreakdownNote(primarySlip.amountSatang, extraSlips)
+          : null;
+      const allRefs =
+        payment === "transfer" && primarySlip
+          ? collectSlipReferenceNumbers(primarySlip.referenceNumber, extraSlips)
+          : [];
+
       const notesParts = [
+        multiSlipNote,
+        allRefs.length > 0 ? `เลขอ้างอิง: ${allRefs.join(", ")}` : null,
         tipSatang && tipSatang > 0 ? `ทิป/โอนเกิน ${formatBaht(tipSatang)}` : null,
         customItems.length ? `รายการพิเศษ: ${customItems.map((c) => `${c.name} x${c.quantity}`).join(", ")}` : null,
       ].filter(Boolean);
@@ -334,6 +454,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         customer_name: customer.trim() || null,
         sold_at: fromBangkokDateTimeInput(soldAt),
         notes: notesParts.join(" · ") || null,
+        reference_number: allRefs.join(", ") || null,
         ...(slipPayload ? { slip: slipPayload } : {}),
       } });
 
@@ -344,16 +465,73 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         throw new Error(`บันทึกไม่สำเร็จ: ${error.message}`);
       }
       const saleId = String((data as { sale_id?: string })?.sale_id ?? "");
+
+      // Upload & link any additional combined slips (extraSlips) to the created sale_id
+      if (saleId && user && payment === "transfer" && extraSlips.length > 0) {
+        for (const extra of extraSlips) {
+          if (!(await hasImageSignature(extra.file))) continue;
+          const extraPath = `${user.id}/${crypto.randomUUID()}.${SLIP_TYPES[extra.file.type] ?? "webp"}`;
+          const { error: exUpErr } = await supabase.storage
+            .from("sale-slips")
+            .upload(extraPath, extra.file, { contentType: extra.file.type, upsert: false });
+          if (exUpErr) continue;
+          extraUploadedPaths.push(extraPath);
+
+          const rawExtraHash = extra.hash || (await sha256Hex(extra.file));
+          const preferredHash =
+            extra.isDuplicate || rawExtraHash === primarySlip?.hash
+              ? `${rawExtraHash}-ov-${crypto.randomUUID().slice(0, 8)}`
+              : rawExtraHash;
+
+          const { error: exInsErr } = await supabase.from("slip_uploads").insert({
+            owner_id: user.id,
+            sale_id: saleId,
+            storage_path: extraPath,
+            mime_type: extra.file.type,
+            size_bytes: extra.file.size,
+            file_hash_sha256: preferredHash,
+            ocr_status: "confirmed",
+            ocr_amount_satang: extra.amountSatang > 0 ? extra.amountSatang : null,
+            ocr_bank: extra.bank || null,
+            ocr_reference_number: extra.referenceNumber || null,
+            user_confirmed_at: new Date().toISOString(),
+          });
+
+          if (exInsErr && exInsErr.message.includes("slip_uploads_owner_id_file_hash_sha256_key")) {
+            await supabase.from("slip_uploads").insert({
+              owner_id: user.id,
+              sale_id: saleId,
+              storage_path: extraPath,
+              mime_type: extra.file.type,
+              size_bytes: extra.file.size,
+              file_hash_sha256: `${preferredHash}-ov-${crypto.randomUUID().slice(0, 8)}`,
+              ocr_status: "confirmed",
+              ocr_amount_satang: extra.amountSatang > 0 ? extra.amountSatang : null,
+              ocr_bank: extra.bank || null,
+              ocr_reference_number: extra.referenceNumber || null,
+              user_confirmed_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      await revalidateSalesAction();
       setResult({ ok: true, text: `บันทึกแล้ว · ยอด ${formatBaht(Number((data as { net_revenue_satang: number }).net_revenue_satang))} · กำไรขั้นต้น ${formatBaht(Number((data as { gross_profit_satang: number }).gross_profit_satang))}`, saleId });
       resetForm();
       router.refresh();
     } catch (error) {
       if (uploadedPath) await supabase.storage.from("sale-slips").remove([uploadedPath]);
+      if (extraUploadedPaths.length > 0) await supabase.storage.from("sale-slips").remove(extraUploadedPaths);
       setResult({ ok: false, text: error instanceof Error ? error.message : "บันทึกไม่สำเร็จ" });
     } finally {
       setSaving(false);
     }
   }
+
+  const totalAttachedSlipSatang =
+    attachedSlips.length > 0
+      ? sumSlipAmountsSatang(attachedSlips[0].amountSatang, attachedSlips.slice(1))
+      : 0;
 
   const hasItemsOrService = items.length > 0 || (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0);
   let step = 1;
@@ -554,9 +732,82 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         <label>ส่วนลด (บาท)<input id="sale-discount" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} aria-invalid={discountSatang === null} /></label>
         <label>ค่าธรรมเนียมที่ร้านจ่าย (บาท)<input id="sale-fee" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} aria-invalid={feeSatang === null} /></label>
       </div>
-      {payment === "transfer" && (slip
-        ? <div className="slip-chosen"><ImagePlus size={18} /><span><strong>{slip.name}</strong><small>{(slip.size / 1024).toFixed(0)} KB · จะอัปโหลดเมื่อกดบันทึก</small></span><button type="button" className="icon-button" onClick={() => setSlip(null)} aria-label="เอาสลิปออก"><X size={18} /></button></div>
-        : <label className="slip-drop"><input id="sale-slip" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseSlip} /><ImagePlus /><strong>แนบสลิปการโอน (ไม่บังคับ)</strong><span>JPG, PNG หรือ WebP ไม่เกิน 10 MB</span><small>สลิปไม่ใช่หลักฐานยืนยันว่าเงินเข้าบัญชีจริง</small></label>)}
+      {payment === "transfer" && (attachedSlips.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "10px" }}>
+          {attachedSlips.length > 1 && (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: "8px",
+                background: "rgba(15, 118, 110, 0.08)",
+                border: "1px solid rgba(15, 118, 110, 0.25)",
+                fontSize: "13px",
+                fontWeight: 600,
+                color: "var(--primary-dark, #0f766e)",
+              }}
+            >
+              {formatMultiSlipBreakdownNote(attachedSlips[0].amountSatang, attachedSlips.slice(1))}
+            </div>
+          )}
+          {attachedSlips.map((entry, idx) => (
+            <div key={entry.id} className="slip-chosen" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <ImagePlus size={18} />
+              <span style={{ flex: 1, minWidth: "160px" }}>
+                <strong>
+                  {attachedSlips.length > 1 ? `สลิปใบที่ ${idx + 1}: ` : ""}
+                  {entry.file.name}
+                </strong>
+                <small>
+                  {(entry.file.size / 1024).toFixed(0)} KB
+                  {entry.bank ? ` · ${entry.bank}` : ""}
+                  {entry.referenceNumber ? ` · Ref: ${entry.referenceNumber}` : ""}
+                </small>
+              </span>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "13px" }}>
+                <span>฿</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={entry.amountSatang > 0 ? (entry.amountSatang / 100).toString() : ""}
+                  onChange={(e) => updateAttachedSlipAmount(entry.id, e.target.value)}
+                  style={{ width: "84px", padding: "4px 6px", fontSize: "13px" }}
+                  aria-label={`ยอดสลิปใบที่ ${idx + 1}`}
+                />
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => removeAttachedSlip(entry.id)}
+                aria-label="เอาสลิปออก"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          ))}
+          <label
+            className="secondary-button"
+            style={{ alignSelf: "flex-start", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px" }}
+          >
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              style={{ display: "none" }}
+              onChange={chooseSlip}
+            />
+            <Plus size={15} /> บวกสลิปโอนเพิ่ม (กรณีลูกค้าโอนแยกหลายสลิป)
+          </label>
+        </div>
+      ) : (
+        <label className="slip-drop">
+          <input id="sale-slip" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseSlip} />
+          <ImagePlus />
+          <strong>แนบสลิปการโอน (เลือกหลายใบเพื่อรวมยอดได้)</strong>
+          <span>JPG, PNG หรือ WebP ไม่เกิน 10 MB</span>
+          <small>หากลูกค้าโอนผิดแล้วโอนเพิ่ม สามารถเลือก 2 สลิปพร้อมกันหรือกดบวกสลิปเพิ่มเพื่อรวมยอดในบิลเดียวได้</small>
+        </label>
+      ))}
     </section>
     <aside className="order-summary"><h2>สรุปรายการ</h2>
       <div className="order-lines">
@@ -568,6 +819,12 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       {(discountSatang ?? 0) > 0 && <div className="summary-row"><span>ส่วนลด</span><strong>−{formatBaht(discountSatang!)}</strong></div>}
       {(tipSatang ?? 0) > 0 && <div className="summary-row green"><span>ทิป / ได้รับเพิ่ม</span><strong>+{formatBaht(tipSatang!)}</strong></div>}
       <div className="summary-total"><span>ยอดที่ต้องรับ (ตรงสลิป)</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
+      {attachedSlips.length > 0 && totalAttachedSlipSatang > 0 && (
+        <div className="summary-row">
+          <span>ยอดรวมสลิปที่แนบ ({attachedSlips.length} ใบ)</span>
+          <strong>{formatBaht(totalAttachedSlipSatang)}</strong>
+        </div>
+      )}
       {paymentStatus !== "paid" && <div className="summary-row"><span>ค้างรับ</span><strong>{formatBaht(Math.max(0, amountDue - paymentAmount))}</strong></div>}
       <div className="summary-row muted-row"><span>ต้นทุนสินค้า/วัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
       {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}
@@ -660,4 +917,3 @@ function PosMenuCard({
     </div>
   );
 }
-

@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { Box, PackageOpen, PackagePlus, ShoppingBasket } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
-import { ActionForm } from "@/components/action-form";
+import { ActionButton, ActionForm } from "@/components/action-form";
 import { IngredientKindFields } from "@/components/ingredient-kind-fields";
 import { IngredientPurchaseTable } from "@/components/ingredient-purchase-table";
 import { PackPriceFields } from "@/components/pack-price-fields";
 import { PackagingRestockTable, type RestockItem } from "@/components/packaging-restock-table";
 import { PurchaseSlipAttachment } from "@/components/purchase-slip-attachment";
-import { createIngredient, createPackaging, recordIngredientPurchases, restockPackaging, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
+import { createIngredient, createPackaging, deleteIngredient, deletePackaging, recordIngredientPurchases, restockPackaging, toggleIngredientActive, togglePackagingActive, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
 import { formatPercentBps } from "@/lib/analytics";
 import { resolvePackagingDefaultPack } from "@/lib/data/purchase-options";
 import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchSaleSettings } from "@/lib/data/queries";
@@ -113,7 +113,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อวัตถุดิบ</summary>
             {active.length
               ? <ActionForm action={recordIngredientPurchases} submitLabel="บันทึกการซื้อ">
-                  <PurchaseSlipAttachment maxDate={maxDate} />
+                  <PurchaseSlipAttachment maxDate={maxDate} dayStartHour={saleSettings.dayStartHour} />
                   <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น ตลาดสด" /></label>
                   <IngredientPurchaseTable key={perUnit.map((i) => `${i.id}:${i.unitPrice}:${i.unitsPerPurchaseUnit}`).join("|") + pooled.length} perUnit={perUnit} pooled={pooled} />
@@ -140,8 +140,8 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
               {ingredients.map((i) => {
                 const last = latest.get(i.id);
                 const perPiece = i.costing === "per_unit";
-                return <tr key={i.id}>
-                  <td><strong>{i.name}</strong></td>
+                return <tr key={i.id} className={!i.isActive ? "row-muted" : undefined}>
+                  <td><strong>{i.name}</strong>{!i.isActive && <> <span className="status muted">ซ่อนอยู่</span></>}</td>
                   <td><span className={`status ${perPiece ? "success" : "muted"}`}>{perPiece ? "นับต่อชิ้น" : "คิดเป็น %"}</span></td>
                   <td className="num">{perPiece
                     ? <>{i.pricePerPurchaseUnit ? `${formatUnitCost(i.pricePerPurchaseUnit)}/${i.purchaseUnit}` : "—"}<br />
@@ -158,6 +158,10 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                         <label className="check-label"><input type="checkbox" name="yield_auto" value="true" defaultChecked={i.yieldAuto} /> ปรับอัตโนมัติจากยอดขาย</label>
                       </>}
                     </ActionForm>
+                    <div className="row-actions" style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <ActionButton action={toggleIngredientActive} fields={{ id: i.id, is_active: String(!i.isActive) }} label={i.isActive ? "ซ่อน" : "เปิดใช้งาน"} className="link-button" />
+                      {!last && <ActionButton action={deleteIngredient} fields={{ id: i.id }} label="ลบ" confirmText={`ลบวัตถุดิบ “${i.name}”?`} className="link-button danger" />}
+                    </div>
                   </details></td>
                 </tr>;
               })}
@@ -192,7 +196,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
             <summary><ShoppingBasket size={18} /> บันทึกการซื้อบรรจุภัณฑ์</summary>
             {activePackaging.length
               ? <ActionForm action={restockPackaging} submitLabel="บันทึกการซื้อ">
-                  <PurchaseSlipAttachment maxDate={maxDate} />
+                  <PurchaseSlipAttachment maxDate={maxDate} dayStartHour={saleSettings.dayStartHour} />
                   <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
                   <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น แม็คโคร" /></label>
                   <PackagingRestockTable key={restockItems.map((i) => `${i.id}:${i.packPrice}:${i.perPack}`).join("|")} items={restockItems} />
@@ -222,8 +226,8 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
               {packaging.map((p) => {
                 const last = latestPack.get(p.id);
                 const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id));
-                return <tr key={p.id}>
-                  <td><strong>{p.name}</strong></td>
+                return <tr key={p.id} className={!p.isActive ? "row-muted" : undefined}>
+                  <td><strong>{p.name}</strong>{!p.isActive && <> <span className="status muted">ซ่อนอยู่</span></>}</td>
                   <td><span className={`status ${p.perOrder ? "success" : "muted"}`}>{p.perOrder ? "ต่อออเดอร์" : "ลงค่าใช้จ่าย"}</span></td>
                   <td className="num"><strong>{p.unitCost ? `${formatUnitCost(p.unitCost)}/${p.unit}` : "—"}</strong></td>
                   <td>{last ? <>{packText(last)}<br /><small className="muted">{formatThaiShortDate(last.purchasedAt)}</small></> : defaults.packPrice && defaults.perPack ? <small className="muted">ค่าตั้งต้น ฿{defaults.packPrice} / {defaults.perPack} {p.unit}</small> : <span className="status pending">ยังไม่มีการซื้อ</span>}</td>
@@ -236,6 +240,10 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                       <label>{p.unit}/แพ็ก<input name="pack_quantity" inputMode="decimal" defaultValue={defaults.perPack} placeholder="เช่น 25" /></label>
                       <PerOrderSelect value={p.perOrder} />
                     </ActionForm>
+                    <div className="row-actions" style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <ActionButton action={togglePackagingActive} fields={{ id: p.id, is_active: String(!p.isActive) }} label={p.isActive ? "ซ่อน" : "เปิดใช้งาน"} className="link-button" />
+                      {!last && <ActionButton action={deletePackaging} fields={{ id: p.id }} label="ลบ" confirmText={`ลบบรรจุภัณฑ์ “${p.name}”?`} className="link-button danger" />}
+                    </div>
                   </details></td>
                 </tr>;
               })}

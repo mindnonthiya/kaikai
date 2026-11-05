@@ -9,21 +9,30 @@ import {
   Check,
   CheckCircle2,
   Eye,
+  GitMerge,
   Loader2,
   Pencil,
   Plus,
   RotateCw,
   SlidersHorizontal,
+  Split,
   Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
 import { saveAllPricePresets } from "@/app/actions/presets";
+import { revalidateSalesAction } from "@/app/actions/sales";
 import type { Fulfillment, MenuRecord, PricePreset } from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
 import { formatBaht, tryBahtToSatang } from "@/lib/money";
 import { matchPresetStrictly } from "@/lib/preset-matcher";
 import { checkIntraBatchDuplicate } from "@/lib/slip-duplicate";
+import {
+  type ExtraSlipPart,
+  collectSlipReferenceNumbers,
+  formatMultiSlipBreakdownNote,
+  sumSlipAmountsSatang,
+} from "@/lib/slip-merge";
 import { createClient } from "@/lib/supabase/client";
 
 export type BatchSlipRow = {
@@ -44,6 +53,11 @@ export type BatchSlipRow = {
   extractedTransferredAt?: string;
   bank?: string;
   referenceNumber?: string;
+
+  // Multi-slip support (when a customer transfers in 2+ slips for 1 order)
+  primaryAmountSatang?: number;
+  extraSlips?: ExtraSlipPart[];
+  addingExtraSlip?: boolean;
 
   // Form values for the order
   amountSatang: number;
@@ -102,6 +116,51 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
   const menuMap = new Map(menus.map((m) => [m.id, m]));
   const presetMap = new Map(currentPresets.map((p) => [p.id, p]));
 
+  function recomputeRowWithSlips(
+    row: BatchSlipRow,
+    nextPrimarySatang: number,
+    nextExtraSlips: ExtraSlipPart[]
+  ): BatchSlipRow {
+    const newTotalSatang = sumSlipAmountsSatang(nextPrimarySatang, nextExtraSlips);
+    const matched = matchPresetStrictly(newTotalSatang, currentPresets);
+
+    if (matched) {
+      return {
+        ...row,
+        primaryAmountSatang: nextPrimarySatang,
+        extraSlips: nextExtraSlips,
+        amountSatang: newTotalSatang,
+        matchedPresetId: matched.id,
+        fulfillment: matched.fulfillment,
+        deliveryChargedSatang: matched.deliveryChargedSatang,
+        items: [...matched.items],
+        status: row.isDuplicate ? "duplicate" : "ready",
+        statusText: `ตรงสูตร: ${matched.name}`,
+        isEditingItems: false,
+      };
+    }
+
+    // If not matched to a preset:
+    // Keep manually chosen items if the user had customized items (matchedPresetId === null),
+    // otherwise clear the old preset's items so the user can pick for the new combined amount.
+    const keepCustomItems = row.matchedPresetId === null && row.items.length > 0;
+    const nextItems = keepCustomItems ? row.items : [];
+    return {
+      ...row,
+      primaryAmountSatang: nextPrimarySatang,
+      extraSlips: nextExtraSlips,
+      amountSatang: newTotalSatang,
+      matchedPresetId: null,
+      items: nextItems,
+      status: row.isDuplicate ? "duplicate" : "ready",
+      statusText:
+        newTotalSatang > 0
+          ? `ไม่ตรงสูตรใด (฿${(newTotalSatang / 100).toFixed(0)})`
+          : "ยังไม่มียอดเงิน",
+      isEditingItems: !keepCustomItems && newTotalSatang > 0,
+    };
+  }
+
   // Handle file selection (multiple) with Concurrency Queue (3 concurrent workers)
   async function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -133,6 +192,8 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
         compressedBytes: 0,
         status: "processing",
         statusText: i < 3 ? "กำลังวิเคราะห์…" : "รอคิววิเคราะห์…",
+        primaryAmountSatang: 0,
+        extraSlips: [],
         amountSatang: 0,
         soldAt: new Date().toISOString(),
         matchedPresetId: null,
@@ -274,9 +335,6 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
         duplicateSoldAt = json.duplicateSoldAt ?? undefined;
       }
 
-      // 3. Strict Match with Presets ONLY (Strict 1:1, no fuzzy substitutions)
-      const matched = matchPresetStrictly(amountSatang, currentPresets);
-
       setRows((prev) =>
         prev.map((row) => {
           if (row.id !== rowId) return row;
@@ -295,6 +353,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             }
           }
 
+          const existingExtras = row.extraSlips ?? [];
+          const combinedSatang = sumSlipAmountsSatang(amountSatang, existingExtras);
+          const matched = matchPresetStrictly(combinedSatang, currentPresets);
+
           const fulfillment = matched ? matched.fulfillment : "delivery";
           const deliveryFee = matched ? matched.deliveryChargedSatang : defaultDeliveryFee;
           const items = matched ? [...matched.items] : [];
@@ -302,7 +364,6 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
           return {
             ...row,
             compressedFile: compressed.file,
-            compressedBlob: compressed.blob,
             previewUrl: compressed.previewUrl,
             hash: compressed.hash,
             compressedBytes: compressed.compressedBytes,
@@ -311,14 +372,15 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
               ? finalDuplicateReason || `สลิปซ้ำ (เคยลงในบิล #${duplicateSaleNumber ?? "เดิม"})`
               : matched
               ? `ตรงสูตร: ${matched.name}`
-              : amountSatang > 0
-              ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
+              : combinedSatang > 0
+              ? `ไม่ตรงสูตรใด (฿${(combinedSatang / 100).toFixed(0)})`
               : json.error || "ไม่พบยอดเงินในรูป",
             extractedAmountSatang: amountSatang > 0 ? amountSatang : undefined,
             extractedTransferredAt: soldAt,
             bank,
             referenceNumber: ref,
-            amountSatang,
+            primaryAmountSatang: amountSatang,
+            amountSatang: combinedSatang,
             soldAt,
             matchedPresetId: matched?.id ?? null,
             fulfillment,
@@ -329,7 +391,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             duplicateSaleNumber,
             duplicateSoldAt,
             selected: !finalIsDuplicate, // auto-uncheck suspected duplicates, merchant can check to confirm
-            isEditingItems: !matched && amountSatang > 0 && !finalIsDuplicate,
+            isEditingItems: !matched && combinedSatang > 0 && !finalIsDuplicate,
           };
         })
       );
@@ -340,26 +402,249 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
     }
   }
 
-  // Handle direct amount edit (strict matching only, never substitute different numbers)
+  // Upload & attach 1 or more additional slip files directly onto an existing row
+  async function handleAddExtraSlipFiles(rowId: string, e: React.ChangeEvent<HTMLInputElement>) {
+    const fileList = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = "";
+    if (fileList.length === 0) return;
+
+    updateRow(rowId, { addingExtraSlip: true });
+    try {
+      const addedParts: ExtraSlipPart[] = [];
+      for (const file of fileList) {
+        const compressed = await compressSlipImage(file, { maxWidth: 720, quality: 0.65 });
+        const formData = new FormData();
+        formData.append("file", compressed.file);
+        formData.append("hash", compressed.hash);
+
+        let extraAmountSatang = 0;
+        let transferredAt: string | undefined;
+        let bank: string | undefined;
+        let ref: string | undefined;
+        let isDup = false;
+        let dupReason: string | undefined;
+
+        try {
+          const res = await fetch("/api/slip/analyze", { method: "POST", body: formData });
+          const json = await res.json();
+          if (typeof json.hasProvider === "boolean") {
+            setHasOcrProvider(json.hasProvider);
+          }
+          if (json.ok && json.result) {
+            extraAmountSatang = json.result.amountSatang ?? 0;
+            transferredAt = json.result.transferredAt;
+            bank = json.result.bank;
+            ref = json.result.referenceNumber;
+          }
+          if (json.isDuplicate) {
+            isDup = true;
+            dupReason = json.duplicateReason;
+          }
+        } catch (ocrErr) {
+          console.error("Extra slip analyze error:", ocrErr);
+        }
+
+        addedParts.push({
+          id: crypto.randomUUID(),
+          sourceFile: file,
+          compressedFile: compressed.file,
+          previewUrl: compressed.previewUrl,
+          hash: compressed.hash,
+          originalBytes: file.size,
+          compressedBytes: compressed.compressedBytes,
+          amountSatang: extraAmountSatang,
+          transferredAt,
+          bank,
+          referenceNumber: ref,
+          isDuplicate: isDup,
+          duplicateReason: dupReason,
+        });
+      }
+
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
+          const basePrimary =
+            r.primaryAmountSatang ?? r.extractedAmountSatang ?? r.amountSatang;
+          const nextExtras = [...(r.extraSlips ?? []), ...addedParts];
+          return {
+            ...recomputeRowWithSlips(r, basePrimary, nextExtras),
+            addingExtraSlip: false,
+          };
+        })
+      );
+    } catch (err) {
+      console.error("Failed adding extra slip:", err);
+      updateRow(rowId, { addingExtraSlip: false });
+    }
+  }
+
+  // Merge another row in the current batch into targetRowId
+  function handleMergeRowInto(targetRowId: string, sourceRowId: string) {
+    if (!sourceRowId || targetRowId === sourceRowId) return;
+    setRows((prev) => {
+      const targetRow = prev.find((r) => r.id === targetRowId);
+      const sourceRow = prev.find((r) => r.id === sourceRowId);
+      if (!targetRow || !sourceRow) return prev;
+
+      const sourcePrimaryAmount =
+        sourceRow.primaryAmountSatang ?? sourceRow.extractedAmountSatang ?? sourceRow.amountSatang;
+      const sourceAsExtra: ExtraSlipPart = {
+        id: sourceRow.id,
+        sourceFile: sourceRow.sourceFile,
+        compressedFile: sourceRow.compressedFile,
+        previewUrl: sourceRow.previewUrl,
+        hash: sourceRow.hash,
+        originalBytes: sourceRow.originalBytes,
+        compressedBytes: sourceRow.compressedBytes,
+        amountSatang: sourcePrimaryAmount,
+        transferredAt: sourceRow.extractedTransferredAt ?? sourceRow.soldAt,
+        bank: sourceRow.bank,
+        referenceNumber: sourceRow.referenceNumber,
+        isDuplicate: sourceRow.isDuplicate,
+        duplicateReason: sourceRow.duplicateReason,
+      };
+
+      const targetPrimary =
+        targetRow.primaryAmountSatang ?? targetRow.extractedAmountSatang ?? targetRow.amountSatang;
+      const nextExtras = [
+        ...(targetRow.extraSlips ?? []),
+        sourceAsExtra,
+        ...(sourceRow.extraSlips ?? []),
+      ];
+
+      const updatedTarget = recomputeRowWithSlips(targetRow, targetPrimary, nextExtras);
+      return prev
+        .filter((r) => r.id !== sourceRowId)
+        .map((r) => (r.id === targetRowId ? updatedTarget : r));
+    });
+  }
+
+  // Edit primary slip amount when multiple slips are attached
+  function handlePrimarySlipAmountChange(rowId: string, newBahtStr: string) {
+    const parsedSatang = tryBahtToSatang(newBahtStr) ?? 0;
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        return recomputeRowWithSlips(r, parsedSatang, r.extraSlips ?? []);
+      })
+    );
+  }
+
+  // Edit an individual extra slip's amount
+  function handleExtraSlipAmountChange(rowId: string, extraId: string, newBahtStr: string) {
+    const parsedSatang = tryBahtToSatang(newBahtStr) ?? 0;
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const basePrimary =
+          r.primaryAmountSatang ?? r.extractedAmountSatang ?? r.amountSatang;
+        const nextExtras = (r.extraSlips ?? []).map((ex) =>
+          ex.id === extraId ? { ...ex, amountSatang: parsedSatang } : ex
+        );
+        return recomputeRowWithSlips(r, basePrimary, nextExtras);
+      })
+    );
+  }
+
+  // Remove an extra slip completely from a row
+  function handleRemoveExtraSlip(rowId: string, extraId: string) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const basePrimary =
+          r.primaryAmountSatang ?? r.extractedAmountSatang ?? r.amountSatang;
+        const nextExtras = (r.extraSlips ?? []).filter((ex) => ex.id !== extraId);
+        return recomputeRowWithSlips(r, basePrimary, nextExtras);
+      })
+    );
+  }
+
+  // Split an extra slip back out into its own standalone row in the batch
+  function handleUnmergeExtraSlip(rowId: string, extraId: string) {
+    setRows((prev) => {
+      const idx = prev.findIndex((r) => r.id === rowId);
+      if (idx === -1) return prev;
+      const row = prev[idx];
+      const extra = (row.extraSlips ?? []).find((ex) => ex.id === extraId);
+      if (!extra) return prev;
+
+      const basePrimary =
+        row.primaryAmountSatang ?? row.extractedAmountSatang ?? row.amountSatang;
+      const nextExtras = (row.extraSlips ?? []).filter((ex) => ex.id !== extraId);
+      const updatedParent = recomputeRowWithSlips(row, basePrimary, nextExtras);
+
+      const matchedForSplit = matchPresetStrictly(extra.amountSatang, currentPresets);
+      const splitRow: BatchSlipRow = {
+        id: extra.id,
+        sourceFile: extra.sourceFile,
+        compressedFile: extra.compressedFile,
+        previewUrl: extra.previewUrl,
+        hash: extra.hash,
+        originalBytes: extra.originalBytes,
+        compressedBytes: extra.compressedBytes,
+        status: extra.isDuplicate ? "duplicate" : "ready",
+        statusText: extra.isDuplicate
+          ? extra.duplicateReason || "สลิปซ้ำ"
+          : matchedForSplit
+          ? `ตรงสูตร: ${matchedForSplit.name}`
+          : extra.amountSatang > 0
+          ? `ไม่ตรงสูตรใด (฿${(extra.amountSatang / 100).toFixed(0)})`
+          : "ยังไม่มียอดเงิน",
+        extractedAmountSatang: extra.amountSatang > 0 ? extra.amountSatang : undefined,
+        extractedTransferredAt: extra.transferredAt,
+        bank: extra.bank,
+        referenceNumber: extra.referenceNumber,
+        primaryAmountSatang: extra.amountSatang,
+        extraSlips: [],
+        amountSatang: extra.amountSatang,
+        soldAt: extra.transferredAt ?? row.soldAt,
+        matchedPresetId: matchedForSplit?.id ?? null,
+        fulfillment: matchedForSplit ? matchedForSplit.fulfillment : "delivery",
+        deliveryChargedSatang: matchedForSplit ? matchedForSplit.deliveryChargedSatang : defaultDeliveryFee,
+        items: matchedForSplit ? [...matchedForSplit.items] : [],
+        customerName: row.customerName,
+        isDuplicate: Boolean(extra.isDuplicate),
+        duplicateReason: extra.duplicateReason,
+        selected: !extra.isDuplicate,
+        isEditingItems: !matchedForSplit && extra.amountSatang > 0 && !extra.isDuplicate,
+      };
+
+      const nextRows = [...prev];
+      nextRows.splice(idx, 1, updatedParent, splitRow);
+      return nextRows;
+    });
+  }
+
+  // Handle direct total amount edit (strict matching only, never substitute different numbers)
   function handleAmountChange(rowId: string, newBahtStr: string) {
     const parsedSatang = tryBahtToSatang(newBahtStr);
     const amountSatang = parsedSatang ?? 0;
     const matched = matchPresetStrictly(amountSatang, currentPresets);
 
-    updateRow(rowId, {
-      amountSatang,
-      matchedPresetId: matched?.id ?? null,
-      fulfillment: matched ? matched.fulfillment : "delivery",
-      deliveryChargedSatang: matched ? matched.deliveryChargedSatang : defaultDeliveryFee,
-      items: matched ? [...matched.items] : [],
-      status: "ready",
-      statusText: matched
-        ? `ตรงสูตร: ${matched.name}`
-        : amountSatang > 0
-        ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
-        : "ยังไม่มียอดเงิน",
-      isEditingItems: !matched && amountSatang > 0,
-    });
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const extraSum = (r.extraSlips ?? []).reduce((s, ex) => s + ex.amountSatang, 0);
+        const nextPrimary = Math.max(0, amountSatang - extraSum);
+        return {
+          ...r,
+          primaryAmountSatang: nextPrimary,
+          amountSatang,
+          matchedPresetId: matched?.id ?? null,
+          fulfillment: matched ? matched.fulfillment : "delivery",
+          deliveryChargedSatang: matched ? matched.deliveryChargedSatang : defaultDeliveryFee,
+          items: matched ? [...matched.items] : [],
+          status: "ready",
+          statusText: matched
+            ? `ตรงสูตร: ${matched.name}`
+            : amountSatang > 0
+            ? `ไม่ตรงสูตรใด (฿${(amountSatang / 100).toFixed(0)})`
+            : "ยังไม่มียอดเงิน",
+          isEditingItems: !matched && amountSatang > 0,
+        };
+      })
+    );
   }
 
   // Update row helpers
@@ -570,8 +855,9 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
       setSaveProgress({ current: i + 1, total: toProcess.length });
 
       let uploadedPath: string | null = null;
+      const extraUploadedPaths: string[] = [];
       try {
-        // 1. Upload compressed WebP slip (~30 KB)
+        // 1. Upload primary compressed WebP slip (~30 KB)
         if (row.compressedFile) {
           uploadedPath = `${user.id}/${crypto.randomUUID()}.webp`;
           const { error: uploadError } = await supabase.storage
@@ -606,8 +892,14 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
         const expectedOrderTotalSatang = itemsFoodTotalSatang + deliveryChargedSatang;
         const rowTipSatang = Math.max(0, row.amountSatang - expectedOrderTotalSatang);
 
+        const extraSlips = row.extraSlips ?? [];
+        const primarySatang =
+          row.primaryAmountSatang ?? row.extractedAmountSatang ?? row.amountSatang;
+        const multiSlipNote = formatMultiSlipBreakdownNote(primarySatang, extraSlips);
+        const allRefs = collectSlipReferenceNumbers(row.referenceNumber, extraSlips);
+
         // 2. Call create_sale RPC
-        const { error: saleError } = await supabase.rpc("create_sale", {
+        const { data: saleData, error: saleError } = await supabase.rpc("create_sale", {
           payload: {
             items: row.items.map((it) => ({
               menu_id: it.menuId,
@@ -625,10 +917,11 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             customer_name: row.customerName.trim() || null,
             sold_at: row.soldAt,
             notes: [
-              row.referenceNumber ? `เลขอ้างอิง: ${row.referenceNumber}` : null,
+              multiSlipNote,
+              allRefs.length > 0 ? `เลขอ้างอิง: ${allRefs.join(", ")}` : null,
               rowTipSatang > 0 ? `ทิป/โอนเกิน: ${formatBaht(rowTipSatang)}` : null,
             ].filter(Boolean).join(" · ") || null,
-            reference_number: row.referenceNumber || null,
+            reference_number: allRefs.join(", ") || null,
             ...(slipPayload ? { slip: slipPayload } : {}),
           },
         });
@@ -641,12 +934,70 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
           throw new Error(saleError.message);
         }
 
+        // 3. Upload & link any additional combined slips (extraSlips) to the created sale_id
+        const createdSaleId = String((saleData as { sale_id?: string } | null)?.sale_id ?? "");
+        if (createdSaleId && extraSlips.length > 0) {
+          for (let exIdx = 0; exIdx < extraSlips.length; exIdx++) {
+            const extra = extraSlips[exIdx];
+            const fileToUpload = extra.compressedFile ?? extra.sourceFile;
+            if (!fileToUpload) continue;
+
+            const extraPath = `${user.id}/${crypto.randomUUID()}.webp`;
+            const { error: exUpErr } = await supabase.storage
+              .from("sale-slips")
+              .upload(extraPath, fileToUpload, {
+                contentType: "image/webp",
+                upsert: false,
+              });
+            if (exUpErr) continue;
+            extraUploadedPaths.push(extraPath);
+
+            const preferredHash =
+              extra.isDuplicate || !extra.hash || extra.hash === row.hash
+                ? `${extra.hash || "extra"}-ov-${crypto.randomUUID().slice(0, 8)}`
+                : extra.hash;
+
+            const { error: exInsertErr } = await supabase.from("slip_uploads").insert({
+              owner_id: user.id,
+              sale_id: createdSaleId,
+              storage_path: extraPath,
+              mime_type: "image/webp",
+              size_bytes: extra.compressedBytes || extra.originalBytes || fileToUpload.size,
+              file_hash_sha256: preferredHash,
+              ocr_status: "confirmed",
+              ocr_amount_satang: extra.amountSatang > 0 ? extra.amountSatang : null,
+              ocr_bank: extra.bank || null,
+              ocr_reference_number: extra.referenceNumber || null,
+              user_confirmed_at: new Date().toISOString(),
+            });
+
+            if (exInsertErr && exInsertErr.message.includes("slip_uploads_owner_id_file_hash_sha256_key")) {
+              await supabase.from("slip_uploads").insert({
+                owner_id: user.id,
+                sale_id: createdSaleId,
+                storage_path: extraPath,
+                mime_type: "image/webp",
+                size_bytes: extra.compressedBytes || extra.originalBytes || fileToUpload.size,
+                file_hash_sha256: `${preferredHash}-ov-${crypto.randomUUID().slice(0, 8)}`,
+                ocr_status: "confirmed",
+                ocr_amount_satang: extra.amountSatang > 0 ? extra.amountSatang : null,
+                ocr_bank: extra.bank || null,
+                ocr_reference_number: extra.referenceNumber || null,
+                user_confirmed_at: new Date().toISOString(),
+              });
+            }
+          }
+        }
+
         successCount++;
         totalSavedSatang += row.amountSatang;
 
         // Remove row from list on success
         setRows((prev) => prev.filter((r) => r.id !== row.id));
       } catch (err: unknown) {
+        if (extraUploadedPaths.length > 0) {
+          await supabase.storage.from("sale-slips").remove(extraUploadedPaths);
+        }
         console.error(`Failed to save slip row ${row.id}:`, err);
         const msg = err instanceof Error ? err.message : "บันทึกไม่สำเร็จ";
         errors.push(`สลิปยอด ${formatBaht(row.amountSatang)}: ${msg}`);
@@ -664,6 +1015,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
     });
 
     if (successCount > 0) {
+      await revalidateSalesAction();
       router.refresh();
     }
   }
@@ -702,7 +1054,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
           </div>
           <div className="batch-dropzone-text">
             <strong>แตะเลือกรูปสลิปหลายๆ รูปพร้อมกัน</strong>
-            <span>รองรับ JPG, PNG, WebP — ระบบบีบอัดรูปจิ๋ว ~30 KB และอ่านยอดเงินออโต้</span>
+            <span>รองรับ JPG, PNG, WebP — ระบบบีบอัดรูปจิ๋ว ~30 KB และอ่านยอดเงินออโต้ (รวมหลายสลิปเป็น 1 บิลได้)</span>
           </div>
           <div className="batch-dropzone-btn">
             <Plus size={16} /> เลือกรูปสลิป
@@ -762,7 +1114,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                   checked={selectedRows.length === rows.length && rows.length > 0}
                   onChange={(e) => toggleAll(e.target.checked)}
                 />
-                <span>เลือกทั้งหมด ({rows.length} สลิป)</span>
+                <span>เลือกทั้งหมด ({rows.length} รายการบิล)</span>
               </label>
             </div>
             <div className="batch-header-stats">
@@ -771,7 +1123,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
           </div>
 
           <div className="batch-rows-list">
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const matchedPreset = row.matchedPresetId ? presetMap.get(row.matchedPresetId) : null;
               const hasItems = row.items.length > 0;
               const isReady = row.status === "ready" && row.amountSatang > 0 && hasItems;
@@ -784,6 +1136,13 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                 itemsFoodTotalSatang + (row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0);
               const isAmountMatchingFood = row.amountSatang > 0 && orderTotalSatang === row.amountSatang;
               const rowTipSatang = Math.max(0, row.amountSatang - orderTotalSatang);
+
+              const extraSlips = row.extraSlips ?? [];
+              const primarySatang =
+                row.primaryAmountSatang ?? row.extractedAmountSatang ?? row.amountSatang;
+              const otherMergeableRows = rows.filter(
+                (other) => other.id !== row.id && other.status !== "processing"
+              );
 
               return (
                 <div
@@ -809,8 +1168,17 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                     <span className="thumb-zoom-icon">
                       <Eye size={12} />
                     </span>
-                    {row.compressedBytes > 0 && (
-                      <span className="thumb-size-badge">{(row.compressedBytes / 1024).toFixed(0)} KB</span>
+                    {extraSlips.length > 0 ? (
+                      <span
+                        className="thumb-size-badge"
+                        style={{ background: "var(--primary-dark, #0f766e)", color: "#fff", fontWeight: 700 }}
+                      >
+                        {1 + extraSlips.length} สลิป
+                      </span>
+                    ) : (
+                      row.compressedBytes > 0 && (
+                        <span className="thumb-size-badge">{(row.compressedBytes / 1024).toFixed(0)} KB</span>
+                      )
                     )}
                   </div>
 
@@ -818,7 +1186,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                   <div className="col-info">
                     <div className="slip-amount-row">
                       <div className="slip-amount-box">
-                        <label>ยอดเงิน:</label>
+                        <label>{extraSlips.length > 0 ? "ยอดรวมสุทธิ:" : "ยอดเงิน:"}</label>
                         <div className="amount-input-badge">
                           <span>฿</span>
                           <input
@@ -853,7 +1221,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                       )}
                     </div>
 
-                    <div className="slip-meta-line">
+                    <div className="slip-meta-line" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                       <span>
                         โอนเมื่อ:{" "}
                         {new Date(row.soldAt).toLocaleDateString("th-TH", {
@@ -868,7 +1236,221 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                         น.
                       </span>
                       {row.referenceNumber && <span> · Ref: {row.referenceNumber}</span>}
+
+                      {/* Multi-slip actions: Upload extra slip OR Merge another slip from the current batch */}
+                      {row.status !== "processing" && (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginLeft: "auto" }}>
+                          <label
+                            className="slip-edit-toggle-btn"
+                            style={{
+                              cursor: row.addingExtraSlip ? "wait" : "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              fontSize: "12px",
+                            }}
+                            title="อัปโหลดรูปสลิปที่ลูกค้าโอนเพิ่มเพื่อรวมยอดในบิลนี้"
+                          >
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              multiple
+                              style={{ display: "none" }}
+                              disabled={row.addingExtraSlip}
+                              onChange={(e) => handleAddExtraSlipFiles(row.id, e)}
+                            />
+                            {row.addingExtraSlip ? (
+                              <>
+                                <Loader2 size={12} className="spin-icon" /> กำลังอ่านสลิปเสริม…
+                              </>
+                            ) : (
+                              <>
+                                <Plus size={12} /> บวกสลิปโอนเพิ่ม
+                              </>
+                            )}
+                          </label>
+
+                          {otherMergeableRows.length > 0 && (
+                            <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                              <GitMerge size={12} style={{ color: "var(--text-muted, #64748b)" }} />
+                              <select
+                                value=""
+                                onChange={(e) => handleMergeRowInto(row.id, e.target.value)}
+                                className="preset-select"
+                                style={{ fontSize: "12px", padding: "3px 8px", minHeight: "28px", maxWidth: "220px" }}
+                                aria-label={`รวมสลิปอื่นเข้ากับรายการที่ ${rowIndex + 1}`}
+                              >
+                                <option value="">+ รวมกับสลิปอื่นในหน้านี้…</option>
+                                {otherMergeableRows.map((other) => {
+                                  const otherIdx = rows.findIndex((r) => r.id === other.id) + 1;
+                                  const otherPreset = other.matchedPresetId
+                                    ? presetMap.get(other.matchedPresetId)?.name
+                                    : null;
+                                  const otherTime = new Date(other.soldAt).toLocaleTimeString("th-TH", {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  });
+                                  return (
+                                    <option key={other.id} value={other.id}>
+                                      ใบที่ #{otherIdx} · {formatBaht(other.amountSatang)} ({other.bank ? `${other.bank} ` : ""}{otherTime} น.{otherPreset ? ` · ${otherPreset}` : ""})
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
+
+                    {/* Breakdown of combined slips when 2+ slips are attached */}
+                    {extraSlips.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          marginBottom: "8px",
+                          padding: "10px 12px",
+                          borderRadius: "10px",
+                          background: "rgba(15, 118, 110, 0.06)",
+                          border: "1px solid rgba(15, 118, 110, 0.22)",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "8px",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                          <strong style={{ fontSize: "12.5px", color: "var(--primary-dark, #0f766e)" }}>
+                            {formatMultiSlipBreakdownNote(primarySatang, extraSlips)}
+                          </strong>
+                          <small className="muted" style={{ fontSize: "11.5px" }}>
+                            ระบบนำยอดทุกใบมารวมกันและเทียบสูตรอาหารให้อัตโนมัติ
+                          </small>
+                        </div>
+
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          {/* Primary slip line */}
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              flexWrap: "wrap",
+                              background: "#fff",
+                              padding: "6px 10px",
+                              borderRadius: "8px",
+                              border: "1px solid rgba(0,0,0,0.08)",
+                              fontSize: "12px",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setPreviewingImageUrl(row.previewUrl)}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                border: "none",
+                                background: "none",
+                                cursor: "pointer",
+                                padding: 0,
+                                color: "var(--primary-dark, #0f766e)",
+                                fontWeight: 600,
+                              }}
+                            >
+                              <Eye size={13} /> สลิปใบที่ 1 (หลัก)
+                            </button>
+                            <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                              <span>฿</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={primarySatang > 0 ? (primarySatang / 100).toString() : ""}
+                                onChange={(e) => handlePrimarySlipAmountChange(row.id, e.target.value)}
+                                style={{ width: "76px", padding: "2px 6px", fontSize: "12px" }}
+                                aria-label="ยอดเงินสลิปใบที่ 1"
+                              />
+                            </div>
+                            {row.bank && <span className="slip-bank-badge">{row.bank}</span>}
+                            {row.referenceNumber && <small className="muted">Ref: {row.referenceNumber}</small>}
+                          </div>
+
+                          {/* Extra slip lines */}
+                          {extraSlips.map((extra, exIdx) => (
+                            <div
+                              key={extra.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                flexWrap: "wrap",
+                                background: "#fff",
+                                padding: "6px 10px",
+                                borderRadius: "8px",
+                                border: "1px solid rgba(0,0,0,0.08)",
+                                fontSize: "12px",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setPreviewingImageUrl(extra.previewUrl)}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  border: "none",
+                                  background: "none",
+                                  cursor: "pointer",
+                                  padding: 0,
+                                  color: "var(--primary-dark, #0f766e)",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                <Eye size={13} /> สลิปใบที่ {exIdx + 2} (โอนเพิ่ม)
+                              </button>
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                <span>+ ฿</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={extra.amountSatang > 0 ? (extra.amountSatang / 100).toString() : ""}
+                                  onChange={(e) => handleExtraSlipAmountChange(row.id, extra.id, e.target.value)}
+                                  style={{ width: "76px", padding: "2px 6px", fontSize: "12px" }}
+                                  aria-label={`ยอดเงินสลิปใบที่ ${exIdx + 2}`}
+                                />
+                              </div>
+                              {extra.bank && <span className="slip-bank-badge">{extra.bank}</span>}
+                              {extra.referenceNumber && <small className="muted">Ref: {extra.referenceNumber}</small>}
+                              {extra.isDuplicate && (
+                                <span className="badge-duplicate" title={extra.duplicateReason}>
+                                  {extra.duplicateReason || "สลิปซ้ำ"}
+                                </span>
+                              )}
+                              <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  style={{ fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "3px" }}
+                                  onClick={() => handleUnmergeExtraSlip(row.id, extra.id)}
+                                  title="แยกสลิปนี้ออกไปเป็นอีกบิลเดี่ยว"
+                                >
+                                  <Split size={12} /> แยกเป็นบิลเดี่ยว
+                                </button>
+                                <button
+                                  type="button"
+                                  className="link-button danger"
+                                  style={{ fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "3px" }}
+                                  onClick={() => handleRemoveExtraSlip(row.id, extra.id)}
+                                  title="ลบสลิปเสริมใบนี้ออก"
+                                >
+                                  <X size={12} /> ลบ
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Preset Picker Dropdown */}
                     <div className="slip-preset-picker">
@@ -1018,7 +1600,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                               </>
                             ) : (
                               <>
-                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ยอดในสลิปน้อยกว่า {formatBaht(orderTotalSatang - row.amountSatang)})
+                                ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (ยอดในสลิปน้อยกว่า {formatBaht(orderTotalSatang - row.amountSatang)} — กด &ldquo;+ บวกสลิปโอนเพิ่ม&rdquo; ด้านบนได้)
                               </>
                             )}
                           </div>
@@ -1072,7 +1654,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                         )
                       ) : isReady ? (
                         <span className="status-badge ready">
-                          <CheckCircle2 size={13} /> พร้อมบันทึก
+                          <CheckCircle2 size={13} /> พร้อมบันทึก{extraSlips.length > 0 ? ` (รวม ${1 + extraSlips.length} สลิป)` : ""}
                         </span>
                       ) : (
                         <span className="status-badge warn">

@@ -65,6 +65,7 @@ export function ExpenseFormWithSlip({
   perUnit = [],
   pooled = [],
   restockItems = [],
+  dayStartHour = 0,
 }: {
   today: string;
   maxDate: string;
@@ -72,6 +73,7 @@ export function ExpenseFormWithSlip({
   perUnit?: PerUnitPurchaseItem[];
   pooled?: PooledPurchaseItem[];
   restockItems?: RestockItem[];
+  dayStartHour?: number;
 }) {
   const router = useRouter();
   const [entryMode, setEntryMode] = useState<"single" | "itemized">("single");
@@ -141,7 +143,7 @@ export function ExpenseFormWithSlip({
           setAmount(satangToBahtInput(ocr.amountSatang));
         }
         if (ocr.transferredAt) {
-          const dKey = bangkokDayKey(ocr.transferredAt);
+          const dKey = bangkokDayKey(ocr.transferredAt, dayStartHour);
           if (dKey <= maxDate) setSpentAt(dKey);
         }
         if (ocr.referenceNumber) {
