@@ -22,6 +22,7 @@ function revalidateExpenses() {
   invalidateQueryCache("recipes");
   invalidateQueryCache("menus");
   invalidateQueryCache("pooled_rate");
+  invalidateQueryCache("all_time");
   revalidatePath("/expenses");
   revalidatePath("/expenses/import-slips");
   revalidatePath("/ingredients");
@@ -204,10 +205,11 @@ async function deleteExpensesByIds(
     }
   }
 
-  // 5. Recompute packaging unit cost once per affected packaging item
+  // 5. Recompute packaging unit cost once per affected packaging item (reset to 0 if no purchases remain)
   for (const packItemId of affectedPackagingItemIds) {
     const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases")
       .select("id,price_satang,pack_quantity").eq("packaging_item_id", packItemId).order("id").range(from, to));
+    let unitCost = 0;
     if (purchases && purchases.length > 0) {
       let totalPrice = 0;
       let totalPieces = 0;
@@ -216,38 +218,40 @@ async function deleteExpensesByIds(
         totalPieces += Number(p.pack_quantity);
       }
       if (totalPieces > 0) {
-        const unitCost = roundCost(totalPrice / totalPieces);
-        await supabase
-          .from("packaging_items")
-          .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
-          .eq("id", packItemId);
-        await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packItemId));
+        unitCost = roundCost(totalPrice / totalPieces);
       }
     }
+    await supabase
+      .from("packaging_items")
+      .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
+      .eq("id", packItemId);
+    await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packItemId));
   }
 
-  // 6. Recompute per-unit ingredient cost once per affected per-unit ingredient
+  // 6. Recompute per-unit ingredient cost once per affected per-unit ingredient (reset to 0 if no purchases remain)
   for (const [ingId, unitsPerPurchaseUnit] of affectedPerUnitIngMap.entries()) {
     const purchases = await readCostRows((from, to) => supabase.from("ingredient_purchases")
       .select("id,purchased_at,price_satang,purchased_quantity").eq("ingredient_id", ingId).order("id").range(from, to));
+    let pricePerUnit = 0;
+    let unitCost = 0;
     if (purchases && purchases.length > 0) {
       const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
         purchasedAt: String(p.purchased_at),
         price: Number(p.price_satang),
         quantity: p.purchased_quantity === null ? null : Number(p.purchased_quantity),
       }));
-      const pricePerUnit = roundCost(weightedPricePerUnit(mapped));
-      const unitCost = roundCost(pricePerUnit / unitsPerPurchaseUnit);
-      await supabase
-        .from("ingredients")
-        .update({
-          price_per_purchase_unit_satang: pricePerUnit,
-          weighted_unit_cost_satang: unitCost,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", ingId);
-      await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingId));
+      pricePerUnit = roundCost(weightedPricePerUnit(mapped));
+      unitCost = roundCost(pricePerUnit / unitsPerPurchaseUnit);
     }
+    await supabase
+      .from("ingredients")
+      .update({
+        price_per_purchase_unit_satang: pricePerUnit,
+        weighted_unit_cost_satang: unitCost,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", ingId);
+    await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingId));
   }
 
   revalidateExpenses();
@@ -330,7 +334,7 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
         .eq("id", String(p.id));
 
       const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases")
-      .select("id,price_satang,pack_quantity").eq("packaging_item_id", packItemId).order("id").range(from, to));
+        .select("id,price_satang,pack_quantity").eq("packaging_item_id", packItemId).order("id").range(from, to));
       if (purchases && purchases.length > 0) {
         let totalPrice = 0;
         let totalPieces = 0;
@@ -391,7 +395,7 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
               const ingId = String(matchedIng.id);
               const unitsPerPurchaseUnit = Number(matchedIng.units_per_purchase_unit) || 1;
               const purchases = await readCostRows((from, to) => supabase.from("ingredient_purchases")
-      .select("id,purchased_at,price_satang,purchased_quantity").eq("ingredient_id", ingId).order("id").range(from, to));
+                .select("id,purchased_at,price_satang,purchased_quantity").eq("ingredient_id", ingId).order("id").range(from, to));
               if (purchases && purchases.length > 0) {
                 const mapped = (purchases as Array<{ purchased_at: unknown; price_satang: unknown; purchased_quantity: unknown }>).map((p) => ({
                   purchasedAt: String(p.purchased_at),

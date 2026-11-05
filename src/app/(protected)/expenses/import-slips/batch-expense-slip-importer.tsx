@@ -78,6 +78,7 @@ export function BatchExpenseSlipImporter({
   perUnit = [],
   pooled = [],
   restockItems = [],
+  dayStartHour = 0,
 }: {
   today: string;
   maxDate: string;
@@ -85,6 +86,7 @@ export function BatchExpenseSlipImporter({
   perUnit?: PerUnitPurchaseItem[];
   pooled?: PooledPurchaseItem[];
   restockItems?: RestockItem[];
+  dayStartHour?: number;
 }) {
   const router = useRouter();
   const fileInputId = useId();
@@ -269,7 +271,7 @@ export function BatchExpenseSlipImporter({
       if (json.ok && json.result) {
         amountSatang = json.result.amountSatang ?? 0;
         if (json.result.transferredAt) {
-          const dKey = bangkokDayKey(json.result.transferredAt);
+          const dKey = bangkokDayKey(json.result.transferredAt, dayStartHour);
           if (dKey <= maxDate) spentAtDate = dKey;
         }
         bank = json.result.bank;

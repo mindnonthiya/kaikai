@@ -15,7 +15,13 @@ const SLIP_TYPES: Record<string, string> = {
 };
 const MAX_SLIP_BYTES = 10 * 1024 * 1024;
 
-export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
+export function PurchaseSlipAttachment({
+  maxDate,
+  dayStartHour = 0,
+}: {
+  maxDate: string;
+  dayStartHour?: number;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [receiptPath, setReceiptPath] = useState("");
   const [referenceNotes, setReferenceNotes] = useState("");
@@ -40,6 +46,29 @@ export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
     return () => form.removeEventListener("reset", onReset);
   }, []);
 
+  async function removeUploadedFromStorage(pathToRemove: string) {
+    if (!pathToRemove || !hasSupabaseEnv) return;
+    try {
+      const supabase = createClient();
+      await supabase.storage.from("sale-slips").remove([pathToRemove]);
+    } catch {
+      // Ignore storage cleanup errors
+    }
+  }
+
+  async function handleRemoveSlip() {
+    const oldPath = receiptPath;
+    setReceiptPath("");
+    setReferenceNotes("");
+    setFileName("");
+    setPreviewUrl(null);
+    setStatusText(null);
+    setIsError(false);
+    if (oldPath) {
+      await removeUploadedFromStorage(oldPath);
+    }
+  }
+
   async function handleChooseFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -54,6 +83,11 @@ export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
       setIsError(true);
       setStatusText("ไฟล์สลิปต้องไม่เกิน 10 MB");
       return;
+    }
+
+    if (receiptPath) {
+      await removeUploadedFromStorage(receiptPath);
+      setReceiptPath("");
     }
 
     setBusy(true);
@@ -91,11 +125,18 @@ export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
       const res = await fetch("/api/slip/analyze", { method: "POST", body: formData });
       const json = await res.json();
 
+      if (json.isDuplicate) {
+        setIsError(true);
+        setStatusText(
+          json.duplicateReason || "สลิปค่าใช้จ่ายนี้เคยบันทึกไปแล้ว — กรุณาตรวจสอบว่าไม่ได้ลงซ้ำ"
+        );
+      }
+
       const form = wrapRef.current?.closest("form");
       if (json.ok && json.result) {
         const ocr = json.result;
         if (ocr.transferredAt && form) {
-          const dKey = bangkokDayKey(ocr.transferredAt);
+          const dKey = bangkokDayKey(ocr.transferredAt, dayStartHour);
           if (dKey <= maxDate) {
             const dateInput = form.querySelector<HTMLInputElement>('input[name="purchased_at"]');
             if (dateInput) dateInput.value = dKey;
@@ -111,14 +152,16 @@ export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
         if (ocr.referenceNumber) {
           setReferenceNotes(`Ref: ${ocr.referenceNumber}`);
         }
-        setStatusText(
-          ocr.amountSatang
-            ? `อ่านสลิปสำเร็จ: ยอดในสลิป ${formatBaht(ocr.amountSatang)}${
-                detectedVendor ? ` · ร้าน/ผู้รับ "${detectedVendor}"` : ""
-              }`
-            : "แนบสลิปเรียบร้อยแล้ว"
-        );
-      } else {
+        if (!json.isDuplicate) {
+          setStatusText(
+            ocr.amountSatang
+              ? `อ่านสลิปสำเร็จ: ยอดในสลิป ${formatBaht(ocr.amountSatang)}${
+                  detectedVendor ? ` · ร้าน/ผู้รับ "${detectedVendor}"` : ""
+                }`
+              : "แนบสลิปเรียบร้อยแล้ว"
+          );
+        }
+      } else if (!json.isDuplicate) {
         setStatusText("แนบสลิปเรียบร้อยแล้ว");
       }
     } catch {
@@ -160,13 +203,7 @@ export function PurchaseSlipAttachment({ maxDate }: { maxDate: string }) {
           <button
             type="button"
             className="icon-button"
-            onClick={() => {
-              setReceiptPath("");
-              setReferenceNotes("");
-              setFileName("");
-              setPreviewUrl(null);
-              setStatusText(null);
-            }}
+            onClick={handleRemoveSlip}
             aria-label="เอาสลิปออก"
           >
             <X size={18} />

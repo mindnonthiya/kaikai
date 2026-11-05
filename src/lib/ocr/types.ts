@@ -32,8 +32,8 @@ function resolveApiKey(): { provider: string; apiKey: string } {
     for (const p of envPaths) {
       if (fs.existsSync(p)) {
         const content = fs.readFileSync(p, "utf-8");
-        const keyMatch = content.match(/OCR_API_KEY\s*=\s*(.+)/);
-        const provMatch = content.match(/OCR_PROVIDER\s*=\s*(.+)/);
+        const keyMatch = content.match(/^\s*(?:OCR_API_KEY|GEMINI_API_KEY)\s*=\s*([^\r\n#]+)/m);
+        const provMatch = content.match(/^\s*OCR_PROVIDER\s*=\s*([^\r\n#]+)/m);
         if (keyMatch && keyMatch[1]?.trim()) {
           apiKey = keyMatch[1].trim().replace(/^["']|["']$/g, "");
           if (provMatch && provMatch[1]?.trim()) {
@@ -61,4 +61,3 @@ export function getOcrProvider(): OcrProvider | null {
 
   return null;
 }
-

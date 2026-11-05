@@ -40,6 +40,7 @@ export function ExpenseTable({
   pooled = [],
   restockItems = [],
   maxDate,
+  dayStartHour = 0,
 }: {
   expenses: ExpenseRecord[];
   searchQuery: string;
@@ -48,6 +49,7 @@ export function ExpenseTable({
   pooled?: PooledPurchaseItem[];
   restockItems?: RestockItem[];
   maxDate?: string;
+  dayStartHour?: number;
 }) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -197,7 +199,7 @@ export function ExpenseTable({
     setEditCategory(e.category);
     setEditKind(e.kind);
     try {
-      setEditSpentAt(bangkokDayKey(new Date(e.spentAt)));
+      setEditSpentAt(bangkokDayKey(new Date(e.spentAt), dayStartHour));
     } catch {
       setEditSpentAt(bangkokDayKey(new Date()));
     }

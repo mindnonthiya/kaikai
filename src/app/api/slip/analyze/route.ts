@@ -1,36 +1,6 @@
-import fs from "fs";
-import path from "path";
 import { NextResponse } from "next/server";
-import { GeminiOcrProvider } from "@/lib/ocr/gemini";
+import { getOcrProvider } from "@/lib/ocr/types";
 import { createClient } from "@/lib/supabase/server";
-
-function getActiveOcrProvider() {
-  let apiKey = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
-
-  // If empty in process.env, read directly from .env.local / .env.cloud on disk
-  if (!apiKey) {
-    try {
-      const cwd = process.cwd();
-      const envFiles = [".env.local", ".env.cloud", ".env"];
-      for (const f of envFiles) {
-        const fullPath = path.join(cwd, f);
-        if (fs.existsSync(fullPath)) {
-          const content = fs.readFileSync(fullPath, "utf-8");
-          const mKey = content.match(/OCR_API_KEY\s*=\s*([^\r\n]+)/);
-          if (mKey && mKey[1]?.trim()) {
-            apiKey = mKey[1].trim().replace(/^["']|["']$/g, "");
-            if (apiKey) break;
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[analyze/route] Error reading env file:", err);
-    }
-  }
-
-  if (!apiKey) return null;
-  return new GeminiOcrProvider(apiKey);
-}
 
 export async function POST(req: Request) {
   try {
@@ -79,24 +49,26 @@ export async function POST(req: Request) {
       } else {
         const { data: existingSlip } = await supabase
           .from("slip_uploads")
-          .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+          .select("id, sale_id, created_at, sales(sale_number, sold_at, status)")
           .eq("owner_id", user.id)
           .eq("file_hash_sha256", hash)
           .maybeSingle();
 
         if (existingSlip) {
-          const rawSale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+          const rawSale = (existingSlip as unknown as { sales?: { sale_number: number; sold_at: string; status?: string } | Array<{ sale_number: number; sold_at: string; status?: string }> | null })?.sales;
           const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
-          if (sale?.sale_number) {
-            hashDuplicate = {
-              saleNumber: sale.sale_number,
-              soldAt: sale.sold_at,
-            };
-          } else {
-            hashDuplicate = {
-              saleNumber: undefined,
-              soldAt: existingSlip.created_at,
-            };
+          if (sale?.status !== "cancelled") {
+            if (sale?.sale_number) {
+              hashDuplicate = {
+                saleNumber: sale.sale_number,
+                soldAt: sale.sold_at,
+              };
+            } else {
+              hashDuplicate = {
+                saleNumber: undefined,
+                soldAt: existingSlip.created_at,
+              };
+            }
           }
         }
       }
@@ -111,7 +83,7 @@ export async function POST(req: Request) {
     let duplicateSaleNumber = hashDuplicate?.saleNumber;
     let duplicateSoldAt = hashDuplicate?.soldAt;
 
-    const ocrProvider = getActiveOcrProvider();
+    const ocrProvider = getOcrProvider();
     if (!ocrProvider) {
       return NextResponse.json({
         ok: true,
@@ -152,15 +124,15 @@ export async function POST(req: Request) {
           // A. Check in payments table by reference_number
           const { data: paymentMatch } = await supabase
             .from("payments")
-            .select("sale_id, sales(sale_number, sold_at)")
+            .select("sale_id, sales(sale_number, sold_at, status)")
             .eq("owner_id", user.id)
             .eq("reference_number", cleanRef)
             .maybeSingle();
 
           if (paymentMatch) {
-            const rawSale = (paymentMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+            const rawSale = (paymentMatch as unknown as { sales?: { sale_number: number; sold_at: string; status?: string } | Array<{ sale_number: number; sold_at: string; status?: string }> | null })?.sales;
             const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
-            if (sale?.sale_number) {
+            if (sale?.sale_number && sale.status !== "cancelled") {
               refDuplicate = {
                 saleNumber: sale.sale_number,
                 soldAt: sale.sold_at,
@@ -173,15 +145,15 @@ export async function POST(req: Request) {
           if (!refDuplicate) {
             const { data: slipRefMatch } = await supabase
               .from("slip_uploads")
-              .select("id, sale_id, created_at, sales(sale_number, sold_at)")
+              .select("id, sale_id, created_at, sales(sale_number, sold_at, status)")
               .eq("owner_id", user.id)
               .eq("ocr_reference_number", cleanRef)
               .maybeSingle();
 
             if (slipRefMatch) {
-              const rawSale = (slipRefMatch as unknown as { sales?: { sale_number: number; sold_at: string } | Array<{ sale_number: number; sold_at: string }> | null })?.sales;
+              const rawSale = (slipRefMatch as unknown as { sales?: { sale_number: number; sold_at: string; status?: string } | Array<{ sale_number: number; sold_at: string; status?: string }> | null })?.sales;
               const sale = Array.isArray(rawSale) ? rawSale[0] : rawSale;
-              if (sale?.sale_number) {
+              if (sale?.sale_number && sale.status !== "cancelled") {
                 refDuplicate = {
                   saleNumber: sale.sale_number,
                   soldAt: sale.sold_at,
@@ -197,6 +169,7 @@ export async function POST(req: Request) {
               .from("sales")
               .select("id, sale_number, sold_at")
               .eq("owner_id", user.id)
+              .neq("status", "cancelled")
               .ilike("notes", `%${cleanRef}%`)
               .maybeSingle();
 
@@ -225,7 +198,7 @@ export async function POST(req: Request) {
         duplicateSoldAt = hashDuplicate.soldAt;
         duplicateReason = hashDuplicate.expenseDesc
           ? `ไฟล์สลิปนี้เคยบันทึกในค่าใช้จ่าย “${hashDuplicate.expenseDesc}” แล้ว`
-          : `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate.saleNumber ?? "เดิม"}`;
+          : `ไฟล์รูปภาพนี้เคยบันทึกในบิล #${hashDuplicate?.saleNumber ?? "เดิม"}`;
       }
 
       return NextResponse.json({

@@ -3,7 +3,7 @@ import { PageTitle } from "@/components/page-title";
 import { RangeTabs } from "@/components/range-tabs";
 import { ActionButton } from "@/components/action-form";
 import { ExpenseReceiptButton } from "@/components/expense-receipt-button";
-import { cancelSale } from "@/app/actions/sales";
+import { cancelSale, markSalePaid } from "@/app/actions/sales";
 import { syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { summarize } from "@/lib/analytics";
 import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
@@ -95,7 +95,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
               {sale.slipPath && (
                 <>
                   <br />
-                  <ExpenseReceiptButton receiptPath={sale.slipPath} modalTitle={`สลิปบิล #${sale.saleNumber}`} />
+                  <ExpenseReceiptButton receiptPath={sale.slipPath} receiptPaths={sale.slipPaths} modalTitle={`สลิปบิล #${sale.saleNumber}`} />
                 </>
               )}
             </td>
@@ -105,7 +105,23 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
               {sale.discount > 0 && <><br /><small className="muted">ส่วนลด {formatBaht(sale.discount)}</small></>}
             </td>
             <td className="num">{formatBaht(sale.netRevenue - sale.cogs)}<br /><small className="muted">ต้นทุน {formatBaht(sale.cogs)}</small></td>
-            <td className="num">{sale.status === "confirmed" && <ActionButton action={cancelSale} fields={{ id: sale.id }} label="ยกเลิก" pendingLabel="กำลังยกเลิก…" confirmText={`ยกเลิกรายการ #${sale.saleNumber} ยอด ${formatBaht(sale.netRevenue)}?\nรายการจะไม่ถูกนับในยอดขายและกำไรอีก`} className="link-button danger" />}</td>
+            <td className="num">
+              {sale.status === "confirmed" && (
+                <div style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {(sale.paymentStatus === "unpaid" || sale.paymentStatus === "partial") && (
+                    <ActionButton
+                      action={markSalePaid}
+                      fields={{ id: sale.id, method: "transfer" }}
+                      label="รับเงินแล้ว"
+                      pendingLabel="กำลังบันทึก…"
+                      confirmText={`ยืนยันรับเงินครบแล้วสำหรับบิล #${sale.saleNumber} ยอด ${formatBaht(customerAmountDue(sale))}?`}
+                      className="link-button"
+                    />
+                  )}
+                  <ActionButton action={cancelSale} fields={{ id: sale.id }} label="ยกเลิก" pendingLabel="กำลังยกเลิก…" confirmText={`ยกเลิกรายการ #${sale.saleNumber} ยอด ${formatBaht(sale.netRevenue)}?\nรายการจะไม่ถูกนับในยอดขายและกำไรอีก`} className="link-button danger" />
+                </div>
+              )}
+            </td>
           </tr>)}
           {!sales.length && <tr><td colSpan={8}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีรายการขายในช่วงนี้"}</div></td></tr>}
         </tbody>

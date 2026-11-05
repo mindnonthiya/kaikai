@@ -58,6 +58,8 @@ export type SaleRecord = {
   cogs: number;
   grossProfit: number;
   slipPath?: string | null;
+  /** All storage paths for slips attached to this sale (supports multiple combined slips). */
+  slipPaths?: string[];
   items: SaleItemRecord[];
   payments: PaymentRecord[];
 };
