@@ -4,9 +4,9 @@ import { ActionButton } from "@/components/action-form";
 import { PageTitle } from "@/components/page-title";
 import { StatCard } from "@/components/stat-card";
 import { RangeTabs } from "@/components/range-tabs";
-import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, menuRanking, monthlySeries, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchIngredientPurchases, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
-import { UTILITY_CATEGORIES } from "@/lib/data/types";
+import { dailySeries, expensesByCategory, filterExpenses, filterSales, formatChange, formatPercentBps, ingredientUsageBreakdown, menuRanking, monthlySeries, percentChange, summarize } from "@/lib/analytics";
+import { fetchExpenses, fetchIngredientPurchases, fetchIngredients, fetchMenuYields, fetchRecipeItems, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
+import { DEFAULT_UNIT_LABEL, UTILITY_CATEGORIES } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
 
@@ -17,12 +17,16 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const now = new Date();
   const saleSettings = await fetchSaleSettings();
   const dayStartHour = saleSettings.dayStartHour ?? 0;
+  const unitLabel = saleSettings.unitLabel || DEFAULT_UNIT_LABEL;
   const range = resolveRange(key, now, dayStartHour);
   const prev = previousRange(range, dayStartHour);
-  const [sales, expenses, purchases] = await Promise.all([
+  const [sales, expenses, purchases, ingredients, recipeItems, menuYields] = await Promise.all([
     fetchSales(prev.start, range.end),
     fetchExpenses(prev.start, range.end),
     fetchIngredientPurchases(range.start, range.end),
+    fetchIngredients(),
+    fetchRecipeItems(),
+    fetchMenuYields(),
   ]);
   const curSales = filterSales(sales, range.start, range.end);
   const curExpenses = filterExpenses(expenses, range.start, range.end);
@@ -45,6 +49,13 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const monthly = monthlySeries(curSales, curExpenses, dayStartHour);
   const menus = menuRanking(curSales);
   const categories = expensesByCategory(curExpenses);
+  const ingredientUsage = ingredientUsageBreakdown({
+    sales: curSales,
+    recipeItems,
+    ingredients,
+    purchases,
+    menuYields,
+  });
 
   // Estimated ingredient cost (inside each sale) vs what was actually bought in the period.
   const actualPerUnit = purchases.filter((p) => p.costing === "per_unit").reduce((sum, p) => sum + p.price, 0);
@@ -59,7 +70,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     <PageTitle
       eyebrow="ผลประกอบการ"
       title="รายงาน"
-      description="สรุปยอดขายและกำไรเพื่อใช้ตัดสินใจ"
+      description="สรุปยอดขาย ต้นทุนวัตถุดิบ และกำไรเพื่อใช้ตัดสินใจ"
       action={
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <ActionButton
@@ -83,13 +94,13 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <StatCard label="เงินโอนเข้า" value={formatBaht(current.payments.transfer)} detail={current.payments.cash + current.payments.other ? `+ เงินสด/อื่น ๆ ${formatBaht(current.payments.cash + current.payments.other)}` : undefined} />
       <StatCard label="เงินเข้าบัญชี (สุทธิ)" value={formatBaht(current.netTransfer)} detail="โอนเข้า − โอนออก" />
       <StatCard label="ค้างรับ" value={formatBaht(current.outstanding)} />
-      <StatCard label="จำนวนกล่อง" value={current.boxes.toLocaleString("th-TH")} detail={current.addons ? `+ ของเพิ่ม ${current.addons.toLocaleString("th-TH")} รายการ` : undefined} />
+      <StatCard label={`จำนวน${unitLabel}`} value={current.boxes.toLocaleString("th-TH")} detail={current.addons ? `+ ท็อปปิ้ง/ของเพิ่ม ${current.addons.toLocaleString("th-TH")} รายการ` : undefined} />
     </div>
     <div className="stat-grid mini-stats">
       <StatCard label="ค่าส่งที่เก็บได้" value={formatBaht(current.deliveryIncome)} detail={`${current.deliveryCount.toLocaleString("th-TH")} ออเดอร์ส่ง`} />
       <StatCard label="ค่าน้ำมัน" value={formatBaht(current.fuelExpenses)} detail="จากหน้าค่าใช้จ่าย หมวดค่าน้ำมัน" />
       <StatCard label="ค่าส่งหักค่าน้ำมัน" value={formatBaht(current.deliveryIncome - current.fuelExpenses)} detail="ค่าส่ง − ค่าน้ำมัน" />
-      <StatCard label="ต้นทุนบรรจุภัณฑ์" value={formatBaht(current.packagingCost)} detail={current.boxes ? `เฉลี่ย ${formatBaht(Math.round(current.packagingCost / current.boxes))}/กล่อง` : "รวมอยู่ในต้นทุนสินค้าแล้ว"} />
+      <StatCard label="ต้นทุนบรรจุภัณฑ์" value={formatBaht(current.packagingCost)} detail={current.boxes ? `เฉลี่ย ${formatBaht(Math.round(current.packagingCost / current.boxes))}/${unitLabel}` : "รวมอยู่ในต้นทุนสินค้าแล้ว"} />
     </div>
     <div className="stat-grid mini-stats">
       <StatCard label="ต้นทุนเฉลี่ย/ออเดอร์" value={formatBaht(current.averageCostPerOrder)} detail="ต้นทุนที่บันทึกในบิล รวมบรรจุภัณฑ์" />
@@ -97,10 +108,10 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <StatCard label="ต้นทุนบริการ/รายการพิเศษ" value={formatBaht(current.otherDirectCost)} detail="รวมอยู่ในต้นทุนออเดอร์แล้ว แยกจากวัตถุดิบอาหาร" />
     </div>
     <div className="stat-grid mini-stats">
-      <StatCard label="ค่าใช้จ่ายดำเนินงาน/กล่อง" value={perBox(current.operatingExpenses)} detail={`รวม ${formatBaht(current.operatingExpenses)} ÷ ${current.boxes.toLocaleString("th-TH")} กล่อง`} />
-      <StatCard label="กำไรรวม ÷ กล่องอาหาร" value={perBox(current.netProfit)} detail="รวมกำไรบริการและของเพิ่ม หลังหักค่าใช้จ่ายดำเนินงาน" />
+      <StatCard label={`ค่าใช้จ่ายดำเนินงาน/${unitLabel}`} value={perBox(current.operatingExpenses)} detail={`รวม ${formatBaht(current.operatingExpenses)} ÷ ${current.boxes.toLocaleString("th-TH")} ${unitLabel}`} />
+      <StatCard label={`กำไรรวม ÷ ${unitLabel}`} value={perBox(current.netProfit)} detail="รวมกำไรบริการและของเพิ่ม หลังหักค่าใช้จ่ายดำเนินงาน" />
       <StatCard label="ต้นทุนวัตถุดิบ (ประมาณ)" value={formatBaht(current.foodCost)} detail="คำนวณจากสูตร + % ตอนขาย" />
-      <StatCard label="ซื้อวัตถุดิบจริง" value={formatBaht(actualFood)} detail={actualFood ? `ไก่ ${formatBaht(actualPerUnit)} · อื่น ๆ ${formatBaht(actualPooled)}` : "ยังไม่มีการซื้อในช่วงนี้"} />
+      <StatCard label="ซื้อวัตถุดิบจริง" value={formatBaht(actualFood)} detail={actualFood ? `ตามสูตร ${formatBaht(actualPerUnit)} · อื่น ๆ ${formatBaht(actualPooled)}` : "ยังไม่มีการซื้อในช่วงนี้"} />
     </div>
 
     <section className="panel spaced">
@@ -123,11 +134,60 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       <p className="table-footnote">ส่วนลดแบ่งตามยอดขายแต่ละรายการ บรรจุภัณฑ์ที่ให้จริงแบ่งตามสัดส่วนสูตร ส่วนค่าส่ง ทิป และค่าธรรมเนียมแสดงแยกท้ายตาราง ผลรวมตรงกับกำไรขั้นต้นของออเดอร์</p>
     </section>
 
+    {ingredientUsage.length > 0 && (
+      <section className="panel table-panel spaced">
+        <div className="table-title">
+          <h2>วิเคราะห์การใช้วัตถุดิบและสัดส่วนต้นทุนรายตัว (%)</h2>
+          <span>คำนวณปริมาณที่ใช้จากยอดขายจริงตามสูตรเมนู เปรียบเทียบกับยอดซื้อจริงในช่วงนี้</span>
+        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>วัตถุดิบ</th>
+              <th className="num">ปริมาณใช้ตามสูตร</th>
+              <th className="num">เทียบหน่วยซื้อ</th>
+              <th className="num">ต้นทุนตามสูตรขาย</th>
+              <th className="num">สัดส่วนต้นทุน (%)</th>
+              <th className="num">ยอดซื้อจริงในช่วงนี้</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ingredientUsage.map((row) => (
+              <tr key={row.ingredientId}>
+                <td><strong>{row.name}</strong></td>
+                <td className="num">
+                  {row.usedBaseQuantity > 0
+                    ? `${row.usedBaseQuantity.toLocaleString("th-TH", { maximumFractionDigits: 2 })} ${row.baseUnit}`
+                    : "—"}
+                </td>
+                <td className="num">
+                  {row.usedPurchaseQuantity > 0
+                    ? `≈ ${row.usedPurchaseQuantity.toLocaleString("th-TH", { maximumFractionDigits: 2 })} ${row.purchaseUnit}`
+                    : "—"}
+                </td>
+                <td className="num"><strong>{formatBaht(row.estimatedCost)}</strong></td>
+                <td className="num">
+                  <span className="share-bar"><i style={{ width: `${row.costShareBps / 100}%` }} /></span>
+                  {formatPercentBps(row.costShareBps)}
+                </td>
+                <td className="num">
+                  {row.purchasedAmount > 0
+                    ? <>{formatBaht(row.purchasedAmount)}{row.purchasedQuantity > 0 ? <><br /><small className="muted">{row.purchasedQuantity.toLocaleString("th-TH")} {row.purchaseUnit}</small></> : null}</>
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="table-footnote">ช่วยให้เห็นว่าวัตถุดิบตัวไหน (เช่น แป้ง ไข่ นูเทลล่า ชีส เนื้อสัตว์) กินสัดส่วนต้นทุนกี่ % ของทั้งหมด และปริมาณที่ใช้ตามสูตรสอดคล้องกับที่ซื้อจริงหรือไม่</p>
+      </section>
+    )}
+
     {(key === "all" || monthly.length > 1) && (
       <section className="panel table-panel spaced">
         <div className="table-title"><h2>สรุปรายเดือน</h2><span>{monthly.length} เดือน</span></div>
         <table className="data-table">
-          <thead><tr><th>เดือน</th><th className="num">รายการ</th><th className="num">จำนวนกล่อง</th><th className="num">ยอดขาย</th><th className="num">กำไรขั้นต้น</th><th className="num">ค่าใช้จ่ายดำเนินงาน</th><th className="num">กำไรสุทธิ</th></tr></thead>
+          <thead><tr><th>เดือน</th><th className="num">รายการ</th><th className="num">จำนวน{unitLabel}</th><th className="num">ยอดขาย</th><th className="num">กำไรขั้นต้น</th><th className="num">ค่าใช้จ่ายดำเนินงาน</th><th className="num">กำไรสุทธิ</th></tr></thead>
           <tbody>
             {monthly.map((m) => <tr key={m.key}><td><strong>{m.label}</strong></td><td className="num">{m.saleCount.toLocaleString("th-TH")}</td><td className="num">{m.boxes.toLocaleString("th-TH")}</td><td className="num">{formatBaht(m.revenue)}</td><td className="num">{formatBaht(m.grossProfit)}</td><td className="num">{formatBaht(m.operatingExpenses)}</td><td className={`num ${m.netProfit < 0 ? "negative" : ""}`}><strong>{formatBaht(m.netProfit)}</strong></td></tr>)}
             {!monthly.length && <tr><td colSpan={7}><div className="empty-state">ยังไม่มีข้อมูลรายเดือน</div></td></tr>}

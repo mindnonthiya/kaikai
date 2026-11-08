@@ -6,9 +6,11 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
 import { createClient } from "@/lib/supabase/server";
 import { DAY_MS, DEFAULT_DAY_START_HOUR, normalizeDayStartHour } from "@/lib/time";
-import type {
-  ExpenseKind, ExpenseRecord, Fulfillment, IngredientCosting, IngredientRecord, MenuRecord, PackagingPurchaseRecord, PackagingRecord, PaymentMethod, PaymentStatus,
-  PricePreset, ProfileRecord, PurchaseRecord, RecipeItemRecord, SaleRecord, SaleSettings, SaleStatus,
+import {
+  DEFAULT_UNIT_LABEL,
+  type ExpenseKind, type ExpenseRecord, type Fulfillment, type IngredientCosting, type IngredientRecord, type MenuRecord,
+  type PackagingPurchaseRecord, type PackagingRecord, type PaymentMethod, type PaymentStatus,
+  type PricePreset, type ProfileRecord, type PurchaseRecord, type RecipeItemRecord, type SaleRecord, type SaleSettings, type SaleStatus,
 } from "./types";
 
 type Row = Record<string, unknown>;
@@ -21,6 +23,7 @@ export const DEFAULT_DELIVERY_FEE_OPTIONS_SATANG = [1500, 2000];
 export const DEFAULT_INITIAL_POOLED_BPS = 1000;
 export const SALE_SETTINGS_KEY = "sales";
 export const PRICE_PRESETS_SETTINGS_KEY = "price_presets";
+export const MENU_YIELDS_SETTINGS_KEY = "menu_yields";
 
 // User-scoped in-memory cache to eliminate redundant Supabase roundtrips in serverless
 interface CacheEntry<T> {
@@ -212,7 +215,29 @@ export async function fetchExpenses(start: Date, end: Date): Promise<ExpenseReco
   return data.map(mapExpense);
 }
 
-export function mapMenu(row: Row): MenuRecord {
+/** Batch yield divisor per menu ID (e.g. 1 batch = 30 crepes -> yield 30). */
+export const fetchMenuYields = cache(async (): Promise<Map<string, number>> => {
+  const yields = new Map<string, number>();
+  if (!hasSupabaseEnv) return yields;
+  const userId = await getRequestUserId();
+  const cacheKey = `${userId}:settings:menu_yields`;
+  const cached = getCached<Map<string, number>>(cacheKey);
+  if (cached) return cached;
+
+  const supabase = await createClient();
+  const { data } = await supabase.from("settings").select("value").eq("key", MENU_YIELDS_SETTINGS_KEY).maybeSingle();
+  const raw = (data?.value ?? {}) as Record<string, unknown>;
+  for (const [menuId, val] of Object.entries(raw)) {
+    const n = Number(val);
+    if (Number.isFinite(n) && n > 0) {
+      yields.set(menuId, n);
+    }
+  }
+  return setCached(cacheKey, yields, 60_000);
+});
+
+export function mapMenu(row: Row, yieldOverride?: number): MenuRecord {
+  const rawYield = yieldOverride ?? num(row.recipe_yield);
   return {
     id: str(row.id),
     name: str(row.name),
@@ -221,6 +246,7 @@ export function mapMenu(row: Row): MenuRecord {
     price: num(row.selling_price_satang),
     packagingCost: num(row.packaging_cost_satang),
     cost: num(row.current_cost_satang),
+    recipeYield: Number.isFinite(rawYield) && rawYield > 0 ? rawYield : 1,
     isAvailable: Boolean(row.is_available),
     costCalculatedAt: strOrNull(row.cost_calculated_at),
   };
@@ -234,10 +260,13 @@ export const fetchMenus = cache(async (): Promise<MenuRecord[]> => {
   if (cached) return cached;
 
   const supabase = await createClient();
-  const data = await fetchAll("เมนู", (from, to) =>
-    supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
-      .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to));
-  const res = data.map(mapMenu);
+  const [data, menuYields] = await Promise.all([
+    fetchAll("เมนู", (from, to) =>
+      supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
+        .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to)),
+    fetchMenuYields(),
+  ]);
+  const res = data.map((row) => mapMenu(row, menuYields.get(str(row.id))));
   return setCached(cacheKey, res, 60_000);
 });
 
@@ -362,7 +391,14 @@ export const fetchRecipeItems = cache(async (): Promise<RecipeItemRecord[]> => {
 });
 
 export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
-  const fallback = { defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG, deliveryFeeOptions: DEFAULT_DELIVERY_FEE_OPTIONS_SATANG, initialPooledBps: DEFAULT_INITIAL_POOLED_BPS, showMenuImages: true, dayStartHour: DEFAULT_DAY_START_HOUR };
+  const fallback: SaleSettings = {
+    defaultDeliveryFee: DEFAULT_DELIVERY_FEE_SATANG,
+    deliveryFeeOptions: DEFAULT_DELIVERY_FEE_OPTIONS_SATANG,
+    initialPooledBps: DEFAULT_INITIAL_POOLED_BPS,
+    showMenuImages: true,
+    dayStartHour: DEFAULT_DAY_START_HOUR,
+    unitLabel: DEFAULT_UNIT_LABEL,
+  };
   if (!hasSupabaseEnv) return fallback;
   const userId = await getRequestUserId();
   const cacheKey = `${userId}:settings:sales`;
@@ -377,18 +413,20 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
   const bps = Number(value.initial_pooled_bps);
   const showMenuImages = value.show_menu_images !== undefined ? Boolean(value.show_menu_images) : true;
   const dayStartHour = normalizeDayStartHour(value.day_start_hour);
+  const unitLabel = str(value.unit_label).trim() || DEFAULT_UNIT_LABEL;
   const resolvedDefaultFee = Number.isSafeInteger(fee) && fee >= 0 ? fee : fallback.defaultDeliveryFee;
   const rawFeeOptions = Array.isArray(value.delivery_fee_options_satang)
     ? value.delivery_fee_options_satang.map(Number).filter((n) => Number.isSafeInteger(n) && n >= 0)
     : [];
   const baseOptions = rawFeeOptions.length > 0 ? rawFeeOptions : DEFAULT_DELIVERY_FEE_OPTIONS_SATANG;
   const deliveryFeeOptions = Array.from(new Set([resolvedDefaultFee, ...baseOptions])).sort((a, b) => a - b);
-  const res = {
+  const res: SaleSettings = {
     defaultDeliveryFee: resolvedDefaultFee,
     deliveryFeeOptions,
     initialPooledBps: Number.isSafeInteger(bps) && bps >= 0 && bps <= 10_000 ? bps : fallback.initialPooledBps,
     showMenuImages,
     dayStartHour,
+    unitLabel,
   };
   return setCached(cacheKey, res, 60_000);
 });

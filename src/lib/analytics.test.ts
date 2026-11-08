@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  dailySeries, defaultOrderPackaging, expensesByCategory, learnedYield, menuCostWarnings, menuRanking, monthlySeries, packagingLinesCost, percentChange,
-  pooledCost, pooledIngredientBps, recipeCostParts, recipeMaterialCost, summarize, weightedPricePerUnit, yieldWindow,
+  dailySeries, defaultOrderPackaging, expensesByCategory, ingredientUsageBreakdown, learnedYield, menuCostWarnings, menuRanking, monthlySeries, packagingLinesCost, percentChange,
+  pooledCost, pooledIngredientBps, recipeCostParts, recipeIngredientBreakdown, recipeMaterialCost, summarize, weightedPricePerUnit, yieldWindow,
 } from "./analytics";
-import type { ExpenseRecord, MenuRecord, SaleRecord } from "./data/types";
+import type { ExpenseRecord, IngredientRecord, MenuRecord, PurchaseRecord, RecipeItemRecord, SaleRecord } from "./data/types";
 import {
   bangkokDayKey,
   fromBangkokDateTimeInput,
@@ -124,6 +124,132 @@ describe("menu costing", () => {
       new Map([["chicken", 10]]), new Map([["box", 260]]),
     );
     expect(parts).toEqual({ ingredients: 1000, packaging: 260 });
+  });
+  it("divides batch ingredient cost by recipeYield while keeping packaging per sold unit (e.g. crepe batter for 30 sheets)", () => {
+    const batterRecipe: RecipeItemRecord[] = [
+      { id: "1", menuId: "crepe", ingredientId: "flour", packagingItemId: null, quantity: 1000 }, // 1000g × 4.5 satang = 4500
+      { id: "2", menuId: "crepe", ingredientId: "sugar", packagingItemId: null, quantity: 200 },  // 200g × 3.0 satang = 600
+      { id: "3", menuId: "crepe", ingredientId: "egg", packagingItemId: null, quantity: 4 },      // 4 eggs × 400 satang = 1600
+      { id: "4", menuId: "crepe", ingredientId: "milk", packagingItemId: null, quantity: 1200 },  // 1200ml × 5.0 satang = 6000
+      { id: "5", menuId: "crepe", ingredientId: "butter", packagingItemId: null, quantity: 180 }, // 180g × 25.0 satang = 4500
+      { id: "6", menuId: "crepe", ingredientId: null, packagingItemId: "sleeve", quantity: 1 },   // 1 sleeve = 100 satang per crepe
+    ];
+    const ingCosts = new Map([
+      ["flour", 4.5],
+      ["sugar", 3.0],
+      ["egg", 400],
+      ["milk", 5.0],
+      ["butter", 25.0],
+    ]);
+    const packCosts = new Map([["sleeve", 100]]);
+    // Batch ingredients = 4500 + 600 + 1600 + 6000 + 4500 = 17200 satang (172.00 ฿)
+    // Divided by 30 sheets = 573.33 -> 573 satang (5.73 ฿) per sheet
+    const parts = recipeCostParts(batterRecipe, ingCosts, packCosts, 30);
+    expect(parts).toEqual({ ingredients: 573, packaging: 100 });
+    expect(recipeMaterialCost(batterRecipe, ingCosts, packCosts, 30)).toBe(673);
+  });
+  it("computes per-ingredient cost and % share (quantity and cost) via recipeIngredientBreakdown", () => {
+    const ingredients: IngredientRecord[] = [
+      { id: "flour", name: "แป้งเครป", category: "c", costing: "per_unit", baseUnit: "กรัม", purchaseUnit: "กก.", unitsPerPurchaseUnit: 1000, yieldAuto: false, yieldUpdatedAt: null, pricePerPurchaseUnit: 4500, unitCost: 4.5, isActive: true },
+      { id: "nutella", name: "นูเทลล่า", category: "c", costing: "per_unit", baseUnit: "กรัม", purchaseUnit: "กระปุก", unitsPerPurchaseUnit: 900, yieldAuto: false, yieldUpdatedAt: null, pricePerPurchaseUnit: 27000, unitCost: 30, isActive: true },
+    ];
+    const items: RecipeItemRecord[] = [
+      { id: "1", menuId: "m", ingredientId: "flour", packagingItemId: null, quantity: 80 },   // 80g × 4.5 = 360 satang (3.60 ฿)
+      { id: "2", menuId: "m", ingredientId: "nutella", packagingItemId: null, quantity: 20 }, // 20g × 30 = 600 satang (6.00 ฿)
+    ];
+    const result = recipeIngredientBreakdown(items, ingredients, 1);
+    expect(result).toEqual({
+      recipeYield: 1,
+      totalRecipeQuantity: 100,
+      batchIngredientCost: 960,
+      perServingIngredientCost: 960,
+      rows: [
+        {
+          ingredientId: "nutella",
+          name: "นูเทลล่า",
+          baseUnit: "กรัม",
+          quantity: 20,
+          perServingQuantity: 20,
+          batchCost: 600,
+          perServingCost: 600,
+          quantityShareBps: 2000, // 20% of total 100g
+          costShareBps: 6250,     // 600 / 960 = 62.5% of total ingredient cost
+        },
+        {
+          ingredientId: "flour",
+          name: "แป้งเครป",
+          baseUnit: "กรัม",
+          quantity: 80,
+          perServingQuantity: 80,
+          batchCost: 360,
+          perServingCost: 360,
+          quantityShareBps: 8000, // 80% of total 100g
+          costShareBps: 3750,     // 360 / 960 = 37.5% of total ingredient cost
+        },
+      ],
+    });
+  });
+  it("computes theoretical ingredient usage and cost share across sales via ingredientUsageBreakdown", () => {
+    const ingredients: IngredientRecord[] = [
+      { id: "flour", name: "แป้งเครป", category: "c", costing: "per_unit", baseUnit: "กรัม", purchaseUnit: "กก.", unitsPerPurchaseUnit: 1000, yieldAuto: false, yieldUpdatedAt: null, pricePerPurchaseUnit: 4500, unitCost: 4.5, isActive: true },
+      { id: "nutella", name: "นูเทลล่า", category: "c", costing: "per_unit", baseUnit: "กรัม", purchaseUnit: "กระปุก", unitsPerPurchaseUnit: 900, yieldAuto: false, yieldUpdatedAt: null, pricePerPurchaseUnit: 27000, unitCost: 30, isActive: true },
+    ];
+    const recipeItems: RecipeItemRecord[] = [
+      // Menu m1 is a batch recipe yielding 10 sheets using 1000g flour (so 100g per sheet)
+      { id: "1", menuId: "m1", ingredientId: "flour", packagingItemId: null, quantity: 1000 },
+      // Addon a1 uses 30g nutella per serving
+      { id: "2", menuId: "a1", ingredientId: "nutella", packagingItemId: null, quantity: 30 },
+    ];
+    const sales = [
+      sale({
+        items: [
+          { menuId: "m1", name: "แป้งเครป", category: "อาหารจานหลัก", quantity: 5, revenue: 15000, cost: 2250 },
+          { menuId: "a1", name: "เพิ่มนูเทลล่า", category: "เพิ่มเติม", quantity: 2, revenue: 4000, cost: 1800 },
+        ],
+      }),
+    ];
+    const purchases: PurchaseRecord[] = [
+      { id: "p1", ingredientId: "flour", ingredientName: "แป้งเครป", costing: "per_unit", purchasedAt: "2026-10-13T01:00:00Z", price: 4500, purchasedQuantity: 1, unit: "กก.", vendor: null },
+    ];
+    const usage = ingredientUsageBreakdown({
+      sales,
+      recipeItems,
+      ingredients,
+      purchases,
+      menuYields: new Map([["m1", 10]]),
+    });
+    expect(usage).toEqual([
+      {
+        ingredientId: "flour",
+        name: "แป้งเครป",
+        baseUnit: "กรัม",
+        purchaseUnit: "กก.",
+        unitsPerPurchaseUnit: 1000,
+        unitCost: 4.5,
+        usedBaseQuantity: 500, // 5 sold × (1000g / 10) = 500g
+        usedPurchaseQuantity: 0.5, // 500g / 1000g = 0.5 กก.
+        estimatedCost: 2250, // 500 × 4.5 = 2250 satang
+        costShareBps: 5556, // 2250 / (2250 + 1800) = 55.56%
+        purchasedQuantity: 1,
+        purchasedAmount: 4500,
+        menusCount: 1,
+      },
+      {
+        ingredientId: "nutella",
+        name: "นูเทลล่า",
+        baseUnit: "กรัม",
+        purchaseUnit: "กระปุก",
+        unitsPerPurchaseUnit: 900,
+        unitCost: 30,
+        usedBaseQuantity: 60, // 2 sold × 30g = 60g
+        usedPurchaseQuantity: 0.07, // rounded to 2 decimal places: 60 / 900 = 0.0666... -> 0.07
+        estimatedCost: 1800, // 60 × 30 = 1800 satang
+        costShareBps: 4444, // 1800 / 4050 = 44.44%
+        purchasedQuantity: 0,
+        purchasedAmount: 0,
+        menusCount: 1,
+      },
+    ]);
   });
   it("warns about missing cost and thin margins", () => {
     const base: MenuRecord = { id: "m", name: "A", category: "x", price: 6000, packagingCost: 0, cost: 3000, isAvailable: true, costCalculatedAt: null };

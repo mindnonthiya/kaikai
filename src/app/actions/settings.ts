@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { DEFAULT_DELIVERY_FEE_OPTIONS_SATANG, invalidateQueryCache } from "@/lib/data/queries";
+import { DEFAULT_UNIT_LABEL } from "@/lib/data/types";
 import { bahtToSatang } from "@/lib/money";
-import { InputError, dbError, money, runAction, text } from "@/lib/server-action";
+import { InputError, dbError, money, optionalText, runAction, text } from "@/lib/server-action";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
 
 /** Percent text (e.g. "10" or "12.5") → basis points (1000 / 1250). */
@@ -28,7 +29,7 @@ function dayStartHourField(form: FormData) {
 
 /**
  * Sale settings (settings key "sales"):
- * default delivery fee filled in when an order is marked “ส่ง”, starting % for other ingredients, and business day start hour.
+ * default delivery fee filled in when an order is marked “ส่ง”, starting % for other ingredients, business day start hour, and primary unit label.
  */
 function deliveryFeeOptionsField(form: FormData, defaultFeeSatang: number): number[] {
   const raw = String(form.get("delivery_fee_options") ?? "").trim();
@@ -57,6 +58,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
     const initialPooledBps = percentBps(form, "initial_pooled_percent", "% วัตถุดิบอื่นเริ่มต้น");
     const showMenuImages = form.get("show_menu_images") === "on" || form.get("show_menu_images") === "true";
     const dayStartHour = dayStartHourField(form);
+    const unitLabel = optionalText(form, "unit_label", "คำเรียกหน่วยสินค้าหลัก", 20) || DEFAULT_UNIT_LABEL;
     const { error } = await supabase.from("settings").upsert(
       {
         owner_id: user.id,
@@ -67,6 +69,7 @@ export async function saveSaleSettings(form: FormData): Promise<ActionState> {
           initial_pooled_bps: initialPooledBps,
           show_menu_images: showMenuImages,
           day_start_hour: dayStartHour,
+          unit_label: unitLabel,
         },
         updated_at: new Date().toISOString()
       },

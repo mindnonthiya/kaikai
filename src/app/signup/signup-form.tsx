@@ -59,11 +59,11 @@ export function SignupForm() {
     <form onSubmit={submit}>
       <label>
         ชื่อร้าน (ใช้เป็นชื่อบัญชีร้าน)
-        <input id="signup-shop" value={form.shopName} onChange={set("shopName")} placeholder="เช่น ข้าวมันไก่ป้าแดง" maxLength={80} required />
+        <input id="signup-shop" value={form.shopName} onChange={set("shopName")} placeholder="เช่น ชื่อร้านของคุณ" maxLength={80} required />
       </label>
       <label>
         ชื่อเจ้าของร้าน / ผู้ติดต่อ <span className="muted-hint">(ไม่บังคับ — หากเว้นว่างจะใช้ชื่อร้าน)</span>
-        <input id="signup-name" value={form.displayName} onChange={set("displayName")} placeholder={form.shopName.trim() || "เช่น ป้าแดง"} maxLength={80} autoComplete="name" />
+        <input id="signup-name" value={form.displayName} onChange={set("displayName")} placeholder={form.shopName.trim() || "เช่น ชื่อเจ้าของร้าน"} maxLength={80} autoComplete="name" />
       </label>
       <label>อีเมล<input id="signup-email" type="email" value={form.email} onChange={set("email")} placeholder="you@example.com" autoComplete="email" required /></label>
       <label>รหัสผ่าน<input id="signup-password" type="password" value={form.password} onChange={set("password")} placeholder="อย่างน้อย 8 ตัวอักษร" autoComplete="new-password" minLength={8} required /></label>

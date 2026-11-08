@@ -2,19 +2,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { readCostRows } from "@/lib/cost-rows";
 import { recipeCostParts } from "@/lib/analytics";
+import { MENU_YIELDS_SETTINGS_KEY } from "@/lib/data/queries";
 import type { RecipeItemRecord } from "@/lib/data/types";
 import { dbError } from "@/lib/server-action";
 
 /**
- * cost per dish = per-piece ingredients in the recipe (chicken) + per-order packaging.
- * Pooled ingredients (rice, herbs, sauce) are not here — they are added at sale time as a % of the price.
+ * cost per dish = (per-unit ingredients in the recipe ÷ recipe_yield) + per-order packaging.
+ * Pooled ingredients (rice, herbs, sauce, etc.) are not here — they are added at sale time as a % of the price.
  * Packaging not counted per order (bags etc.) is booked as an expense when bought.
  * `packaging_cost_satang` keeps the packaging part so a sale can swap it for what was actually handed out.
  * Without `menuIds` every menu is recalculated.
  */
 export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: string[]) {
   if (menuIds && !menuIds.length) return;
-  const [menuRows, recipeRows, ingredientRows, packagingRows] = await Promise.all([
+  const [menuRows, recipeRows, ingredientRows, packagingRows, yieldsSetting] = await Promise.all([
     readCostRows((from, to) => {
       let q = supabase.from("menus").select("id,current_cost_satang,packaging_cost_satang");
       if (menuIds) q = q.in("id", menuIds);
@@ -27,7 +28,15 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
     }),
     readCostRows((from, to) => supabase.from("ingredients").select("id,costing,weighted_unit_cost_satang").order("id").range(from, to)),
     readCostRows((from, to) => supabase.from("packaging_items").select("id,unit_cost_satang,per_order").order("id").range(from, to)),
+    supabase.from("settings").select("value").eq("key", MENU_YIELDS_SETTINGS_KEY).maybeSingle(),
   ]);
+  const rawYields = (yieldsSetting?.data?.value ?? {}) as Record<string, unknown>;
+  const menuYields = new Map<string, number>();
+  for (const [k, v] of Object.entries(rawYields)) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) menuYields.set(k, n);
+  }
+
   const ingredientCost = new Map(ingredientRows.filter((r) => r.costing !== "pooled").map((r) => [String(r.id), Number(r.weighted_unit_cost_satang)]));
   const packagingCost = new Map(packagingRows.filter((r) => r.per_order !== false).map((r) => [String(r.id), Number(r.unit_cost_satang)]));
   const byMenu = new Map<string, RecipeItemRecord[]>();
@@ -41,7 +50,9 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
   const now = new Date().toISOString();
   const updates: Promise<unknown>[] = [];
   for (const menu of menuRows) {
-    const parts = recipeCostParts(byMenu.get(String(menu.id)) ?? [], ingredientCost, packagingCost);
+    const menuId = String(menu.id);
+    const recipeYield = menuYields.get(menuId) ?? (Number(menu.recipe_yield) || 1);
+    const parts = recipeCostParts(byMenu.get(menuId) ?? [], ingredientCost, packagingCost, recipeYield);
     const total = Math.round(parts.ingredients + parts.packaging);
     const pack = Math.round(parts.packaging);
 
@@ -53,7 +64,7 @@ export async function recalculateMenuCosts(supabase: SupabaseClient, menuIds?: s
       (async () => {
         const { error } = await supabase.from("menus")
           .update({ current_cost_satang: total, packaging_cost_satang: pack, cost_calculated_at: now, updated_at: now })
-          .eq("id", String(menu.id));
+          .eq("id", menuId);
         if (error) dbError(error);
       })()
     );

@@ -8,6 +8,7 @@ import { PwaSettingsCard } from "@/components/pwa-install";
 import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
 import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSaleSettings } from "@/lib/data/queries";
+import { DEFAULT_UNIT_LABEL, UNIT_LABEL_OPTIONS } from "@/lib/data/types";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatBaht, satangToBahtInput } from "@/lib/money";
 import { getOcrProvider } from "@/lib/ocr/types";
@@ -25,6 +26,9 @@ export default async function SettingsPage() {
 
   return <>
     <PageTitle eyebrow="ระบบ" title="ตั้งค่า" description="ข้อมูลร้าน บัญชี และการเชื่อมต่อ" />
+    <datalist id="unit-label-options">
+      {UNIT_LABEL_OPTIONS.map((u) => <option key={u} value={u} />)}
+    </datalist>
     <div className="settings-grid">
       <section className="panel settings-card">
         <h2>ข้อมูลร้านและบัญชี</h2>
@@ -49,12 +53,23 @@ export default async function SettingsPage() {
       <section className="panel settings-card">
         <h2>การขายและการแสดงผล</h2>
         <ActionForm action={saveSaleSettings} submitLabel="บันทึก" className="settings-form" resetOnSuccess={false}>
+          <label>คำเรียกหน่วยสินค้าหลักของร้าน (เช่น กล่อง, แผ่น, จาน, ชาม, แก้ว)
+            <input
+              id="settings-unit-label"
+              name="unit_label"
+              list="unit-label-options"
+              maxLength={20}
+              defaultValue={saleSettings.unitLabel || DEFAULT_UNIT_LABEL}
+              placeholder="เช่น กล่อง, แผ่น, จาน, แก้ว"
+            />
+          </label>
+          <p className="field-hint">ใช้แสดงหน่วยนับในหน้าภาพรวม เมนู และรายงาน (เช่น ร้านเครปใช้ “แผ่น”, ร้านอาหารใช้ “กล่อง” หรือ “จาน”, ร้านน้ำใช้ “แก้ว”)</p>
           <label>ค่าส่งเริ่มต้น (บาท)<input id="settings-delivery-fee" name="default_delivery_fee" inputMode="decimal" defaultValue={satangToBahtInput(saleSettings.defaultDeliveryFee)} required /></label>
           <p className="field-hint">ใส่ให้อัตโนมัติเมื่อเลือก “ส่ง” ตอนเปิดบิล แก้ได้ทุกออเดอร์</p>
           <label>ตัวเลือกค่าส่งด่วน (บาท, คั่นด้วยลูกน้ำ ,)<input id="settings-delivery-fee-options" name="delivery_fee_options" defaultValue={(saleSettings.deliveryFeeOptions ?? [1500, 2000]).map((s) => satangToBahtInput(s).replace(/\.00$/, "")).join(", ")} placeholder="เช่น 15, 20" /></label>
           <p className="field-hint">แสดงเป็นปุ่มกดลัดให้สลับเรทค่าส่งได้ทันทีตอนเปิดบิลและนำเข้าสลิป (เช่น 15, 20)</p>
           <label>วัตถุดิบอื่นเริ่มต้น (% ของราคาขาย)<input id="settings-initial-pooled" name="initial_pooled_percent" inputMode="decimal" defaultValue={String(saleSettings.initialPooledBps / 100)} required /></label>
-          <p className="field-hint">ข้าว พริก กระเทียม ผักชี มะนาว ซอส — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
+          <p className="field-hint">ของใช้รวมที่ไม่ได้ชั่งตวงรายจาน (เช่น แก๊ส น้ำแข็ง เครื่องปรุงรวม ข้าว ผัก ซอส) — ใช้ค่านี้จนกว่าจะมียอดซื้อจริง {POOLED_MIN_DAYS} วัน แล้วระบบคำนวณเอง</p>
           <div className="connection-row"><span>ตอนนี้ใช้</span><strong>{formatPercentBps(pooled.bps)} · {pooled.source === "actual" ? `จากยอดซื้อ ${formatBaht(pooled.pooledPurchases)} ÷ ยอดขาย ${formatBaht(pooled.foodRevenue)} (${pooled.historyDays} วัน)` : `ค่าเริ่มต้น${pooled.historyDays ? ` · มีข้อมูล ${pooled.historyDays}/${POOLED_MIN_DAYS} วัน` : ""}`}</strong></div>
           <label>เวลาเริ่มวันใหม่ (ตัดรอบรายวัน)
             <select id="settings-day-start-hour" name="day_start_hour" defaultValue={String(saleSettings.dayStartHour ?? DEFAULT_DAY_START_HOUR)}>

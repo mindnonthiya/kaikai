@@ -7,9 +7,9 @@ import { formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
 export type PerUnitPurchaseItem = {
   id: string;
   name: string;
-  /** e.g. กก. */
+  /** e.g. กก., แผง, กระปุก */
   purchaseUnit: string;
-  /** e.g. ชิ้น */
+  /** e.g. กรัม, มล., ฟอง, ชิ้น */
   baseUnit: string;
   unitsPerPurchaseUnit: number;
   /** Last price per purchase unit as a baht string ("" when never bought). */
@@ -24,8 +24,8 @@ const initial = (perUnit: PerUnitPurchaseItem[]): State => ({
 
 /**
  * One form for a shopping trip.
- * Per-piece items (chicken): amount in กก. × price per กก. → total. Fields qty_<id>, unit_price_<id>.
- * Pooled items (rice, herbs, sauce): total price only. Field amount_<id>.
+ * Per-unit items: amount in purchaseUnit × price per purchaseUnit → total. Fields qty_<id>, unit_price_<id>.
+ * Pooled items: total price only. Field amount_<id>.
  */
 export function IngredientPurchaseTable({ perUnit, pooled }: { perUnit: PerUnitPurchaseItem[]; pooled: PooledPurchaseItem[] }) {
   const [state, setState] = useState(() => initial(perUnit));
@@ -54,7 +54,7 @@ export function IngredientPurchaseTable({ perUnit, pooled }: { perUnit: PerUnitP
   }
 
   return <div className="restock-table" ref={ref}>
-    {perUnit.length > 0 && <p className="picker-subhead">นับต่อชิ้น — กรอกจำนวน{perUnit[0].purchaseUnit} × ราคาต่อ{perUnit[0].purchaseUnit}</p>}
+    {perUnit.length > 0 && <p className="picker-subhead">ระบุในสูตร (กรัม / มล. / ชิ้น / ฟอง) — กรอกจำนวนหน่วยที่ซื้อ × ราคาต่อหน่วยที่ซื้อ</p>}
     {perUnit.map((item) => {
       const qty = state.qty[item.id] ?? 0;
       const raw = state.unitPrice[item.id] ?? "";

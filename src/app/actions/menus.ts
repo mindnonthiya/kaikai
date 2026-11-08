@@ -2,22 +2,24 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { invalidateQueryCache } from "@/lib/data/queries";
+import { MENU_YIELDS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
 import { ADDON_CATEGORY, DISH_CATEGORY, SERVICE_CATEGORY } from "@/lib/data/types";
 import { recalculateMenuCosts } from "@/lib/menu-cost";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
-import { InputError, amountOrZero, dbError, id, money, oneOf, runAction, text } from "@/lib/server-action";
+import { InputError, amountOrZero, dbError, id, money, oneOf, quantity, runAction, text } from "@/lib/server-action";
 
 type Row = Record<string, unknown>;
 const UUID = /^[0-9a-f-]{36}$/i;
 
 function revalidateMenus() {
   invalidateQueryCache("menus");
+  invalidateQueryCache("menu_yields");
   invalidateQueryCache("recipes");
   invalidateQueryCache("pooled_rate");
   revalidatePath("/menus");
   revalidatePath("/sales/new");
   revalidatePath("/dashboard");
+  revalidatePath("/reports");
 }
 
 export async function saveMenu(form: FormData): Promise<ActionState> {
@@ -92,12 +94,16 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
 }
 
 /**
- * Saves a whole recipe at once from stepper fields `pack_<id>` (packaging) and `ing_<id>` (per-piece ingredients).
+ * Saves a whole recipe at once from stepper fields `pack_<id>` (packaging) and `ing_<id>` (per-unit ingredients),
+ * plus optional `recipe_yield` (how many servings/crepes/dishes this batch recipe makes; default 1).
  * Only items present in the form are replaced; 0 removes the item from the recipe.
  */
 export async function saveMenuRecipe(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const menuId = id(form, "menu_id");
+    const rawYieldStr = String(form.get("recipe_yield") ?? "").trim();
+    const recipeYield = rawYieldStr ? quantity(form, "recipe_yield", "จำนวนเสิร์ฟต่อสูตร")! : 1;
+
     const packIds: string[] = [], ingredientIds: string[] = [];
     const insert: Row[] = [];
     for (const key of new Set(form.keys())) {
@@ -126,6 +132,22 @@ export async function saveMenuRecipe(form: FormData): Promise<ActionState> {
       const { error } = await supabase.from("menu_recipe_items").insert(insert);
       if (error) dbError(error);
     }
+
+    // Save recipe_yield in settings (menu_yields) and best-effort update menus.recipe_yield column
+    const { data: existingYields } = await supabase.from("settings").select("value").eq("key", MENU_YIELDS_SETTINGS_KEY).maybeSingle();
+    const yieldsMap: Record<string, number> = { ...((existingYields?.value ?? {}) as Record<string, number>) };
+    if (recipeYield === 1) {
+      delete yieldsMap[menuId];
+    } else {
+      yieldsMap[menuId] = recipeYield;
+    }
+    const { error: yieldSetErr } = await supabase.from("settings").upsert(
+      { owner_id: user.id, key: MENU_YIELDS_SETTINGS_KEY, value: yieldsMap, updated_at: new Date().toISOString() },
+      { onConflict: "owner_id,key" },
+    );
+    if (yieldSetErr) dbError(yieldSetErr);
+    await supabase.from("menus").update({ recipe_yield: recipeYield }).eq("id", menuId);
+
     await recalculateMenuCosts(supabase, [menuId]);
 
     const syncPastSales = form.get("sync_past_sales") === "true" || form.get("sync_past_sales") === "on";

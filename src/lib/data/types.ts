@@ -6,18 +6,27 @@ export type SaleStatus = "draft" | "confirmed" | "cancelled" | "refunded";
 export type ExpenseKind = "direct" | "operating" | "one_time" | "recurring";
 export type Fulfillment = "pickup" | "delivery";
 
-/** Menus in this category are add-ons (extra chicken, plain rice): listed separately when selling, not counted as boxes. */
+/** Menus in this category are add-ons (extra chicken, plain rice, crepe toppings): listed separately when selling, not counted as main boxes/servings. */
 export const ADDON_CATEGORY = "เพิ่มเติม";
-/** Category used for normal dishes (chicken rice boxes). */
+/** Category used for normal dishes / main items. */
 export const DISH_CATEGORY = "เมนูหลัก";
 /** Category used for courier/delivery gigs and side services (e.g. mj ส่งด่วน, ค่าหิ้ว): permanent preset options, not food boxes. */
 export const SERVICE_CATEGORY = "บริการ";
+
+export const DEFAULT_UNIT_LABEL = "กล่อง";
+export const UNIT_LABEL_OPTIONS = ["กล่อง", "จาน", "ชาม", "แผ่น", "แก้ว", "ชิ้น", "ชุด"] as const;
 
 export const isAddonCategory = (category: string | null | undefined) => (category ?? "").trim() === ADDON_CATEGORY;
 export const isServiceCategory = (category: string | null | undefined, name?: string) => {
   const cat = (category ?? "").trim();
   if (cat === SERVICE_CATEGORY || cat === "บริการ / จ็อบเสริม" || cat === "จ็อบเสริม") return true;
-  if (name && /ส่งด่วน|รับหิ้ว|ค่าส่ง|ไรเดอร์|จ็อบเสริม/.test(name) && !/ข้าว|ไก่/.test(name)) return true;
+  if (
+    name &&
+    /ส่งด่วน|รับหิ้ว|ค่าส่ง|ไรเดอร์|จ็อบเสริม/.test(name) &&
+    !/ข้าว|ไก่|หมู|เนื้อ|ปลา|กุ้ง|เครป|แป้ง|ก๋วยเตี๋ยว|บะหมี่|น้ำ|ชา|กาแฟ|ขนม|ปัง|โรตี/.test(name)
+  ) {
+    return true;
+  }
   return false;
 };
 export const isDishCategory = (category: string | null | undefined, name?: string) => {
@@ -29,11 +38,11 @@ export const FUEL_CATEGORY = "ค่าน้ำมัน";
 export const UTILITY_CATEGORIES = ["ค่าไฟ", "ค่าแก๊ส"];
 
 /**
- * per_unit: counted in recipes per piece (chicken: bought by กก., 1 กก. ≈ 27 pieces).
- * pooled:   other ingredients (rice, herbs, sauce) — purchases ÷ food sales = % added to every order.
+ * per_unit: counted in recipes by unit (grams, ml, pieces, eggs, sheets, etc.).
+ * pooled:   other ingredients (rice, herbs, sauce, spices) — purchases ÷ food sales = % added to every order.
  */
 export type IngredientCosting = "per_unit" | "pooled";
-export const INGREDIENT_COSTING_LABELS: Record<IngredientCosting, string> = { per_unit: "นับต่อชิ้น", pooled: "คิดเป็น %" };
+export const INGREDIENT_COSTING_LABELS: Record<IngredientCosting, string> = { per_unit: "ระบุในสูตร", pooled: "คิดเป็น %" };
 
 export type SaleItemRecord = { menuId: string; name: string; category: string | null; quantity: number; revenue: number; cost: number; packagingCost?: number };
 export type PaymentRecord = { method: PaymentMethod; amount: number };
@@ -85,8 +94,10 @@ export type MenuRecord = {
   price: number;
   /** Default packaging cost per dish from the recipe (included in `cost`). */
   packagingCost: number;
-  /** Cost per dish = per-piece ingredients (chicken) + packaging. Pooled ingredients are added at sale time as a %. */
+  /** Cost per dish = recipe ingredients (divided by recipeYield) + packaging. Pooled ingredients are added at sale time as a %. */
   cost: number;
+  /** Number of servings/pieces produced by one recipe batch (default 1; e.g. 30 sheets for a crepe batter recipe). */
+  recipeYield?: number;
   isAvailable: boolean;
   costCalculatedAt: string | null;
 };
@@ -96,18 +107,18 @@ export type IngredientRecord = {
   name: string;
   category: string;
   costing: IngredientCosting;
-  /** Unit used in recipes, e.g. ชิ้น. */
+  /** Unit used in recipes, e.g. กรัม, มล., ชิ้น, ฟอง. */
   baseUnit: string;
-  /** Unit the owner buys in, e.g. กก. */
+  /** Unit the owner buys in, e.g. กก., ถุง, ลิตร, แผง. */
   purchaseUnit: string;
-  /** Recipe units per purchase unit, e.g. 27 pieces per กก. */
+  /** Recipe units per purchase unit, e.g. 1000 กรัม per กก. or 27 pieces per กก. */
   unitsPerPurchaseUnit: number;
   /** true = unitsPerPurchaseUnit is learned from sales between purchases. */
   yieldAuto: boolean;
   yieldUpdatedAt: string | null;
   /** Satang per purchase unit (weighted, last 30 days); may be fractional. */
   pricePerPurchaseUnit: number;
-  /** Satang per recipe unit; may be fractional (e.g. 4.5 ฿ per piece = 450). */
+  /** Satang per recipe unit; may be fractional (e.g. 4.5 ฿ per piece = 450, or 0.045 ฿ per gram = 4.5). */
   unitCost: number;
   isActive: boolean;
 };
@@ -150,6 +161,8 @@ export type SaleSettings = {
   showMenuImages?: boolean;
   /** Hour of day (0-12, Bangkok time) when a new business day starts. Default 0 (00:00 midnight). */
   dayStartHour?: number;
+  /** Primary counting unit label for main dishes (e.g. "กล่อง", "จาน", "ชาม", "แผ่น", "แก้ว", "ชิ้น"). Default "กล่อง". */
+  unitLabel?: string;
 };
 
 export type PricePresetItem = {

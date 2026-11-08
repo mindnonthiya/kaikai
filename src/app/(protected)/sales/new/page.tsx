@@ -3,7 +3,7 @@ import { PageTitle } from "@/components/page-title";
 import { SaleComposer, type MenuOption, type PackagingOption } from "./sale-composer";
 import { fetchMenus, fetchPackaging, fetchPooledRate, fetchPricePresets, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
 import { menuFoodCost } from "@/lib/analytics";
-import { isAddonCategory, isServiceCategory } from "@/lib/data/types";
+import { DEFAULT_UNIT_LABEL, isAddonCategory, isServiceCategory } from "@/lib/data/types";
 
 export default async function NewSalePage() {
   const [allMenus, recipeItems, allPackaging, settings, presets, pooled] = await Promise.all([
@@ -43,7 +43,7 @@ export default async function NewSalePage() {
     <PageTitle
       eyebrow="บันทึกรายการ"
       title="เปิดบิล"
-      description="เลือกเมนู ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก"
+      description="เลือกรายการ ตรวจบรรจุภัณฑ์ เลือกรับเอง/ส่ง แล้วบันทึก"
       action={<Link className="secondary-button" href="/sales">ประวัติการขาย</Link>}
     />
     <SaleComposer
@@ -54,7 +54,7 @@ export default async function NewSalePage() {
       pooledBps={pooled.bps}
       showMenuImages={settings.showMenuImages ?? true}
       presets={presets}
+      unitLabel={settings.unitLabel || DEFAULT_UNIT_LABEL}
     />
   </>;
 }
-
