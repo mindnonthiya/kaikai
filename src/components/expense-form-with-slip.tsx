@@ -47,7 +47,7 @@ export function guessExpenseFromPayee(payee: string): {
   if (/การประปา|mwa|pwa|ประปา/i.test(text)) {
     return { category: "ค่าน้ำ", description: "ค่าน้ำ", kind: "operating" };
   }
-  if (/แม็คโคร|makro|cp axtra|ซีพี แอ็กซ์ตร้า|โลตัส|lotus|บิ๊กซี|big c|ตลาด|ของสด|ผัก|ไก่/i.test(text)) {
+  if (/แม็คโคร|makro|cp axtra|ซีพี แอ็กซ์ตร้า|โลตัส|lotus|บิ๊กซี|big c|ตลาด|ของสด|ผัก|ไก่|วัตถุดิบ|เบเกอรี่/i.test(text)) {
     return {
       category: "บรรจุภัณฑ์",
       description: `ซื้อของ (${text})`,
@@ -165,7 +165,7 @@ export function ExpenseFormWithSlip({
           setStatus({
             ok: true,
             text: ocr.amountSatang
-              ? `อ่านสลิปสำเร็จ: ยอด ${formatBaht(ocr.amountSatang)}${detectedPayee ? ` · ผู้รับ "${detectedPayee}"` : ""} — เลือกบันทึกเป็นรายการเดี่ยว หรือกด "แยกซื้อวัตถุดิบ/บรรจุภัณฑ์" เพื่อแยกพริก กระเทียม ไก่ ในสลิปนี้ได้เลย`
+              ? `อ่านสลิปสำเร็จ: ยอด ${formatBaht(ocr.amountSatang)}${detectedPayee ? ` · ผู้รับ "${detectedPayee}"` : ""} — เลือกบันทึกเป็นรายการเดี่ยว หรือกด "แยกซื้อวัตถุดิบ/บรรจุภัณฑ์" เพื่อแยกรายการในสลิปนี้ได้เลย`
               : `แนบสลิปเรียบร้อย (${(compressed.compressedBytes / 1024).toFixed(0)} KB)`,
           });
         }
@@ -351,7 +351,7 @@ export function ExpenseFormWithSlip({
             {analyzing ? <Loader2 className="spin-icon" /> : <ImagePlus />}
             <strong>แนบสลิปค่าใช้จ่ายเพื่อดึงยอดเงินและวันที่อัตโนมัติ (ไม่บังคับ)</strong>
             <span>
-              รองรับ JPG, PNG หรือ WebP — แนบสลิปใบเดียวแล้วเลือกแยกพริก กระเทียม ไก่ กล่อง หรือค่าใช้จ่ายทั่วไปได้ทันที
+              รองรับ JPG, PNG หรือ WebP — แนบสลิปใบเดียวแล้วเลือกแยกวัตถุดิบ บรรจุภัณฑ์ หรือค่าใช้จ่ายทั่วไปได้ทันที
             </span>
           </label>
         )}
@@ -383,7 +383,7 @@ export function ExpenseFormWithSlip({
             <ShoppingBasket size={16} />
             <div>
               <strong>แยกซื้อวัตถุดิบ / บรรจุภัณฑ์ในสลิปนี้</strong>
-              <small>เลือกแยก พริกกี่บาท กระเทียมกี่บาท ไก่กี่กิโล กล่องกี่แพ็ก</small>
+              <small>เลือกแยกวัตถุดิบแต่ละรายการ บรรจุภัณฑ์ หรือค่าใช้จ่ายอื่นๆ ในสลิปเดียว</small>
             </div>
             {itemizedSummary.itemCount > 0 && (
               <span className="mode-count-pill">{itemizedSummary.itemCount} รายการ</span>
@@ -516,8 +516,8 @@ export function ExpenseFormWithSlip({
 
       <p className="field-hint wide">
         {entryMode === "itemized"
-          ? "ทุกรายการที่กรอกจะถูกบันทึกตามวันที่จ่ายด้านบน · อัปเดตต้นทุนไก่/บรรจุภัณฑ์และ % วัตถุดิบรวมให้อัตโนมัติ พร้อมผูกสลิปใบเดียวกันในหน้าค่าใช้จ่ายและหน้าเทียบยอดธนาคาร"
-          : "หากเป็นสลิปซื้อของสด (ไก่ พริก กระเทียม ข้าว) หรือบรรจุภัณฑ์ (กล่อง ช้อน ถุง) กดสลับไปที่ปุ่ม “แยกซื้อวัตถุดิบ / บรรจุภัณฑ์ในสลิปนี้” ด้านบนเพื่อแจกแจงรายตัวได้เลย"}
+          ? "ทุกรายการที่กรอกจะถูกบันทึกตามวันที่จ่ายด้านบน · อัปเดตต้นทุนวัตถุดิบ/บรรจุภัณฑ์และ % วัตถุดิบรวมให้อัตโนมัติ พร้อมผูกสลิปใบเดียวกันในหน้าค่าใช้จ่ายและหน้าเทียบยอดธนาคาร"
+          : "หากเป็นสลิปซื้อวัตถุดิบหรือบรรจุภัณฑ์หลายรายการ กดสลับไปที่ปุ่ม “แยกซื้อวัตถุดิบ / บรรจุภัณฑ์ในสลิปนี้” ด้านบนเพื่อแจกแจงรายตัวได้เลย"}
       </p>
 
       <div className="form-footer">

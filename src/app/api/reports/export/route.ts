@@ -1,6 +1,6 @@
 import { hasSupabaseEnv } from "@/lib/env";
 import { fetchSaleSettings, fetchSales } from "@/lib/data/queries";
-import { FULFILLMENT_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isDishCategory } from "@/lib/data/types";
+import { DEFAULT_UNIT_LABEL, FULFILLMENT_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, isDishCategory } from "@/lib/data/types";
 import { satangToBahtInput } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import { formatThaiDateTime, parseRange, resolveRange } from "@/lib/time";
@@ -25,10 +25,11 @@ export async function GET(request: Request) {
   }
   const key = parseRange(new URL(request.url).searchParams.get("range") ?? undefined, ["today", "7d", "month", "last-month", "all"], "month");
   const saleSettings = await fetchSaleSettings();
+  const unitLabel = saleSettings.unitLabel || DEFAULT_UNIT_LABEL;
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const sales = await fetchSales(range.start, range.end);
 
-  const headers = ["เลขที่", "วันเวลา", "ลูกค้า", "รายการ", "จำนวนกล่อง", "รับเอง/ส่ง", "ช่องทางชำระ", "สถานะรายการ", "สถานะชำระ", "ยอดสินค้า (บาท)", "ส่วนลด (บาท)", "ค่าส่ง (บาท)", "ทิป (บาท)", "ค่าธรรมเนียม (บาท)", "ยอดสุทธิ (บาท)", "ต้นทุน (บาท)", "ต้นทุนบรรจุภัณฑ์ (บาท)", "กำไรขั้นต้น (บาท)"];
+  const headers = ["เลขที่", "วันเวลา", "ลูกค้า", "รายการ", `จำนวน${unitLabel}`, "รับเอง/ส่ง", "ช่องทางชำระ", "สถานะรายการ", "สถานะชำระ", "ยอดสินค้า (บาท)", "ส่วนลด (บาท)", "ค่าส่ง (บาท)", "ทิป (บาท)", "ค่าธรรมเนียม (บาท)", "ยอดสุทธิ (บาท)", "ต้นทุน (บาท)", "ต้นทุนบรรจุภัณฑ์ (บาท)", "กำไรขั้นต้น (บาท)"];
   const rows = [...sales].reverse().map((s) => [
     s.saleNumber, formatThaiDateTime(s.soldAt), s.customerName ?? "", s.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
     s.items.filter((i) => isDishCategory(i.category, i.name)).reduce((n, i) => n + i.quantity, 0),

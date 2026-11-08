@@ -15,13 +15,13 @@ import type { PackagingPurchaseRecord } from "@/lib/data/types";
 import { formatBaht, formatUnitCost, satangToBahtInput } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate } from "@/lib/time";
 
-const PACK_UNITS = ["ชิ้น", "ชุด", "คู่", "ใบ", "ถุง"];
+const PACK_UNITS = ["ชิ้น", "ชุด", "คู่", "ใบ", "ถุง", "ซอง", "แผ่น"];
 
 function PerOrderSelect({ value = true }: { value?: boolean }) {
   return <label>คิดต้นทุนอย่างไร
     <select name="per_order" defaultValue={String(value)}>
-      <option value="true">คิดต่อจาน/ออเดอร์ เช่น กล่อง ช้อน ถ้วยน้ำจิ้ม</option>
-      <option value="false">ไม่คิดต่อออเดอร์ — ลงเป็นค่าใช้จ่ายตอนซื้อ เช่น ถุง</option>
+      <option value="true">คิดต่อเสิร์ฟ/ออเดอร์ เช่น กล่อง ซอง แก้ว ช้อน</option>
+      <option value="false">ไม่คิดต่อออเดอร์ — ลงเป็นค่าใช้จ่ายตอนซื้อ เช่น ถุงหิ้วรวม</option>
     </select>
   </label>;
 }
@@ -79,8 +79,8 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
       eyebrow="ต้นทุนพื้นฐาน"
       title="วัตถุดิบและบรรจุภัณฑ์"
       description={activeTab === "packaging"
-        ? "บันทึกราคาซื้อกล่อง ช้อน ถ้วยน้ำจิ้ม ระบบคำนวณต้นทุนต่อหน่วยให้อัตโนมัติ"
-        : "บันทึกตอนซื้อของสด ระบบคำนวณต้นทุนต่อชิ้นและ % วัตถุดิบอื่นให้ แล้วใช้คิดต้นทุนเมนูอัตโนมัติ"}
+        ? "บันทึกราคาซื้อบรรจุภัณฑ์ ระบบคำนวณต้นทุนต่อหน่วยให้อัตโนมัติ"
+        : "บันทึกราคาซื้อวัตถุดิบ ระบบคำนวณต้นทุนต่อหน่วยใช้ (กรัม/มล./ชิ้น) และ % ต้นทุนเมนูให้อัตโนมัติ"}
     />
     <datalist id="pack-units">{PACK_UNITS.map((u) => <option key={u} value={u} />)}</datalist>
 
@@ -115,15 +115,15 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
               ? <ActionForm action={recordIngredientPurchases} submitLabel="บันทึกการซื้อ">
                   <PurchaseSlipAttachment maxDate={maxDate} dayStartHour={saleSettings.dayStartHour} />
                   <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
-                  <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น ตลาดสด" /></label>
+                  <label>ร้านค้า (ไม่บังคับ)<input name="vendor" maxLength={120} placeholder="เช่น แม็คโคร หรือ ตลาดสด" /></label>
                   <IngredientPurchaseTable key={perUnit.map((i) => `${i.id}:${i.unitPrice}:${i.unitsPerPurchaseUnit}`).join("|") + pooled.length} perUnit={perUnit} pooled={pooled} />
                 </ActionForm>
-              : <p className="muted-note">เพิ่มวัตถุดิบก่อน เช่น “ไก่” แบบนับต่อชิ้น และ “ข้าวสาร” “ผัก/เครื่องปรุง” แบบคิดเป็น %</p>}
+              : <p className="muted-note">เพิ่มวัตถุดิบก่อน เช่น วัตถุดิบหลักที่ระบุในสูตร (กรัม/มล./ชิ้น) และของใช้รวมแบบคิดเป็น %</p>}
           </details>
           <details className="panel form-panel" open={active.length === 0}>
             <summary><PackageOpen size={18} /> เพิ่มวัตถุดิบใหม่</summary>
             <ActionForm action={createIngredient} submitLabel="เพิ่มวัตถุดิบ">
-              <label>ชื่อวัตถุดิบ<input name="name" maxLength={120} required placeholder="เช่น ไก่ หรือ ผักและเครื่องปรุง" /></label>
+              <label>ชื่อวัตถุดิบ<input name="name" maxLength={120} required placeholder="เช่น แป้ง, ไข่, เนื้อสัตว์, นมสด, เครื่องปรุง" /></label>
               <IngredientKindFields />
             </ActionForm>
           </details>
@@ -132,20 +132,20 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
         <section className="panel table-panel spaced">
           <div className="table-title">
             <h2>รายการวัตถุดิบ</h2>
-            <span>{ingredients.length} รายการ · วัตถุดิบอื่นตอนนี้ {formatPercentBps(pooledRate.bps)} ของยอดขาย ({pooledRate.source === "actual" ? "จากยอดซื้อจริง" : "ค่าเริ่มต้นในตั้งค่า"})</span>
+            <span>{ingredients.length} รายการ · วัตถุดิบคิดเป็น % ตอนนี้ {formatPercentBps(pooledRate.bps)} ของยอดขาย ({pooledRate.source === "actual" ? "จากยอดซื้อจริง" : "ค่าเริ่มต้นในตั้งค่า"})</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>ชื่อ</th><th>วิธีคิด</th><th className="num">ราคาซื้อ</th><th className="num">ต้นทุนต่อชิ้น</th><th>ซื้อล่าสุด</th><th>แก้ไข</th></tr></thead>
+            <thead><tr><th>ชื่อ</th><th>วิธีคิด</th><th className="num">ราคาซื้อ</th><th className="num">ต้นทุนต่อหน่วยใช้</th><th>ซื้อล่าสุด</th><th>แก้ไข</th></tr></thead>
             <tbody>
               {ingredients.map((i) => {
                 const last = latest.get(i.id);
                 const perPiece = i.costing === "per_unit";
                 return <tr key={i.id} className={!i.isActive ? "row-muted" : undefined}>
                   <td><strong>{i.name}</strong>{!i.isActive && <> <span className="status muted">ซ่อนอยู่</span></>}</td>
-                  <td><span className={`status ${perPiece ? "success" : "muted"}`}>{perPiece ? "นับต่อชิ้น" : "คิดเป็น %"}</span></td>
+                  <td><span className={`status ${perPiece ? "success" : "muted"}`}>{perPiece ? `ระบุในสูตร (${i.baseUnit})` : "คิดเป็น %"}</span></td>
                   <td className="num">{perPiece
                     ? <>{i.pricePerPurchaseUnit ? `${formatUnitCost(i.pricePerPurchaseUnit)}/${i.purchaseUnit}` : "—"}<br />
-                        <small className="muted">{i.unitsPerPurchaseUnit.toLocaleString("th-TH")} {i.baseUnit}/{i.purchaseUnit} · {i.yieldAuto ? "อัตโนมัติ" : "กำหนดเอง"}{i.yieldUpdatedAt ? ` · ปรับ ${formatThaiShortDate(i.yieldUpdatedAt)}` : ""}</small></>
+                        <small className="muted">1 {i.purchaseUnit} = {i.unitsPerPurchaseUnit.toLocaleString("th-TH")} {i.baseUnit} · {i.yieldAuto ? "ปรับอัตโนมัติ" : "คงที่"}{i.yieldUpdatedAt ? ` · ปรับ ${formatThaiShortDate(i.yieldUpdatedAt)}` : ""}</small></>
                     : <small className="muted">รวมใน %</small>}</td>
                   <td className="num"><strong>{perPiece && i.unitCost ? `${formatUnitCost(i.unitCost)}/${i.baseUnit}` : "—"}</strong></td>
                   <td>{last ? <>{formatThaiShortDate(last.purchasedAt)}<br /><small className="muted">{formatBaht(last.price)}{last.quantity ? ` · ${last.quantity.toLocaleString("th-TH")} ${i.purchaseUnit}` : ""}</small></> : <span className="status pending">ยังไม่มีการซื้อ</span>}</td>
@@ -154,7 +154,9 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                       <input type="hidden" name="id" value={i.id} />
                       <label>ชื่อ<input name="name" defaultValue={i.name} maxLength={120} required /></label>
                       {perPiece && <>
-                        <label>{i.baseUnit} ต่อ 1 {i.purchaseUnit}<input name="units_per_purchase_unit" inputMode="decimal" defaultValue={trimZeros(i.unitsPerPurchaseUnit)} required /></label>
+                        <label>หน่วยที่ซื้อ<input name="purchase_unit" defaultValue={i.purchaseUnit} maxLength={30} required /></label>
+                        <label>หน่วยที่ใช้ในสูตร<input name="base_unit" defaultValue={i.baseUnit} maxLength={30} required /></label>
+                        <label>จำนวน {i.baseUnit} ต่อ 1 {i.purchaseUnit}<input name="units_per_purchase_unit" inputMode="decimal" defaultValue={trimZeros(i.unitsPerPurchaseUnit)} required /></label>
                         <label className="check-label"><input type="checkbox" name="yield_auto" value="true" defaultChecked={i.yieldAuto} /> ปรับอัตโนมัติจากยอดขาย</label>
                       </>}
                     </ActionForm>
@@ -168,7 +170,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
               {!ingredients.length && <tr><td colSpan={6}><div className="empty-state">ยังไม่มีวัตถุดิบ</div></td></tr>}
             </tbody>
           </table>
-          <p className="table-footnote">นับต่อชิ้น: ราคาซื้อ = ราคาเฉลี่ยต่อ กก. 30 วันล่าสุด ÷ จำนวนชิ้นต่อ กก. · คิดเป็น %: ยอดซื้อ 30 วัน ÷ ยอดขายอาหาร (ใช้ค่าเริ่มต้นในหน้าตั้งค่า จนกว่าจะมีข้อมูล 7 วัน)</p>
+          <p className="table-footnote">ระบุในสูตร: ต้นทุนต่อหน่วยใช้ = ราคาเฉลี่ยต่อหน่วยซื้อ (30 วันล่าสุด) ÷ จำนวนหน่วยใช้ต่อหน่วยซื้อ · คิดเป็น %: ยอดซื้อ 30 วัน ÷ ยอดขายอาหาร</p>
         </section>
 
         {purchases.length > 0 && <section className="panel table-panel spaced">
@@ -207,7 +209,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
           <details className="panel form-panel" open={activePackaging.length === 0}>
             <summary><PackagePlus size={18} /> เพิ่มบรรจุภัณฑ์ใหม่</summary>
             <ActionForm action={createPackaging} submitLabel="เพิ่มบรรจุภัณฑ์">
-              <label>ชื่อ<input name="name" maxLength={120} required placeholder="เช่น กล่อง + ฝา" /></label>
+              <label>ชื่อ<input name="name" maxLength={120} required placeholder="เช่น กล่อง, ซอง, แก้ว, ช้อน" /></label>
               <label>หน่วย<input name="unit" list="pack-units" maxLength={30} required defaultValue="ชิ้น" /></label>
               <PerOrderSelect />
               <label>วันที่ซื้อ<input type="date" name="purchased_at" defaultValue={today} max={maxDate} /></label>
@@ -247,7 +249,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                   </details></td>
                 </tr>;
               })}
-              {!packaging.length && <tr><td colSpan={5}><div className="empty-state">ยังไม่มีบรรจุภัณฑ์ — เพิ่มจากฟอร์มด้านบน เช่น กล่อง + ฝา 65 บาท ได้ 25 ชุด</div></td></tr>}
+              {!packaging.length && <tr><td colSpan={5}><div className="empty-state">ยังไม่มีบรรจุภัณฑ์ — เพิ่มจากฟอร์มด้านบน</div></td></tr>}
             </tbody>
           </table>
           <p className="table-footnote">“ต่อออเดอร์” = ผูกกับสูตรเมนู แล้วระบบนับให้ตอนขาย · “ลงค่าใช้จ่าย” = ตอนบันทึกการซื้อ ระบบลงในหน้าค่าใช้จ่ายให้เอง ไม่ต้องลงซ้ำ</p>

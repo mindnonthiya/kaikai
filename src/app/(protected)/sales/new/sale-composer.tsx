@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
 import { revalidateSalesAction } from "@/app/actions/sales";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
-import type { Fulfillment, PricePreset } from "@/lib/data/types";
+import { DEFAULT_UNIT_LABEL, type Fulfillment, type PricePreset } from "@/lib/data/types";
 import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
@@ -65,8 +65,8 @@ async function sha256Hex(file: File) {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFeeOptions, pooledBps, showMenuImages = true, presets = [] }: {
-  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; deliveryFeeOptions?: number[]; pooledBps: number; showMenuImages?: boolean; presets?: PricePreset[];
+export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFeeOptions, pooledBps, showMenuImages = true, presets = [], unitLabel = DEFAULT_UNIT_LABEL }: {
+  menus: MenuOption[]; packaging: PackagingOption[]; defaultDeliveryFee: number; deliveryFeeOptions?: number[]; pooledBps: number; showMenuImages?: boolean; presets?: PricePreset[]; unitLabel?: string;
 }) {
   const router = useRouter();
   const defaultDelivery = formatBaht(defaultDeliveryFee, false);
@@ -555,9 +555,9 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         </div>
       </div>
 
-      {/* 1. เมนูหลัก (อาหาร) */}
+      {/* 1. เมนูหลัก */}
       <div className="pos-section">
-        <h3 className="pos-section-title">เมนูหลัก (อาหาร)</h3>
+        <h3 className="pos-section-title">เมนูหลัก</h3>
         <div className="pos-grid">
           {dishes.map((menu) => (
             <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
@@ -566,10 +566,10 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         </div>
       </div>
 
-      {/* 2. ของเพิ่ม */}
+      {/* 2. ท็อปปิ้ง / ของเพิ่ม */}
       {addons.length > 0 && (
         <div className="pos-section">
-          <h3 className="pos-section-title">ของเพิ่ม</h3>
+          <h3 className="pos-section-title">ท็อปปิ้ง / ของเพิ่ม</h3>
           <div className="pos-grid">
             {addons.map((menu) => (
               <PosMenuCard key={menu.id} menu={menu} count={cart[menu.id] ?? 0} showImages={showMenuImages} onChange={change} />
@@ -594,7 +594,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
           </div>
         ) : (
           <p className="pos-service-hint">
-            ยังไม่มีรายการจ็อบเสริมประจำ (สามารถสร้างไว้ที่หน้า <Link href="/menus" className="text-link">เมนู</Link> แล้วเลือกประเภท “จ็อบเสริม / บริการ” เช่น mj ส่งด่วน, ค่าหิ้ว จะมาแสดงตรงนี้ตลอดโดยไม่ต้องพิมพ์ใหม่)
+            ยังไม่มีรายการจ็อบเสริมประจำ (สามารถสร้างไว้ที่หน้า <Link href="/menus" className="text-link">เมนู</Link> แล้วเลือกประเภท “จ็อบเสริม / บริการ” เช่น ค่าส่งด่วน, ค่ารับหิ้ว จะมาแสดงตรงนี้ตลอดโดยไม่ต้องพิมพ์ใหม่)
           </p>
         )}
       </div>
@@ -649,7 +649,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       )}
 
       {packaging.length > 0 && <>
-        <div className="step-head second"><span>{step++}</span><div><h2>บรรจุภัณฑ์</h2><p>นับจากเมนูให้แล้ว — กด +/− ถ้าให้ไม่ตรง เช่น ให้ช้อนเพิ่ม</p></div>{adjusted && <button type="button" className="link-button" onClick={() => setAdjust({})}><RotateCcw size={14} /> คืนค่าอัตโนมัติ</button>}</div>
+        <div className="step-head second"><span>{step++}</span><div><h2>บรรจุภัณฑ์</h2><p>นับจากเมนูให้แล้ว — กด +/− ถ้าให้ไม่ตรง</p></div>{adjusted && <button type="button" className="link-button" onClick={() => setAdjust({})}><RotateCcw size={14} /> คืนค่าอัตโนมัติ</button>}</div>
         <div className="pack-list">{packLines.map((line) => <div key={line.id} className={`pack-row ${line.quantity ? "" : "is-zero"}`}>
           <span><strong>{line.name}</strong><small>{formatUnitCost(line.unitCost)}/{line.unit}{line.quantity !== line.auto ? ` · อัตโนมัติ ${line.auto}` : ""}</small></span>
           <div className="qty"><button type="button" onClick={() => changePack(line.id, -1)} aria-label={`ลด ${line.name}`} disabled={!line.quantity}><Minus size={16} /></button><b>{line.quantity}</b><button type="button" onClick={() => changePack(line.id, 1)} aria-label={`เพิ่ม ${line.name}`}><Plus size={16} /></button></div>
@@ -829,7 +829,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       <div className="summary-row muted-row"><span>ต้นทุนสินค้า/วัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
       {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}
       {(feeSatang ?? 0) > 0 && <div className="summary-row muted-row"><span>ค่าธรรมเนียม</span><strong>−{formatBaht(feeSatang!)}</strong></div>}
-      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes > 0 ? `${boxes} กล่อง` : "บริการ/พิเศษ"}{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
+      <div className="profit-box"><span>กำไรขั้นต้น</span><strong>{formatBaht(summary.grossProfit)}</strong><small>{(summary.marginBasisPoints / 100).toFixed(1)}% · {boxes > 0 ? `${boxes} ${unitLabel}` : "บริการ/พิเศษ"}{fulfillment === "delivery" ? " · ส่ง" : ""}</small></div>
       {(summaryError || partialError) && <p className="form-error" role="alert">{summaryError ?? partialError}</p>}
       <button id="sale-save" className="primary-button save-sale" disabled={!hasItemsOrService || saving || !!summaryError || !!partialError} onClick={save}><Check size={18} /> {saving ? "กำลังบันทึก…" : "ยืนยันและบันทึก"}</button>
       <p className="atomic-note"><ShieldCheck size={15} /> รายการขาย บรรจุภัณฑ์ และการชำระเงินจะบันทึกพร้อมกัน</p>

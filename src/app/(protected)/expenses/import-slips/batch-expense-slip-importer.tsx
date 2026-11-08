@@ -552,7 +552,7 @@ export function BatchExpenseSlipImporter({
           </div>
           <div className="batch-dropzone-text">
             <strong>แตะเลือกรูปสลิปค่าใช้จ่ายหลายๆ ใบพร้อมกัน</strong>
-            <span>รองรับ JPG, PNG, WebP — อ่านยอดเงิน วันที่ และกดแยกพริก กระเทียม ไก่ หรือกล่องในสลิปได้เลย</span>
+            <span>รองรับ JPG, PNG, WebP — อ่านยอดเงิน วันที่ และกดแยกรายการวัตถุดิบหรือบรรจุภัณฑ์ในสลิปได้เลย</span>
           </div>
           <div className="batch-dropzone-btn">
             <Plus size={16} /> เลือกรูปสลิปค่าใช้จ่าย

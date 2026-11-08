@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { readCostRows } from "@/lib/cost-rows";
 import { learnedYield, weightedPricePerUnit, yieldWindow } from "@/lib/analytics";
-import { invalidateQueryCache } from "@/lib/data/queries";
+import { MENU_YIELDS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
 import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
@@ -39,8 +39,8 @@ function yieldAutoField(form: FormData) {
 
 /**
  * Adds an ingredient.
- * per_unit (chicken): bought by `purchase_unit` (กก.), used in recipes by `base_unit` (ชิ้น), 1 กก. ≈ `units_per_purchase_unit` pieces.
- * pooled (rice, herbs, sauce): recorded by amount only and costed as a % of food sales.
+ * per_unit: bought by `purchase_unit` (กก., แผง, กระปุก, ลิตร), used in recipes by `base_unit` (กรัม, มล., ฟอง, ชิ้น), 1 purchase_unit ≈ `units_per_purchase_unit` base_units.
+ * pooled: recorded by amount only and costed as a % of food sales.
  */
 export async function createIngredient(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
@@ -61,20 +61,28 @@ export async function createIngredient(form: FormData): Promise<ActionState> {
   });
 }
 
-/** Renames an ingredient; for per-piece items also sets pieces per purchase unit and whether it is learned automatically. */
+/** Renames an ingredient; for per-unit items also updates units, units per purchase unit, and whether yield is learned automatically. */
 export async function updateIngredient(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase }) => {
     const ingredientId = id(form);
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
-    const { data, error: readError } = await supabase.from("ingredients").select("costing,units_per_purchase_unit,price_per_purchase_unit_satang").eq("id", ingredientId).single();
+    const { data, error: readError } = await supabase.from("ingredients")
+      .select("costing,purchase_unit,base_unit,units_per_purchase_unit,price_per_purchase_unit_satang")
+      .eq("id", ingredientId).single();
     if (readError) dbError(readError);
     const current = data as Row;
     const now = new Date().toISOString();
     let update: Row = { name, updated_at: now };
     if (current.costing !== "pooled") {
       const units = quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!;
+      const rawPurchaseUnit = optionalText(form, "purchase_unit", "หน่วยที่ซื้อ", 30);
+      const rawBaseUnit = optionalText(form, "base_unit", "หน่วยที่ใช้ในสูตร", 30);
       update = {
-        ...update, units_per_purchase_unit: units, yield_auto: yieldAutoField(form),
+        ...update,
+        purchase_unit: rawPurchaseUnit || String(current.purchase_unit ?? "กก."),
+        base_unit: rawBaseUnit || String(current.base_unit ?? "ชิ้น"),
+        units_per_purchase_unit: units,
+        yield_auto: yieldAutoField(form),
         weighted_unit_cost_satang: roundCost(Number(current.price_per_purchase_unit_satang) / units),
       };
       if (units !== Number(current.units_per_purchase_unit)) update.yield_updated_at = now;
@@ -98,12 +106,21 @@ const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value 
 
 type PerUnitIngredient = { id: string; name: string; base_unit: string; purchase_unit: string | null; units_per_purchase_unit: number; yield_auto: boolean };
 
-/** Pieces of `ingredientId` sold (confirmed sales) in [start, end), using today's recipe quantities. */
+/** Units of `ingredientId` sold (confirmed sales) in [start, end), using today's recipe quantities and batch yields. */
 async function piecesSold(supabase: SupabaseClient, ingredientId: string, start: Date, end: Date) {
-  const { data: recipe, error } = await supabase.from("menu_recipe_items").select("menu_id,quantity").eq("ingredient_id", ingredientId);
+  const [{ data: recipe, error }, yieldsSetting] = await Promise.all([
+    supabase.from("menu_recipe_items").select("menu_id,quantity").eq("ingredient_id", ingredientId),
+    supabase.from("settings").select("value").eq("key", MENU_YIELDS_SETTINGS_KEY).maybeSingle(),
+  ]);
   if (error) dbError(error);
+  const rawYields = (yieldsSetting?.data?.value ?? {}) as Record<string, unknown>;
   const perMenu = new Map<string, number>();
-  for (const r of recipe as Row[]) perMenu.set(String(r.menu_id), (perMenu.get(String(r.menu_id)) ?? 0) + Number(r.quantity));
+  for (const r of recipe as Row[]) {
+    const menuId = String(r.menu_id);
+    const yieldVal = Number(rawYields[menuId]);
+    const divisor = Number.isFinite(yieldVal) && yieldVal > 0 ? yieldVal : 1;
+    perMenu.set(menuId, (perMenu.get(menuId) ?? 0) + Number(r.quantity) / divisor);
+  }
   if (!perMenu.size) return 0;
   let pieces = 0;
   for (let from = 0; ; from += 1000) {
@@ -118,9 +135,9 @@ async function piecesSold(supabase: SupabaseClient, ingredientId: string, start:
 }
 
 /**
- * After a purchase of a per-piece ingredient:
- * price per กก. = weighted average of the last 30 days; pieces per กก. learned from sales when auto;
- * cost per piece = price per กก. ÷ pieces per กก.; then menus using it are re-costed.
+ * After a purchase of a per-unit ingredient:
+ * price per purchase_unit = weighted average of the last 30 days; units per purchase_unit learned from sales when auto;
+ * cost per base_unit = price per purchase_unit ÷ units per purchase_unit; then menus using it are re-costed.
  */
 async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitIngredient) {
   const data = await readCostRows((from, to) => supabase.from("ingredient_purchases").select("id,purchased_at,price_satang,purchased_quantity")
@@ -159,7 +176,7 @@ async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitI
 
 /**
  * Records several ingredient purchases at once.
- * Per-piece rows: `qty_<id>` (กก.) × `unit_price_<id>` (฿ per กก.). Pooled rows: `amount_<id>` (฿).
+ * Per-unit rows: `qty_<id>` × `unit_price_<id>`. Pooled rows: `amount_<id>` (฿).
  */
 export async function recordIngredientPurchases(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
@@ -436,10 +453,10 @@ export type ItemizedPurchasePayload = {
 
 /**
  * Unified server action that saves an itemized slip containing any mix of:
- * - Per-unit ingredients (e.g. chicken kg × price) -> ingredient_purchases + expenses + refreshPerUnitCost
- * - Pooled ingredients (e.g. chili, garlic, rice, fish sauce) -> ingredient_purchases + expenses + pooled %
- * - Packaging items (e.g. boxes, spoons, bags) -> packaging_purchases + expenses + packaging unit cost
- * - General/extra expenses (e.g. ice, delivery fuel, etc.) -> expenses
+ * - Per-unit ingredients -> ingredient_purchases + expenses + refreshPerUnitCost
+ * - Pooled ingredients -> ingredient_purchases + expenses + pooled %
+ * - Packaging items -> packaging_purchases + expenses + packaging unit cost
+ * - General/extra expenses -> expenses
  * All records use the slip's date (`spentAt`), vendor/payee, payment method, and shared `receiptPath`.
  */
 export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload): Promise<ActionState> {

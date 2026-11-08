@@ -1,5 +1,16 @@
-import { allocateSatang, customerAmountDue, roundedMaterialCost } from "@/lib/money";
-import { FUEL_CATEGORY, isAddonCategory, isDishCategory, isServiceCategory, type ExpenseRecord, type MenuRecord, type RecipeItemRecord, type SaleRecord } from "@/lib/data/types";
+import { allocateSatang, customerAmountDue, roundedMaterialCost, satang } from "@/lib/money";
+import {
+  FUEL_CATEGORY,
+  isAddonCategory,
+  isDishCategory,
+  isServiceCategory,
+  type ExpenseRecord,
+  type IngredientRecord,
+  type MenuRecord,
+  type PurchaseRecord,
+  type RecipeItemRecord,
+  type SaleRecord,
+} from "@/lib/data/types";
 import { DAY_MS, bangkokDayKey, bangkokMonthKey, formatThaiMonthYear, formatThaiShortDate, formatThaiWeekday, isWithin } from "@/lib/time";
 
 /** Only confirmed sales count toward revenue and profit. Cancelled/refunded/draft are excluded. */
@@ -266,13 +277,35 @@ export function expensesByCategory(expenses: ExpenseRecord[]): CategoryTotal[] {
 }
 
 /**
+ * Divides batch material lines by `recipeYield` (default 1) before rounding to whole satang.
+ * When `recipeYield === 1`, delegates directly to `roundedMaterialCost`.
+ */
+function roundedBatchMaterialCost(lines: Array<{ unitCost: number; quantity: number }>, recipeYield = 1) {
+  const safeYield = Number.isFinite(recipeYield) && recipeYield > 0 ? recipeYield : 1;
+  if (safeYield === 1) return roundedMaterialCost(lines);
+  const scale = BigInt(1_000_000) * BigInt(Math.max(1, Math.round(safeYield * 10_000)));
+  const sum = lines.reduce((total, line) => {
+    if (!Number.isFinite(line.unitCost) || !Number.isFinite(line.quantity) || line.unitCost < 0 || line.quantity < 0) {
+      throw new Error("ต้นทุนหรือจำนวนไม่ถูกต้อง");
+    }
+    const cost = Math.round(line.unitCost * 1_000_000);
+    const quantity = Math.round(line.quantity * 10_000);
+    return total + BigInt(cost) * BigInt(quantity);
+  }, BigInt(0));
+  return satang(Number((sum + scale / BigInt(2)) / scale));
+}
+
+/**
  * Recipe cost of one dish split into ingredients and packaging, each rounded to whole satang.
+ * When `recipeYield > 1` (e.g. a crepe batter recipe that yields 30 sheets), the ingredient batch cost
+ * is divided by `recipeYield` while per-order packaging remains per 1 sold unit.
  * Packaging ids missing from `packagingCost` (e.g. items not counted per order) are ignored.
  */
 export function recipeCostParts(
   items: RecipeItemRecord[],
   ingredientCost: Map<string, number>,
   packagingCost: Map<string, number>,
+  recipeYield = 1,
 ) {
   const ingredients: Array<{ unitCost: number; quantity: number }> = [], packaging: Array<{ unitCost: number; quantity: number }> = [];
   for (const item of items) {
@@ -284,17 +317,232 @@ export function recipeCostParts(
       if (unitCost !== undefined) packaging.push({ unitCost, quantity: item.quantity });
     }
   }
-  return { ingredients: roundedMaterialCost(ingredients), packaging: roundedMaterialCost(packaging) };
+  return {
+    ingredients: roundedBatchMaterialCost(ingredients, recipeYield),
+    packaging: roundedMaterialCost(packaging),
+  };
 }
 
-/** Material cost of one dish from its recipe (ingredients + packaging), in whole satang. */
+/** Material cost of one dish from its recipe (ingredients ÷ recipeYield + packaging), in whole satang. */
 export function recipeMaterialCost(
   items: RecipeItemRecord[],
   ingredientCost: Map<string, number>,
   packagingCost: Map<string, number>,
+  recipeYield = 1,
 ) {
-  const parts = recipeCostParts(items, ingredientCost, packagingCost);
+  const parts = recipeCostParts(items, ingredientCost, packagingCost, recipeYield);
   return parts.ingredients + parts.packaging;
+}
+
+export type RecipeIngredientBreakdownRow = {
+  ingredientId: string;
+  name: string;
+  baseUnit: string;
+  /** Quantity entered in the recipe (for the batch or single serving). */
+  quantity: number;
+  /** Quantity per 1 sold serving (`quantity / recipeYield`). */
+  perServingQuantity: number;
+  /** Cost of this ingredient in the full recipe batch (satang). */
+  batchCost: number;
+  /** Cost of this ingredient per 1 sold serving (satang). */
+  perServingCost: number;
+  /** Share of total recipe quantity in basis points (e.g. 4000 = 40.0% of recipe formula). */
+  quantityShareBps: number;
+  /** Share of total recipe ingredient cost in basis points (e.g. 2760 = 27.6% of ingredient cost). */
+  costShareBps: number;
+};
+
+export type RecipeIngredientBreakdown = {
+  recipeYield: number;
+  totalRecipeQuantity: number;
+  batchIngredientCost: number;
+  perServingIngredientCost: number;
+  rows: RecipeIngredientBreakdownRow[];
+};
+
+/**
+ * Computes the percentage formula breakdown (quantity % and cost %) for a menu's recipe ingredients.
+ * Supports both single-serving recipes (`recipeYield = 1`) and batch recipes (e.g. crepe batter `recipeYield = 30`).
+ */
+export function recipeIngredientBreakdown(
+  items: Array<{ ingredientId: string | null; quantity: number }>,
+  ingredients: Array<Pick<IngredientRecord, "id" | "name" | "baseUnit" | "unitCost" | "costing">>,
+  recipeYield = 1,
+): RecipeIngredientBreakdown {
+  const safeYield = Number.isFinite(recipeYield) && recipeYield > 0 ? recipeYield : 1;
+  const ingMap = new Map(ingredients.filter((i) => i.costing !== "pooled").map((i) => [i.id, i]));
+  const aggregated = new Map<string, number>();
+  for (const item of items) {
+    if (!item.ingredientId || item.quantity <= 0) continue;
+    if (!ingMap.has(item.ingredientId)) continue;
+    aggregated.set(item.ingredientId, (aggregated.get(item.ingredientId) ?? 0) + item.quantity);
+  }
+
+  let totalQty = 0;
+  let totalRawBatchCost = 0;
+  const rawRows: Array<{
+    ing: Pick<IngredientRecord, "id" | "name" | "baseUnit" | "unitCost" | "costing">;
+    quantity: number;
+    rawBatchCost: number;
+  }> = [];
+
+  for (const [ingId, qty] of aggregated.entries()) {
+    const ing = ingMap.get(ingId)!;
+    const rawBatchCost = qty * (ing.unitCost || 0);
+    totalQty += qty;
+    totalRawBatchCost += rawBatchCost;
+    rawRows.push({ ing, quantity: qty, rawBatchCost });
+  }
+
+  const batchLines = rawRows.map((r) => ({ unitCost: r.ing.unitCost, quantity: r.quantity }));
+  const batchIngredientCost = batchLines.length ? roundedMaterialCost(batchLines) : 0;
+  const perServingIngredientCost = batchLines.length ? roundedBatchMaterialCost(batchLines, safeYield) : 0;
+
+  const rows: RecipeIngredientBreakdownRow[] = rawRows.map(({ ing, quantity, rawBatchCost }) => {
+    const batchCost = roundedMaterialCost([{ unitCost: ing.unitCost, quantity }]);
+    const perServingCost = roundedBatchMaterialCost([{ unitCost: ing.unitCost, quantity }], safeYield);
+    return {
+      ingredientId: ing.id,
+      name: ing.name,
+      baseUnit: ing.baseUnit,
+      quantity,
+      perServingQuantity: Math.round((quantity / safeYield) * 10_000) / 10_000,
+      batchCost,
+      perServingCost,
+      quantityShareBps: totalQty > 0 ? Math.round((quantity * 10_000) / totalQty) : 0,
+      costShareBps: totalRawBatchCost > 0 ? Math.round((rawBatchCost * 10_000) / totalRawBatchCost) : 0,
+    };
+  });
+
+  rows.sort((a, b) => b.costShareBps - a.costShareBps || b.quantityShareBps - a.quantityShareBps);
+
+  return {
+    recipeYield: safeYield,
+    totalRecipeQuantity: Math.round(totalQty * 10_000) / 10_000,
+    batchIngredientCost,
+    perServingIngredientCost,
+    rows,
+  };
+}
+
+export type IngredientUsageRow = {
+  ingredientId: string;
+  name: string;
+  baseUnit: string;
+  purchaseUnit: string;
+  unitsPerPurchaseUnit: number;
+  unitCost: number;
+  /** Total base units (e.g. grams, ml, pieces) consumed according to recipes of confirmed sales. */
+  usedBaseQuantity: number;
+  /** Equivalent in purchase units (e.g. kg, bags, trays). */
+  usedPurchaseQuantity: number;
+  /** Estimated cost of the consumed quantity in whole satang. */
+  estimatedCost: number;
+  /** Share of total recipe ingredient cost in basis points (e.g. 3500 = 35.0%). */
+  costShareBps: number;
+  /** Actual quantity bought in the period (in purchaseUnit). */
+  purchasedQuantity: number;
+  /** Actual money spent buying this ingredient in the period (satang). */
+  purchasedAmount: number;
+  /** Number of menus whose recipe includes this ingredient. */
+  menusCount: number;
+};
+
+/**
+ * Calculates per-ingredient theoretical consumption, cost share %, and comparison against actual purchases
+ * over a period's confirmed sales.
+ */
+export function ingredientUsageBreakdown(input: {
+  sales: SaleRecord[];
+  recipeItems: RecipeItemRecord[];
+  ingredients: IngredientRecord[];
+  purchases: PurchaseRecord[];
+  menuYields?: Map<string, number>;
+}): IngredientUsageRow[] {
+  const { sales, recipeItems, ingredients, purchases, menuYields } = input;
+  const perUnitIngs = ingredients.filter((i) => i.costing === "per_unit");
+  const ingMap = new Map(perUnitIngs.map((i) => [i.id, i]));
+
+  // Map menuId -> Array<{ ingredientId, perServingQty }>
+  const menuRecipes = new Map<string, Array<{ ingredientId: string; perServingQty: number }>>();
+  const menusPerIng = new Map<string, Set<string>>();
+
+  for (const r of recipeItems) {
+    if (!r.ingredientId || r.quantity <= 0 || !ingMap.has(r.ingredientId)) continue;
+    const yieldDivisor = Math.max(1, menuYields?.get(r.menuId) ?? 1);
+    const perServingQty = r.quantity / yieldDivisor;
+    const list = menuRecipes.get(r.menuId) ?? [];
+    list.push({ ingredientId: r.ingredientId, perServingQty });
+    menuRecipes.set(r.menuId, list);
+
+    const mSet = menusPerIng.get(r.ingredientId) ?? new Set<string>();
+    mSet.add(r.menuId);
+    menusPerIng.set(r.ingredientId, mSet);
+  }
+
+  const usedQtyByIng = new Map<string, number>();
+  for (const sale of sales.filter(countsAsRevenue)) {
+    for (const item of sale.items) {
+      if (!item.menuId || item.quantity <= 0) continue;
+      const lines = menuRecipes.get(item.menuId);
+      if (!lines) continue;
+      for (const line of lines) {
+        usedQtyByIng.set(
+          line.ingredientId,
+          (usedQtyByIng.get(line.ingredientId) ?? 0) + line.perServingQty * item.quantity,
+        );
+      }
+    }
+  }
+
+  const boughtQtyByIng = new Map<string, number>();
+  const boughtAmtByIng = new Map<string, number>();
+  for (const p of purchases) {
+    if (!ingMap.has(p.ingredientId)) continue;
+    boughtAmtByIng.set(p.ingredientId, (boughtAmtByIng.get(p.ingredientId) ?? 0) + p.price);
+    if (p.purchasedQuantity && p.purchasedQuantity > 0) {
+      boughtQtyByIng.set(p.ingredientId, (boughtQtyByIng.get(p.ingredientId) ?? 0) + p.purchasedQuantity);
+    }
+  }
+
+  let totalEstimatedCost = 0;
+  const rows: IngredientUsageRow[] = [];
+
+  for (const ing of perUnitIngs) {
+    const usedBase = usedQtyByIng.get(ing.id) ?? 0;
+    const purchasedQty = boughtQtyByIng.get(ing.id) ?? 0;
+    const purchasedAmt = boughtAmtByIng.get(ing.id) ?? 0;
+    const menusCount = menusPerIng.get(ing.id)?.size ?? 0;
+
+    if (!ing.isActive && usedBase === 0 && purchasedAmt === 0 && menusCount === 0) continue;
+
+    const estimatedCost = usedBase > 0 ? roundedMaterialCost([{ unitCost: ing.unitCost, quantity: usedBase }]) : 0;
+    totalEstimatedCost += estimatedCost;
+    const unitsPerPurchase = ing.unitsPerPurchaseUnit > 0 ? ing.unitsPerPurchaseUnit : 1;
+
+    rows.push({
+      ingredientId: ing.id,
+      name: ing.name,
+      baseUnit: ing.baseUnit,
+      purchaseUnit: ing.purchaseUnit,
+      unitsPerPurchaseUnit: unitsPerPurchase,
+      unitCost: ing.unitCost,
+      usedBaseQuantity: Math.round(usedBase * 100) / 100,
+      usedPurchaseQuantity: Math.round((usedBase / unitsPerPurchase) * 100) / 100,
+      estimatedCost,
+      costShareBps: 0,
+      purchasedQuantity: Math.round(purchasedQty * 100) / 100,
+      purchasedAmount: purchasedAmt,
+      menusCount,
+    });
+  }
+
+  return rows
+    .map((r) => ({
+      ...r,
+      costShareBps: totalEstimatedCost > 0 ? Math.round((r.estimatedCost * 10_000) / totalEstimatedCost) : 0,
+    }))
+    .sort((a, b) => b.estimatedCost - a.estimatedCost || b.purchasedAmount - a.purchasedAmount || a.name.localeCompare(b.name, "th"));
 }
 
 type PackagingLine = { quantity: number; isAddon?: boolean; packaging: Array<{ packagingId: string; quantity: number }> };
