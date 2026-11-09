@@ -7,6 +7,7 @@ import {
   matchesSaleShop,
   matchesShopText,
   normalizeShopId,
+  resolveInventoryShopId,
   scopedSettingsKey,
   stripShopPrefix,
 } from "./shop-scope";
@@ -59,5 +60,23 @@ describe("shop-scope helpers", () => {
     expect(scopedSettingsKey("sales", "default")).toBe("sales");
     expect(scopedSettingsKey("sales", "s_2")).toBe("s:s_2:sales");
     expect(scopedSettingsKey("profile", "s_2")).toBe("s:s_2:profile");
+  });
+
+  it("resolves shared inventory shop ID safely including chains and cycles", () => {
+    const shops = [
+      { id: "s_b", sharedIngredientsFromShopId: "default" },
+      { id: "s_c", sharedIngredientsFromShopId: "s_b" },
+      { id: "s_isolated", sharedIngredientsFromShopId: null },
+      { id: "s_cycle1", sharedIngredientsFromShopId: "s_cycle2" },
+      { id: "s_cycle2", sharedIngredientsFromShopId: "s_cycle1" },
+      { id: "s_missing", sharedIngredientsFromShopId: "s_nonexistent" },
+    ];
+
+    expect(resolveInventoryShopId("default", shops)).toBe("default");
+    expect(resolveInventoryShopId("s_b", shops)).toBe("default");
+    expect(resolveInventoryShopId("s_c", shops)).toBe("default");
+    expect(resolveInventoryShopId("s_isolated", shops)).toBe("s_isolated");
+    expect(resolveInventoryShopId("s_cycle1", shops)).toBe("s_cycle2");
+    expect(resolveInventoryShopId("s_missing", shops)).toBe("s_missing");
   });
 });

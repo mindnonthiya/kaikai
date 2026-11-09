@@ -2,10 +2,15 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Copy, Plus, Store, Trash2, ArrowRightLeft, X } from "lucide-react";
-import { createShopAction, deleteShopAction, switchShopAction } from "@/app/actions/settings";
+import { Check, Copy, Link2, Plus, Store, Trash2, ArrowRightLeft, Unlink, X } from "lucide-react";
+import {
+  createShopAction,
+  deleteShopAction,
+  switchShopAction,
+  updateShopIngredientSharingAction,
+} from "@/app/actions/settings";
 import { DEFAULT_UNIT_LABEL, UNIT_LABEL_OPTIONS } from "@/lib/data/types";
-import { DEFAULT_SHOP_ID, type ShopSummary } from "@/lib/shop-scope";
+import { DEFAULT_SHOP_ID, resolveInventoryShopId, type ShopSummary } from "@/lib/shop-scope";
 
 export function ShopSwitcherCard({
   shops,
@@ -22,11 +27,14 @@ export function ShopSwitcherCard({
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newShopName, setNewShopName] = useState("");
   const [newUnitLabel, setNewUnitLabel] = useState("ชิ้น");
+  const [shareMode, setShareMode] = useState<"shared" | "isolated">("shared");
+  const [shareTargetShopId, setShareTargetShopId] = useState<string>(DEFAULT_SHOP_ID);
   const [copyIngredients, setCopyIngredients] = useState(true);
   const [copyMenus, setCopyMenus] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const activeShop = shops.find((s) => s.id === activeShopId) ?? shops[0];
+  const catalogOwnerShops = shops.filter((s) => !s.sharedIngredientsFromShopId);
 
   function handleSwitch(targetId: string) {
     if (targetId === activeShopId || isPending) return;
@@ -54,13 +62,21 @@ export function ShopSwitcherCard({
       const fd = new FormData();
       fd.set("shop_name", newShopName.trim());
       fd.set("unit_label", newUnitLabel.trim() || DEFAULT_UNIT_LABEL);
-      if (copyIngredients || copyMenus) fd.set("copy_ingredients", "true");
+      fd.set("share_ingredients_mode", shareMode);
+      if (shareMode === "shared") {
+        fd.set("share_ingredients_from", shareTargetShopId || DEFAULT_SHOP_ID);
+      } else {
+        fd.set("share_ingredients_from", "isolated");
+        if (copyIngredients || copyMenus) fd.set("copy_ingredients", "true");
+      }
       if (copyMenus) fd.set("copy_menus", "true");
 
       const res = await createShopAction(fd);
       if (res.ok) {
         setNewShopName("");
         setNewUnitLabel("ชิ้น");
+        setShareMode("shared");
+        setShareTargetShopId(DEFAULT_SHOP_ID);
         setCopyIngredients(true);
         setCopyMenus(false);
         setShowCreateForm(false);
@@ -68,6 +84,36 @@ export function ShopSwitcherCard({
         router.refresh();
       } else {
         setFeedback({ ok: false, text: res.error ?? "สร้างร้านไม่สำเร็จ" });
+      }
+    });
+  }
+
+  function handleChangeSharing(shop: ShopSummary, nextTargetId: string) {
+    if (shop.id === DEFAULT_SHOP_ID || isPending) return;
+    const currentTarget = shop.sharedIngredientsFromShopId ?? "isolated";
+    if (nextTargetId === currentTarget) return;
+
+    const targetShopObj = shops.find((s) => s.id === nextTargetId);
+    const confirmMsg =
+      nextTargetId === "isolated"
+        ? `ต้องการแยกคลังวัตถุดิบและบรรจุภัณฑ์ของร้าน “${shop.shopName}” ออกมาเป็นอิสระใช่ไหม?\n\nระบบจะคัดลอกรายการวัตถุดิบและบรรจุภัณฑ์ปัจจุบันมาเป็นของร้านนี้โดยอัตโนมัติ สูตรเมนูเดิมจะไม่พัง และหลังจากนี้การแก้ไขราคาวัตถุดิบจะแยกกันคนละร้าน`
+        : `ต้องการเชื่อมคลังวัตถุดิบและบรรจุภัณฑ์ของร้าน “${shop.shopName}” ให้ใช้ร่วมกับร้าน “${targetShopObj?.shopName || "ร้านหลัก"}” ใช่ไหม?\n\nรายการวัตถุดิบและราคาต้นทุนต่อหน่วยจะซิงค์ร่วมกันแบบเรียลไทม์ (ส่วนบิลรายจ่าย ยอดขาย และเมนูยังคงแยกตามแต่ละร้าน)`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setFeedback(null);
+    setPendingShopId(shop.id);
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("shop_id", shop.id);
+      fd.set("shared_from_shop_id", nextTargetId);
+      const res = await updateShopIngredientSharingAction(fd);
+      setPendingShopId(null);
+      if (res.ok) {
+        setFeedback({ ok: true, text: res.message ?? "อัปเดตการเชื่อมคลังวัตถุดิบแล้ว" });
+        router.refresh();
+      } else {
+        setFeedback({ ok: false, text: res.error ?? "อัปเดตการเชื่อมคลังวัตถุดิบไม่สำเร็จ" });
       }
     });
   }
@@ -178,6 +224,43 @@ export function ShopSwitcherCard({
                       ? ` · ${shop.displayName}`
                       : ""}
                   </span>
+
+                  {!isPrimary && (
+                    <div
+                      className="shop-sharing-inline"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <span className="shop-sharing-label">
+                        {shop.sharedIngredientsFromShopId ? (
+                          <Link2 size={12} />
+                        ) : (
+                          <Unlink size={12} />
+                        )}
+                        <span>คลังวัตถุดิบ:</span>
+                      </span>
+                      <select
+                        className="shop-sharing-select"
+                        value={shop.sharedIngredientsFromShopId ?? "isolated"}
+                        disabled={isPending}
+                        onChange={(e) => handleChangeSharing(shop, e.target.value)}
+                        aria-label={`ตั้งค่าการเชื่อมคลังวัตถุดิบของร้าน ${shop.shopName}`}
+                      >
+                        {shops
+                          .filter(
+                            (candidate) =>
+                              candidate.id !== shop.id &&
+                              resolveInventoryShopId(candidate.id, shops) === candidate.id,
+                          )
+                          .map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>
+                              เชื่อมใช้ร่วมกับ “{candidate.shopName}”
+                            </option>
+                          ))}
+                        <option value="isolated">แยกคลังวัตถุดิบเฉพาะร้านนี้ (อิสระ)</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -273,23 +356,79 @@ export function ShopSwitcherCard({
           </div>
 
           <div className="shop-copy-options">
-            <label className="checkbox-toggle-wrap">
-              <input
-                type="checkbox"
-                checked={copyIngredients || copyMenus}
-                disabled={copyMenus}
-                onChange={(e) => setCopyIngredients(e.target.checked)}
-              />
-              <div>
-                <strong>
-                  <Copy size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }} />
-                  คัดลอกรายการวัตถุดิบและบรรจุภัณฑ์จากร้าน “{activeShop?.shopName || "ปัจจุบัน"}” ไปตั้งต้น
-                </strong>
-                <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
-                  ช่วยประหยัดเวลา ไม่ต้องกรอกวัตถุดิบพื้นฐานหรือกล่อง/ถุงซ้ำ (แก้ไขหรือลบแยกทีหลังได้อิสระ และไม่คัดลอกประวัติบิลซื้อ)
-                </small>
-              </div>
-            </label>
+            <div className="shop-sharing-mode-box">
+              <span className="shop-sharing-mode-title">การจัดการคลังวัตถุดิบและบรรจุภัณฑ์ของร้านใหม่</span>
+              <label className={`shop-mode-radio-card ${shareMode === "shared" ? "is-selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="share_mode"
+                  checked={shareMode === "shared"}
+                  onChange={() => setShareMode("shared")}
+                />
+                <div>
+                  <strong>
+                    <Link2 size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }} />
+                    เชื่อมคลังวัตถุดิบและบรรจุภัณฑ์ร่วมกับร้านเดิม (แนะนำเมื่อใช้วัตถุดิบเดียวกัน)
+                  </strong>
+                  <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                    รายการวัตถุดิบและราคาต้นทุนต่อหน่วยซิงค์กันอัตโนมัติ ส่วนบิลค่าใช้จ่าย ยอดขาย และเมนูแยกตามร้านใครร้านมัน
+                  </small>
+                  {shareMode === "shared" && catalogOwnerShops.length > 1 && (
+                    <div style={{ marginTop: "8px" }} onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={shareTargetShopId}
+                        onChange={(e) => setShareTargetShopId(e.target.value)}
+                        style={{ padding: "6px 10px", fontSize: "0.85rem" }}
+                      >
+                        {catalogOwnerShops.map((cs) => (
+                          <option key={cs.id} value={cs.id}>
+                            เชื่อมกับคลังของร้าน “{cs.shopName}”
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </label>
+
+              <label className={`shop-mode-radio-card ${shareMode === "isolated" ? "is-selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="share_mode"
+                  checked={shareMode === "isolated"}
+                  onChange={() => setShareMode("isolated")}
+                />
+                <div>
+                  <strong>
+                    <Unlink size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }} />
+                    แยกคลังวัตถุดิบเฉพาะร้านนี้ (อิสระไม่ปนกัน)
+                  </strong>
+                  <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                    เหมาะกับร้านคนละประเภทที่ใช้วัตถุดิบและบรรจุภัณฑ์คนละชุดกันโดยสิ้นเชิง
+                  </small>
+                </div>
+              </label>
+            </div>
+
+            {shareMode === "isolated" && (
+              <label className="checkbox-toggle-wrap">
+                <input
+                  type="checkbox"
+                  checked={copyIngredients || copyMenus}
+                  disabled={copyMenus}
+                  onChange={(e) => setCopyIngredients(e.target.checked)}
+                />
+                <div>
+                  <strong>
+                    <Copy size={13} style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }} />
+                    คัดลอกรายการวัตถุดิบและบรรจุภัณฑ์จากร้าน “{activeShop?.shopName || "ปัจจุบัน"}” ไปตั้งต้น
+                  </strong>
+                  <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                    สร้างเป็นสำเนาแยกต่างหาก (แก้ไขหรือลบทีหลังได้อิสระ ไม่กระทบคลังของร้านเดิม)
+                  </small>
+                </div>
+              </label>
+            )}
 
             <label className="checkbox-toggle-wrap">
               <input
@@ -297,7 +436,7 @@ export function ShopSwitcherCard({
                 checked={copyMenus}
                 onChange={(e) => {
                   setCopyMenus(e.target.checked);
-                  if (e.target.checked) setCopyIngredients(true);
+                  if (e.target.checked && shareMode === "isolated") setCopyIngredients(true);
                 }}
               />
               <div>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, Check, ChevronDown, Copy, LogOut, Menu, Plus, Settings, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Link2, LogOut, Menu, Plus, Settings, Unlink, X } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createShopAction, switchShopAction } from "@/app/actions/settings";
 import { Brand } from "./brand";
@@ -48,6 +48,8 @@ export function AppShell({
   const [switchingShopId, setSwitchingShopId] = useState<string | null>(null);
   const [newShopName, setNewShopName] = useState("");
   const [newUnitLabel, setNewUnitLabel] = useState("กล่อง");
+  const [shareMode, setShareMode] = useState<"shared" | "isolated">("shared");
+  const [shareTargetShopId, setShareTargetShopId] = useState<string>(DEFAULT_SHOP_ID);
   const [copyIngredients, setCopyIngredients] = useState(true);
   const [copyMenus, setCopyMenus] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
@@ -141,13 +143,21 @@ export function AppShell({
       const fd = new FormData();
       fd.set("shop_name", newShopName.trim());
       fd.set("unit_label", newUnitLabel.trim() || DEFAULT_UNIT_LABEL);
-      if (copyIngredients || copyMenus) fd.set("copy_ingredients", "true");
+      fd.set("share_ingredients_mode", shareMode);
+      if (shareMode === "shared") {
+        fd.set("share_ingredients_from", shareTargetShopId || DEFAULT_SHOP_ID);
+      } else {
+        fd.set("share_ingredients_from", "isolated");
+        if (copyIngredients || copyMenus) fd.set("copy_ingredients", "true");
+      }
       if (copyMenus) fd.set("copy_menus", "true");
 
       const res = await createShopAction(fd);
       if (res.ok) {
         setNewShopName("");
         setNewUnitLabel("กล่อง");
+        setShareMode("shared");
+        setShareTargetShopId(DEFAULT_SHOP_ID);
         setCopyIngredients(true);
         setCopyMenus(false);
         setIgSheetMode("list");
@@ -599,26 +609,73 @@ export function AppShell({
                   </div>
 
                   <div className="shop-copy-options">
-                    <label className="checkbox-toggle-wrap">
-                      <input
-                        type="checkbox"
-                        checked={copyIngredients || copyMenus}
-                        disabled={copyMenus}
-                        onChange={(e) => setCopyIngredients(e.target.checked)}
-                      />
-                      <div>
-                        <strong>
-                          <Copy
-                            size={13}
-                            style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }}
-                          />
-                          คัดลอกวัตถุดิบและบรรจุภัณฑ์จากร้าน “{shopName || "ปัจจุบัน"}”
-                        </strong>
-                        <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
-                          ไม่ต้องกรอกวัตถุดิบหรือกล่องซ้ำ (แก้ไขแยกกันได้อิสระ)
-                        </small>
-                      </div>
-                    </label>
+                    <div className="shop-sharing-mode-box">
+                      <span className="shop-sharing-mode-title">คลังวัตถุดิบและบรรจุภัณฑ์</span>
+                      <label className={`shop-mode-radio-card ${shareMode === "shared" ? "is-selected" : ""}`}>
+                        <input
+                          type="radio"
+                          name="ig_share_mode"
+                          checked={shareMode === "shared"}
+                          onChange={() => setShareMode("shared")}
+                        />
+                        <div>
+                          <strong>
+                            <Link2
+                              size={13}
+                              style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }}
+                            />
+                            เชื่อมคลังวัตถุดิบร่วมกับร้านเดิม
+                          </strong>
+                          <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                            ใช้วัตถุดิบและซิงค์ราคาต้นทุนร่วมกัน (บิลรายจ่ายแยกตามร้าน)
+                          </small>
+                        </div>
+                      </label>
+
+                      <label className={`shop-mode-radio-card ${shareMode === "isolated" ? "is-selected" : ""}`}>
+                        <input
+                          type="radio"
+                          name="ig_share_mode"
+                          checked={shareMode === "isolated"}
+                          onChange={() => setShareMode("isolated")}
+                        />
+                        <div>
+                          <strong>
+                            <Unlink
+                              size={13}
+                              style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }}
+                            />
+                            แยกคลังวัตถุดิบเฉพาะร้านนี้
+                          </strong>
+                          <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                            รายการวัตถุดิบและราคาต้นทุนแยกอิสระไม่ปนกัน
+                          </small>
+                        </div>
+                      </label>
+                    </div>
+
+                    {shareMode === "isolated" && (
+                      <label className="checkbox-toggle-wrap">
+                        <input
+                          type="checkbox"
+                          checked={copyIngredients || copyMenus}
+                          disabled={copyMenus}
+                          onChange={(e) => setCopyIngredients(e.target.checked)}
+                        />
+                        <div>
+                          <strong>
+                            <Copy
+                              size={13}
+                              style={{ display: "inline", verticalAlign: "-2px", marginRight: "5px" }}
+                            />
+                            คัดลอกวัตถุดิบตั้งต้นจากร้าน “{shopName || "ปัจจุบัน"}”
+                          </strong>
+                          <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                            คัดลอกเป็นสำเนาแยกต่างหาก แก้ไขทีหลังได้อิสระ
+                          </small>
+                        </div>
+                      </label>
+                    )}
 
                     <label className="checkbox-toggle-wrap">
                       <input
@@ -626,7 +683,7 @@ export function AppShell({
                         checked={copyMenus}
                         onChange={(e) => {
                           setCopyMenus(e.target.checked);
-                          if (e.target.checked) setCopyIngredients(true);
+                          if (e.target.checked && shareMode === "isolated") setCopyIngredients(true);
                         }}
                       />
                       <div>

@@ -8,7 +8,15 @@ import { weightedPricePerUnit } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import type { ExpenseKind, PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
-import { decodeShopText, encodeShopText, stripShopPrefix } from "@/lib/shop-scope";
+import {
+  DEFAULT_SHOP_ID,
+  SHOPS_REGISTRY_SETTINGS_KEY,
+  type ShopSummary,
+  decodeShopText,
+  encodeShopText,
+  resolveInventoryShopId,
+  stripShopPrefix,
+} from "@/lib/shop-scope";
 import { InputError, dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 import { saveItemizedExpenseAction, type ItemizedPurchasePayload } from "./ingredients";
@@ -151,9 +159,13 @@ async function deleteExpensesByIds(
       const sortedIngs = [...ings].sort((a, b) => stripShopPrefix(String(b.name)).length - stripShopPrefix(String(a.name)).length);
       for (const existing of ingExpenseRows) {
         const expDecoded = decodeShopText(String(existing.description));
+        const { data: regRow } = await supabase.from("settings").select("value").eq("key", SHOPS_REGISTRY_SETTINGS_KEY).maybeSingle();
+        const rawShops = ((regRow?.value as { shops?: ShopSummary[] } | null)?.shops ?? []) as ShopSummary[];
+        const expInvShopId = resolveInventoryShopId(expDecoded.shopId, rawShops);
         const matchedIng = sortedIngs.find((ing) => {
           const ingDecoded = decodeShopText(String(ing.name));
-          return ingDecoded.shopId === expDecoded.shopId && (expDecoded.text === `ซื้อ${ingDecoded.text}` || expDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
+          const sameCatalog = ingDecoded.shopId === expInvShopId || ingDecoded.shopId === expDecoded.shopId;
+          return sameCatalog && (expDecoded.text === `ซื้อ${ingDecoded.text}` || expDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
         });
         if (matchedIng) {
           let query = supabase
@@ -356,6 +368,9 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
 
     // 2. Sync matching ingredient_purchases if any
     const oldDecoded = decodeShopText(String(existing.description ?? ""));
+    const { data: regRow } = await supabase.from("settings").select("value").eq("key", SHOPS_REGISTRY_SETTINGS_KEY).maybeSingle();
+    const rawShops = ((regRow?.value as { shops?: ShopSummary[] } | null)?.shops ?? []) as ShopSummary[];
+    const oldInvShopId = resolveInventoryShopId(oldDecoded.shopId, rawShops);
     if (existing.category === "วัตถุดิบ" && oldDecoded.text.startsWith("ซื้อ")) {
       const { data: ings } = await supabase
         .from("ingredients")
@@ -364,7 +379,8 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
         const sortedIngs = [...ings].sort((a, b) => stripShopPrefix(String(b.name)).length - stripShopPrefix(String(a.name)).length);
         const matchedIng = sortedIngs.find((ing) => {
           const ingDecoded = decodeShopText(String(ing.name));
-          return ingDecoded.shopId === oldDecoded.shopId && (oldDecoded.text === `ซื้อ${ingDecoded.text}` || oldDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
+          const sameCatalog = ingDecoded.shopId === oldInvShopId || ingDecoded.shopId === oldDecoded.shopId;
+          return sameCatalog && (oldDecoded.text === `ซื้อ${ingDecoded.text}` || oldDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
         });
         if (matchedIng) {
           let query = supabase
@@ -388,7 +404,7 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
               .update({
                 purchased_at: spentAtIso,
                 price_satang: amountSatang,
-                vendor: payee,
+                vendor: oldDecoded.shopId === DEFAULT_SHOP_ID ? payee || null : encodeShopText(payee ?? "", oldDecoded.shopId),
               })
               .eq("id", String((ingPurchases[0] as { id: unknown }).id));
 

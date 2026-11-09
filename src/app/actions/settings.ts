@@ -8,6 +8,7 @@ import { DEFAULT_UNIT_LABEL } from "@/lib/data/types";
 import { bahtToSatang } from "@/lib/money";
 import { InputError, dbError, money, optionalText, runAction, text } from "@/lib/server-action";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
+import { recalculateMenuCosts } from "@/lib/menu-cost";
 import {
   ACTIVE_SHOP_COOKIE,
   DEFAULT_SHOP_ID,
@@ -16,6 +17,7 @@ import {
   encodeShopText,
   matchesShopText,
   normalizeShopId,
+  resolveInventoryShopId,
   scopedSettingsKey,
   shopPrefix,
   stripShopPrefix,
@@ -328,6 +330,8 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
     const shopName = text(form, "shop_name", "ชื่อร้านใหม่", { max: 80 });
     const rawDisplayName = optionalText(form, "display_name", "ชื่อผู้ขาย", 80);
     const unitLabel = optionalText(form, "unit_label", "คำเรียกหน่วยสินค้าหลัก", 20) || DEFAULT_UNIT_LABEL;
+    const shareMode = String(form.get("share_ingredients_mode") ?? "").trim();
+    const rawShareFrom = String(form.get("share_ingredients_from") ?? "").trim();
     const copyIngredients = form.get("copy_ingredients") === "on" || form.get("copy_ingredients") === "true";
     const copyMenus = form.get("copy_menus") === "on" || form.get("copy_menus") === "true";
 
@@ -343,6 +347,17 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       throw new InputError(`มีร้านชื่อ “${shopName}” อยู่แล้ว`);
     }
 
+    const sourceInventoryShopId = resolveInventoryShopId(sourceShopId, rawShops);
+    let sharedIngredientsFromShopId: string | null = null;
+    if (shareMode !== "isolated" && rawShareFrom !== "isolated" && (shareMode === "shared" || rawShareFrom !== "")) {
+      const candidateTarget = normalizeShopId(rawShareFrom || sourceShopId);
+      const validTarget =
+        candidateTarget === DEFAULT_SHOP_ID || rawShops.some((s) => s.id === candidateTarget);
+      if (validTarget) {
+        sharedIngredientsFromShopId = resolveInventoryShopId(candidateTarget, rawShops);
+      }
+    }
+
     const newShopId = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const nowIso = new Date().toISOString();
     const displayName = rawDisplayName || shopName;
@@ -354,6 +369,7 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       avatarUrl: null,
       unitLabel,
       createdAt: nowIso,
+      sharedIngredientsFromShopId,
     };
 
     // 1. Update shops_registry
@@ -408,15 +424,67 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       { onConflict: "owner_id,key" },
     );
 
-    // 3. Optionally clone ingredients & packaging from current shop
+    // 3. Handle ingredients & packaging (either shared live OR cloned if isolated)
     const ingIdMap = new Map<string, string>();
     const packIdMap = new Map<string, string>();
 
-    if (copyIngredients || copyMenus) {
+    if (sharedIngredientsFromShopId) {
+      // Live shared catalog: no duplicate rows created!
+      // If copying menus too, map source catalog IDs to the shared catalog IDs.
+      if (copyMenus) {
+        const [{ data: ingRows }, { data: packRows }] = await Promise.all([
+          supabase.from("ingredients").select("id,name").eq("owner_id", user.id),
+          supabase.from("packaging_items").select("id,name").eq("owner_id", user.id),
+        ]);
+        const allIngs = (ingRows ?? []) as Array<Record<string, unknown>>;
+        const allPacks = (packRows ?? []) as Array<Record<string, unknown>>;
+
+        if (sharedIngredientsFromShopId === sourceInventoryShopId) {
+          for (const ing of allIngs) {
+            if (matchesShopText(String(ing.name ?? ""), sourceInventoryShopId)) {
+              const idStr = String(ing.id);
+              ingIdMap.set(idStr, idStr);
+            }
+          }
+          for (const pack of allPacks) {
+            if (matchesShopText(String(pack.name ?? ""), sourceInventoryShopId)) {
+              const idStr = String(pack.id);
+              packIdMap.set(idStr, idStr);
+            }
+          }
+        } else {
+          const targetIngByName = new Map<string, string>();
+          for (const ing of allIngs) {
+            if (matchesShopText(String(ing.name ?? ""), sharedIngredientsFromShopId)) {
+              targetIngByName.set(stripShopPrefix(String(ing.name ?? "")).trim().toLowerCase(), String(ing.id));
+            }
+          }
+          for (const ing of allIngs) {
+            if (matchesShopText(String(ing.name ?? ""), sourceInventoryShopId)) {
+              const matched = targetIngByName.get(stripShopPrefix(String(ing.name ?? "")).trim().toLowerCase());
+              if (matched) ingIdMap.set(String(ing.id), matched);
+            }
+          }
+
+          const targetPackByName = new Map<string, string>();
+          for (const pack of allPacks) {
+            if (matchesShopText(String(pack.name ?? ""), sharedIngredientsFromShopId)) {
+              targetPackByName.set(stripShopPrefix(String(pack.name ?? "")).trim().toLowerCase(), String(pack.id));
+            }
+          }
+          for (const pack of allPacks) {
+            if (matchesShopText(String(pack.name ?? ""), sourceInventoryShopId)) {
+              const matched = targetPackByName.get(stripShopPrefix(String(pack.name ?? "")).trim().toLowerCase());
+              if (matched) packIdMap.set(String(pack.id), matched);
+            }
+          }
+        }
+      }
+    } else if (copyIngredients || copyMenus) {
       const [{ data: ingRows }, { data: packRows }, { data: packDefaultsRow }] = await Promise.all([
         supabase
           .from("ingredients")
-          .select("id,name,costing,base_unit,purchase_unit,units_per_purchase_unit,unit_cost_satang,yield_auto,is_active")
+          .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,price_per_purchase_unit_satang,weighted_unit_cost_satang,yield_auto,yield_updated_at,is_active")
           .eq("owner_id", user.id),
         supabase
           .from("packaging_items")
@@ -431,7 +499,7 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       ]);
 
       const sourceIngredients = (ingRows ?? []).filter((r) =>
-        matchesShopText(String((r as Record<string, unknown>).name ?? ""), sourceShopId),
+        matchesShopText(String((r as Record<string, unknown>).name ?? ""), sourceInventoryShopId),
       );
       for (const ing of sourceIngredients as Array<Record<string, unknown>>) {
         const cleanName = stripShopPrefix(String(ing.name ?? ""));
@@ -440,12 +508,15 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
           .insert({
             owner_id: user.id,
             name: encodeShopText(cleanName, newShopId),
+            category: ing.category,
             costing: ing.costing,
             base_unit: ing.base_unit,
             purchase_unit: ing.purchase_unit,
             units_per_purchase_unit: ing.units_per_purchase_unit,
-            unit_cost_satang: ing.unit_cost_satang,
+            price_per_purchase_unit_satang: ing.price_per_purchase_unit_satang,
+            weighted_unit_cost_satang: ing.weighted_unit_cost_satang,
             yield_auto: ing.yield_auto,
+            yield_updated_at: ing.yield_updated_at,
             is_active: ing.is_active,
           })
           .select("id")
@@ -456,7 +527,7 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       }
 
       const sourcePackagings = (packRows ?? []).filter((r) =>
-        matchesShopText(String((r as Record<string, unknown>).name ?? ""), sourceShopId),
+        matchesShopText(String((r as Record<string, unknown>).name ?? ""), sourceInventoryShopId),
       );
       const packDefaultsMap: Record<string, unknown> = {
         ...((packDefaultsRow?.value ?? {}) as Record<string, unknown>),
@@ -506,7 +577,7 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       const [{ data: menuRows }, { data: menuYieldsRow }] = await Promise.all([
         supabase
           .from("menus")
-          .select("id,name,category,image_url,price_satang,calculated_cost_satang,calculated_packaging_satang,target_margin_bps,is_active")
+          .select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
           .eq("owner_id", user.id),
         supabase
           .from("settings")
@@ -534,12 +605,12 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
             owner_id: user.id,
             name: encodeShopText(cleanName, newShopId),
             category: m.category,
-            image_url: m.image_url,
-            price_satang: m.price_satang,
-            calculated_cost_satang: m.calculated_cost_satang,
-            calculated_packaging_satang: m.calculated_packaging_satang,
-            target_margin_bps: m.target_margin_bps,
-            is_active: m.is_active,
+            image_path: m.image_path,
+            selling_price_satang: m.selling_price_satang,
+            packaging_cost_satang: m.packaging_cost_satang,
+            current_cost_satang: m.current_cost_satang,
+            is_available: m.is_available,
+            cost_calculated_at: m.cost_calculated_at,
           })
           .select("id")
           .single();
@@ -569,47 +640,39 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
       if (menuIdMap.size > 0) {
         const { data: recipeRows } = await supabase
           .from("menu_recipe_items")
-          .select("menu_id,item_kind,ingredient_id,packaging_item_id,quantity,unit_cost_override_satang,notes,sort_order")
+          .select("menu_id,ingredient_id,packaging_item_id,quantity")
           .in("menu_id", Array.from(menuIdMap.keys()));
 
         const recipesToInsert: Array<Record<string, unknown>> = [];
         for (const r of (recipeRows ?? []) as Array<Record<string, unknown>>) {
           const newMenuId = menuIdMap.get(String(r.menu_id));
           if (!newMenuId) continue;
-          const itemKind = String(r.item_kind);
-          if (itemKind === "ingredient") {
-            const newIngId = r.ingredient_id ? ingIdMap.get(String(r.ingredient_id)) : null;
+          if (r.ingredient_id) {
+            const newIngId = ingIdMap.get(String(r.ingredient_id));
             if (!newIngId) continue;
             recipesToInsert.push({
               owner_id: user.id,
               menu_id: newMenuId,
-              item_kind: "ingredient",
               ingredient_id: newIngId,
               packaging_item_id: null,
               quantity: r.quantity,
-              unit_cost_override_satang: r.unit_cost_override_satang,
-              notes: r.notes,
-              sort_order: r.sort_order,
             });
-          } else if (itemKind === "packaging") {
-            const newPackId = r.packaging_item_id ? packIdMap.get(String(r.packaging_item_id)) : null;
+          } else if (r.packaging_item_id) {
+            const newPackId = packIdMap.get(String(r.packaging_item_id));
             if (!newPackId) continue;
             recipesToInsert.push({
               owner_id: user.id,
               menu_id: newMenuId,
-              item_kind: "packaging",
               ingredient_id: null,
               packaging_item_id: newPackId,
               quantity: r.quantity,
-              unit_cost_override_satang: r.unit_cost_override_satang,
-              notes: r.notes,
-              sort_order: r.sort_order,
             });
           }
         }
 
         if (recipesToInsert.length > 0) {
           await supabase.from("menu_recipe_items").insert(recipesToInsert);
+          await recalculateMenuCosts(supabase, Array.from(menuIdMap.values()));
         }
       }
     }
@@ -627,6 +690,444 @@ export async function createShopAction(form: FormData): Promise<ActionState> {
     return {
       ok: true,
       message: `สร้างร้าน “${shopName}” และสลับไปยังร้านใหม่เรียบร้อยแล้ว`,
+    };
+  });
+}
+
+export async function updateShopIngredientSharingAction(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user, shopId: currentActiveShopId }) => {
+    const targetShopId = normalizeShopId(String(form.get("shop_id") ?? currentActiveShopId));
+    if (!targetShopId || targetShopId === DEFAULT_SHOP_ID) {
+      throw new InputError("ร้านหลักเป็นคลังวัตถุดิบหลักอยู่แล้ว สามารถตั้งค่าการเชื่อมคลังได้ที่ร้านสาขา");
+    }
+
+    const rawLinkTo = String(form.get("shared_from_shop_id") ?? "").trim();
+    const { data: regRow } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("owner_id", user.id)
+      .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
+      .maybeSingle();
+    const rawShops = ((regRow?.value as { shops?: ShopSummary[] } | null)?.shops ?? []) as ShopSummary[];
+    const shopEntry = rawShops.find((s) => s.id === targetShopId);
+    if (!shopEntry) {
+      throw new InputError("ไม่พบร้านที่ต้องการตั้งค่า");
+    }
+
+    const currentInvShopId = resolveInventoryShopId(targetShopId, rawShops);
+    const nowIso = new Date().toISOString();
+
+    // Case 1: Unlink -> isolate catalog into targetShopId
+    if (!rawLinkTo || rawLinkTo === "isolated" || rawLinkTo === targetShopId) {
+      if (currentInvShopId === targetShopId) {
+        return { ok: true, message: `ร้าน “${shopEntry.shopName}” แยกคลังวัตถุดิบอิสระอยู่แล้ว` };
+      }
+
+      const [{ data: ingRows }, { data: packRows }, { data: packDefaultsRow }, { data: menuRows }] =
+        await Promise.all([
+          supabase
+            .from("ingredients")
+            .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,price_per_purchase_unit_satang,weighted_unit_cost_satang,yield_auto,yield_updated_at,is_active")
+            .eq("owner_id", user.id),
+          supabase
+            .from("packaging_items")
+            .select("id,name,unit,per_order,unit_cost_satang,is_active")
+            .eq("owner_id", user.id),
+          supabase
+            .from("settings")
+            .select("value")
+            .eq("owner_id", user.id)
+            .eq("key", "packaging_defaults")
+            .maybeSingle(),
+          supabase.from("menus").select("id,name").eq("owner_id", user.id),
+        ]);
+
+      const allIngs = (ingRows ?? []) as Array<Record<string, unknown>>;
+      const allPacks = (packRows ?? []) as Array<Record<string, unknown>>;
+      const sourceIngs = allIngs.filter((r) => matchesShopText(String(r.name ?? ""), currentInvShopId));
+      const existingOwnIngByName = new Map<string, string>();
+      for (const r of allIngs) {
+        if (matchesShopText(String(r.name ?? ""), targetShopId)) {
+          existingOwnIngByName.set(stripShopPrefix(String(r.name ?? "")).trim().toLowerCase(), String(r.id));
+        }
+      }
+
+      const ingIdMap = new Map<string, string>();
+      for (const ing of sourceIngs) {
+        const cleanName = stripShopPrefix(String(ing.name ?? ""));
+        const existingId = existingOwnIngByName.get(cleanName.trim().toLowerCase());
+        if (existingId) {
+          ingIdMap.set(String(ing.id), existingId);
+          continue;
+        }
+        const { data: insertedIng } = await supabase
+          .from("ingredients")
+          .insert({
+            owner_id: user.id,
+            name: encodeShopText(cleanName, targetShopId),
+            category: ing.category,
+            costing: ing.costing,
+            base_unit: ing.base_unit,
+            purchase_unit: ing.purchase_unit,
+            units_per_purchase_unit: ing.units_per_purchase_unit,
+            price_per_purchase_unit_satang: ing.price_per_purchase_unit_satang,
+            weighted_unit_cost_satang: ing.weighted_unit_cost_satang,
+            yield_auto: ing.yield_auto,
+            yield_updated_at: ing.yield_updated_at,
+            is_active: ing.is_active,
+          })
+          .select("id")
+          .single();
+        if (insertedIng) {
+          ingIdMap.set(String(ing.id), String((insertedIng as Record<string, unknown>).id));
+        }
+      }
+
+      const sourcePacks = allPacks.filter((r) => matchesShopText(String(r.name ?? ""), currentInvShopId));
+      const existingOwnPackByName = new Map<string, string>();
+      for (const r of allPacks) {
+        if (matchesShopText(String(r.name ?? ""), targetShopId)) {
+          existingOwnPackByName.set(stripShopPrefix(String(r.name ?? "")).trim().toLowerCase(), String(r.id));
+        }
+      }
+
+      const packDefaultsMap: Record<string, unknown> = {
+        ...((packDefaultsRow?.value ?? {}) as Record<string, unknown>),
+      };
+      let packDefaultsChanged = false;
+      const packIdMap = new Map<string, string>();
+
+      for (const pack of sourcePacks) {
+        const cleanName = stripShopPrefix(String(pack.name ?? ""));
+        const oldId = String(pack.id);
+        const existingId = existingOwnPackByName.get(cleanName.trim().toLowerCase());
+        if (existingId) {
+          packIdMap.set(oldId, existingId);
+          continue;
+        }
+        const { data: insertedPack } = await supabase
+          .from("packaging_items")
+          .insert({
+            owner_id: user.id,
+            name: encodeShopText(cleanName, targetShopId),
+            unit: pack.unit,
+            per_order: pack.per_order,
+            unit_cost_satang: pack.unit_cost_satang,
+            is_active: pack.is_active,
+          })
+          .select("id")
+          .single();
+        if (insertedPack) {
+          const newId = String((insertedPack as Record<string, unknown>).id);
+          packIdMap.set(oldId, newId);
+          if (packDefaultsMap[oldId]) {
+            packDefaultsMap[newId] = packDefaultsMap[oldId];
+            packDefaultsChanged = true;
+          }
+        }
+      }
+
+      if (packDefaultsChanged) {
+        await supabase.from("settings").upsert(
+          {
+            owner_id: user.id,
+            key: "packaging_defaults",
+            value: packDefaultsMap,
+            updated_at: nowIso,
+          },
+          { onConflict: "owner_id,key" },
+        );
+      }
+
+      const shopMenus = ((menuRows ?? []) as Array<Record<string, unknown>>)
+        .filter((m) => matchesShopText(String(m.name ?? ""), targetShopId))
+        .map((m) => String(m.id));
+
+      if (shopMenus.length > 0) {
+        const { data: recipeRows } = await supabase
+          .from("menu_recipe_items")
+          .select("id,menu_id,ingredient_id,packaging_item_id")
+          .in("menu_id", shopMenus);
+
+        for (const r of (recipeRows ?? []) as Array<Record<string, unknown>>) {
+          const rowId = String(r.id);
+          if (r.ingredient_id && ingIdMap.has(String(r.ingredient_id))) {
+            const newIngId = ingIdMap.get(String(r.ingredient_id))!;
+            if (newIngId !== String(r.ingredient_id)) {
+              await supabase.from("menu_recipe_items").update({ ingredient_id: newIngId }).eq("id", rowId);
+            }
+          } else if (r.packaging_item_id && packIdMap.has(String(r.packaging_item_id))) {
+            const newPackId = packIdMap.get(String(r.packaging_item_id))!;
+            if (newPackId !== String(r.packaging_item_id)) {
+              await supabase.from("menu_recipe_items").update({ packaging_item_id: newPackId }).eq("id", rowId);
+            }
+          }
+        }
+        await recalculateMenuCosts(supabase, shopMenus);
+      }
+
+      const nextShops = rawShops.map((s) =>
+        s.id === targetShopId ? { ...s, sharedIngredientsFromShopId: null } : s,
+      );
+      await supabase.from("settings").upsert(
+        {
+          owner_id: user.id,
+          key: SHOPS_REGISTRY_SETTINGS_KEY,
+          value: { shops: nextShops },
+          updated_at: nowIso,
+        },
+        { onConflict: "owner_id,key" },
+      );
+
+      invalidateQueryCache();
+      revalidatePath("/", "layout");
+      return {
+        ok: true,
+        message: `แยกคลังวัตถุดิบและบรรจุภัณฑ์ของร้าน “${shopEntry.shopName}” ออกมาเป็นอิสระเรียบร้อยแล้ว`,
+      };
+    }
+
+    // Case 2: Link targetShopId to requestedLinkShopId
+    const requestedLinkShopId = normalizeShopId(rawLinkTo);
+    const isValidTarget =
+      requestedLinkShopId === DEFAULT_SHOP_ID || rawShops.some((s) => s.id === requestedLinkShopId);
+    if (!isValidTarget) {
+      throw new InputError("ไม่พบร้านเป้าหมายที่ต้องการเชื่อมคลังวัตถุดิบ");
+    }
+
+    const rootTargetId = resolveInventoryShopId(requestedLinkShopId, rawShops);
+    if (rootTargetId === targetShopId) {
+      throw new InputError("ไม่สามารถเชื่อมคลังวัตถุดิบเข้ากับร้านตัวเองได้");
+    }
+
+    if (currentInvShopId === rootTargetId) {
+      const nextShops = rawShops.map((s) =>
+        s.id === targetShopId ? { ...s, sharedIngredientsFromShopId: rootTargetId } : s,
+      );
+      await supabase.from("settings").upsert(
+        {
+          owner_id: user.id,
+          key: SHOPS_REGISTRY_SETTINGS_KEY,
+          value: { shops: nextShops },
+          updated_at: nowIso,
+        },
+        { onConflict: "owner_id,key" },
+      );
+      invalidateQueryCache();
+      revalidatePath("/", "layout");
+      return { ok: true, message: "อัปเดตการเชื่อมคลังวัตถุดิบเรียบร้อยแล้ว" };
+    }
+
+    const [{ data: ingRows }, { data: packRows }, { data: menuRows }] = await Promise.all([
+      supabase
+        .from("ingredients")
+        .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,price_per_purchase_unit_satang,weighted_unit_cost_satang,yield_auto,yield_updated_at,is_active")
+        .eq("owner_id", user.id),
+      supabase
+        .from("packaging_items")
+        .select("id,name,unit,per_order,unit_cost_satang,is_active")
+        .eq("owner_id", user.id),
+      supabase.from("menus").select("id,name").eq("owner_id", user.id),
+    ]);
+
+    const allIngs = (ingRows ?? []) as Array<Record<string, unknown>>;
+    const allPacks = (packRows ?? []) as Array<Record<string, unknown>>;
+
+    const targetIngByName = new Map<string, string>();
+    for (const r of allIngs) {
+      if (matchesShopText(String(r.name ?? ""), rootTargetId)) {
+        targetIngByName.set(stripShopPrefix(String(r.name ?? "")).trim().toLowerCase(), String(r.id));
+      }
+    }
+
+    const targetPackByName = new Map<string, string>();
+    for (const r of allPacks) {
+      if (matchesShopText(String(r.name ?? ""), rootTargetId)) {
+        targetPackByName.set(stripShopPrefix(String(r.name ?? "")).trim().toLowerCase(), String(r.id));
+      }
+    }
+
+    const ingIdMap = new Map<string, string>();
+    const packIdMap = new Map<string, string>();
+    const obsoleteIngIds: string[] = [];
+    const obsoletePackIds: string[] = [];
+
+    const sourceIngs = allIngs.filter((r) => matchesShopText(String(r.name ?? ""), currentInvShopId));
+    for (const ing of sourceIngs) {
+      const oldId = String(ing.id);
+      const cleanName = stripShopPrefix(String(ing.name ?? ""));
+      const normName = cleanName.trim().toLowerCase();
+      const matchedTargetId = targetIngByName.get(normName);
+
+      if (matchedTargetId) {
+        ingIdMap.set(oldId, matchedTargetId);
+        if (currentInvShopId === targetShopId && matchedTargetId !== oldId) {
+          await supabase
+            .from("ingredient_purchases")
+            .update({ ingredient_id: matchedTargetId })
+            .eq("ingredient_id", oldId);
+          obsoleteIngIds.push(oldId);
+        }
+      } else if (currentInvShopId === targetShopId) {
+        // Move this isolated ingredient into rootTargetId's catalog
+        await supabase
+          .from("ingredients")
+          .update({ name: encodeShopText(cleanName, rootTargetId) })
+          .eq("id", oldId);
+        ingIdMap.set(oldId, oldId);
+        targetIngByName.set(normName, oldId);
+      } else {
+        // Switching from another shared catalog X to Y: clone missing item into Y
+        const { data: insertedIng } = await supabase
+          .from("ingredients")
+          .insert({
+            owner_id: user.id,
+            name: encodeShopText(cleanName, rootTargetId),
+            category: ing.category,
+            costing: ing.costing,
+            base_unit: ing.base_unit,
+            purchase_unit: ing.purchase_unit,
+            units_per_purchase_unit: ing.units_per_purchase_unit,
+            price_per_purchase_unit_satang: ing.price_per_purchase_unit_satang,
+            weighted_unit_cost_satang: ing.weighted_unit_cost_satang,
+            yield_auto: ing.yield_auto,
+            yield_updated_at: ing.yield_updated_at,
+            is_active: ing.is_active,
+          })
+          .select("id")
+          .single();
+        if (insertedIng) {
+          const newId = String((insertedIng as Record<string, unknown>).id);
+          ingIdMap.set(oldId, newId);
+          targetIngByName.set(normName, newId);
+        }
+      }
+    }
+
+    const sourcePacks = allPacks.filter((r) => matchesShopText(String(r.name ?? ""), currentInvShopId));
+    for (const pack of sourcePacks) {
+      const oldId = String(pack.id);
+      const cleanName = stripShopPrefix(String(pack.name ?? ""));
+      const normName = cleanName.trim().toLowerCase();
+      const matchedTargetId = targetPackByName.get(normName);
+
+      if (matchedTargetId) {
+        packIdMap.set(oldId, matchedTargetId);
+        if (currentInvShopId === targetShopId && matchedTargetId !== oldId) {
+          await supabase
+            .from("packaging_purchases")
+            .update({ packaging_item_id: matchedTargetId })
+            .eq("packaging_item_id", oldId);
+          obsoletePackIds.push(oldId);
+        }
+      } else if (currentInvShopId === targetShopId) {
+        await supabase
+          .from("packaging_items")
+          .update({ name: encodeShopText(cleanName, rootTargetId) })
+          .eq("id", oldId);
+        packIdMap.set(oldId, oldId);
+        targetPackByName.set(normName, oldId);
+      } else {
+        const { data: insertedPack } = await supabase
+          .from("packaging_items")
+          .insert({
+            owner_id: user.id,
+            name: encodeShopText(cleanName, rootTargetId),
+            unit: pack.unit,
+            per_order: pack.per_order,
+            unit_cost_satang: pack.unit_cost_satang,
+            is_active: pack.is_active,
+          })
+          .select("id")
+          .single();
+        if (insertedPack) {
+          const newId = String((insertedPack as Record<string, unknown>).id);
+          packIdMap.set(oldId, newId);
+          targetPackByName.set(normName, newId);
+        }
+      }
+    }
+
+    const shopMenus = ((menuRows ?? []) as Array<Record<string, unknown>>)
+      .filter((m) => matchesShopText(String(m.name ?? ""), targetShopId))
+      .map((m) => String(m.id));
+
+    if (shopMenus.length > 0) {
+      const { data: recipeRows } = await supabase
+        .from("menu_recipe_items")
+        .select("id,menu_id,ingredient_id,packaging_item_id")
+        .in("menu_id", shopMenus);
+
+      const seenMenuIng = new Set<string>();
+      const seenMenuPack = new Set<string>();
+
+      for (const r of (recipeRows ?? []) as Array<Record<string, unknown>>) {
+        const rowId = String(r.id);
+        const mId = String(r.menu_id);
+        if (r.ingredient_id) {
+          const mappedIngId = ingIdMap.get(String(r.ingredient_id)) ?? String(r.ingredient_id);
+          const key = `${mId}:${mappedIngId}`;
+          if (seenMenuIng.has(key)) {
+            await supabase.from("menu_recipe_items").delete().eq("id", rowId);
+          } else {
+            seenMenuIng.add(key);
+            if (mappedIngId !== String(r.ingredient_id)) {
+              await supabase.from("menu_recipe_items").update({ ingredient_id: mappedIngId }).eq("id", rowId);
+            }
+          }
+        } else if (r.packaging_item_id) {
+          const mappedPackId = packIdMap.get(String(r.packaging_item_id)) ?? String(r.packaging_item_id);
+          const key = `${mId}:${mappedPackId}`;
+          if (seenMenuPack.has(key)) {
+            await supabase.from("menu_recipe_items").delete().eq("id", rowId);
+          } else {
+            seenMenuPack.add(key);
+            if (mappedPackId !== String(r.packaging_item_id)) {
+              await supabase.from("menu_recipe_items").update({ packaging_item_id: mappedPackId }).eq("id", rowId);
+            }
+          }
+        }
+      }
+    }
+
+    if (obsoleteIngIds.length > 0) {
+      await supabase.from("menu_recipe_items").delete().in("ingredient_id", obsoleteIngIds);
+      await supabase.from("ingredients").delete().in("id", obsoleteIngIds);
+    }
+    if (obsoletePackIds.length > 0) {
+      await supabase.from("menu_recipe_items").delete().in("packaging_item_id", obsoletePackIds);
+      await supabase.from("packaging_items").delete().in("id", obsoletePackIds);
+    }
+
+    if (shopMenus.length > 0) {
+      await recalculateMenuCosts(supabase, shopMenus);
+    }
+
+    const nextShops = rawShops.map((s) => {
+      if (s.id === targetShopId) {
+        return { ...s, sharedIngredientsFromShopId: rootTargetId };
+      }
+      if (s.sharedIngredientsFromShopId === targetShopId) {
+        return { ...s, sharedIngredientsFromShopId: rootTargetId };
+      }
+      return s;
+    });
+
+    await supabase.from("settings").upsert(
+      {
+        owner_id: user.id,
+        key: SHOPS_REGISTRY_SETTINGS_KEY,
+        value: { shops: nextShops },
+        updated_at: nowIso,
+      },
+      { onConflict: "owner_id,key" },
+    );
+
+    invalidateQueryCache();
+    revalidatePath("/", "layout");
+    return {
+      ok: true,
+      message: `เชื่อมคลังวัตถุดิบและบรรจุภัณฑ์ของร้าน “${shopEntry.shopName}” เรียบร้อยแล้ว`,
     };
   });
 }
@@ -664,28 +1165,55 @@ export async function deleteShopAction(form: FormData): Promise<ActionState> {
       await supabase.from("menus").delete().in("id", shopMenuIds);
     }
 
-    // 2. Delete ingredients & purchases of this shop
+    // 2. Handle ingredients & packaging of this shop (transfer to dependent shop if shared, else delete)
+    const dependents = rawShops.filter(
+      (s) => s.id !== targetShopId && resolveInventoryShopId(s.id, rawShops) === targetShopId,
+    );
+    const newOwnerShopId = dependents.length > 0 ? dependents[0].id : null;
+
     const { data: shopIngs } = await supabase
       .from("ingredients")
-      .select("id")
+      .select("id,name")
       .eq("owner_id", user.id)
       .like("name", `${prefix}%`);
-    const shopIngIds = (shopIngs ?? []).map((i) => String((i as Record<string, unknown>).id));
-    if (shopIngIds.length > 0) {
-      await supabase.from("ingredient_purchases").delete().in("ingredient_id", shopIngIds);
-      await supabase.from("ingredients").delete().in("id", shopIngIds);
+    const shopIngRows = (shopIngs ?? []) as Array<Record<string, unknown>>;
+    if (shopIngRows.length > 0) {
+      if (newOwnerShopId) {
+        for (const ing of shopIngRows) {
+          const cleanName = stripShopPrefix(String(ing.name ?? ""));
+          await supabase
+            .from("ingredients")
+            .update({ name: encodeShopText(cleanName, newOwnerShopId) })
+            .eq("id", String(ing.id));
+        }
+      } else {
+        const shopIngIds = shopIngRows.map((i) => String(i.id));
+        await supabase.from("ingredient_purchases").delete().in("ingredient_id", shopIngIds);
+        await supabase.from("ingredients").delete().in("id", shopIngIds);
+      }
     }
 
-    // 3. Delete packaging & purchases of this shop
+    // 3. Handle packaging & purchases of this shop
     const { data: shopPacks } = await supabase
       .from("packaging_items")
-      .select("id")
+      .select("id,name")
       .eq("owner_id", user.id)
       .like("name", `${prefix}%`);
-    const shopPackIds = (shopPacks ?? []).map((p) => String((p as Record<string, unknown>).id));
-    if (shopPackIds.length > 0) {
-      await supabase.from("packaging_purchases").delete().in("packaging_item_id", shopPackIds);
-      await supabase.from("packaging_items").delete().in("id", shopPackIds);
+    const shopPackRows = (shopPacks ?? []) as Array<Record<string, unknown>>;
+    if (shopPackRows.length > 0) {
+      if (newOwnerShopId) {
+        for (const pack of shopPackRows) {
+          const cleanName = stripShopPrefix(String(pack.name ?? ""));
+          await supabase
+            .from("packaging_items")
+            .update({ name: encodeShopText(cleanName, newOwnerShopId) })
+            .eq("id", String(pack.id));
+        }
+      } else {
+        const shopPackIds = shopPackRows.map((p) => String(p.id));
+        await supabase.from("packaging_purchases").delete().in("packaging_item_id", shopPackIds);
+        await supabase.from("packaging_items").delete().in("id", shopPackIds);
+      }
     }
 
     // 4. Delete expenses & sales of this shop
@@ -701,7 +1229,17 @@ export async function deleteShopAction(form: FormData): Promise<ActionState> {
       .like("notes", `${prefix}%`);
 
     // 5. Remove from shops_registry and delete scoped settings
-    const nextShops = rawShops.filter((s) => s.id !== targetShopId);
+    const nextShops = rawShops
+      .filter((s) => s.id !== targetShopId)
+      .map((s) => {
+        if (resolveInventoryShopId(s.id, rawShops) === targetShopId) {
+          return {
+            ...s,
+            sharedIngredientsFromShopId: s.id === newOwnerShopId ? null : newOwnerShopId,
+          };
+        }
+        return s;
+      });
     await supabase.from("settings").upsert(
       {
         owner_id: user.id,

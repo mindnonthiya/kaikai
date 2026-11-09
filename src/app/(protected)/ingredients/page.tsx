@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Box, PackageOpen, PackagePlus, ShoppingBasket } from "lucide-react";
+import { Box, Link2, PackageOpen, PackagePlus, ShoppingBasket } from "lucide-react";
 import { PageTitle } from "@/components/page-title";
 import { ActionButton, ActionForm } from "@/components/action-form";
 import { IngredientKindFields } from "@/components/ingredient-kind-fields";
@@ -10,7 +10,7 @@ import { PurchaseSlipAttachment } from "@/components/purchase-slip-attachment";
 import { createIngredient, createPackaging, deleteIngredient, deletePackaging, recordIngredientPurchases, restockPackaging, toggleIngredientActive, togglePackagingActive, updateIngredient, updatePackaging } from "@/app/actions/ingredients";
 import { formatPercentBps } from "@/lib/analytics";
 import { resolvePackagingDefaultPack } from "@/lib/data/purchase-options";
-import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingDefaults, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchRecipeItems, fetchSaleSettings } from "@/lib/data/queries";
+import { fetchIngredients, fetchLatestPurchases, fetchPackaging, fetchPackagingDefaults, fetchPackagingPurchases, fetchPooledRate, fetchRecentPurchases, fetchRecipeItems, fetchSaleSettings, fetchShops } from "@/lib/data/queries";
 import type { PackagingPurchaseRecord } from "@/lib/data/types";
 import { formatBaht, formatUnitCost, satangToBahtInput } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate } from "@/lib/time";
@@ -38,7 +38,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
   const params = await searchParams;
   const activeTab = params.tab === "packaging" ? "packaging" : "ingredients";
 
-  const [ingredients, packaging, purchases, latest, packPurchases, packDefaults, recipeItems, pooledRate] = await Promise.all([
+  const [ingredients, packaging, purchases, latest, packPurchases, packDefaults, recipeItems, pooledRate, shopsData] = await Promise.all([
     fetchIngredients(),
     fetchPackaging(),
     fetchRecentPurchases(20),
@@ -47,7 +47,16 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
     fetchPackagingDefaults(),
     fetchRecipeItems(),
     fetchPooledRate(),
+    fetchShops(),
   ]);
+
+  const activeShop = shopsData.shops.find((s) => s.id === shopsData.activeShopId);
+  const sharedSourceShop = activeShop?.sharedIngredientsFromShopId
+    ? shopsData.shops.find((s) => s.id === activeShop.sharedIngredientsFromShopId) ?? null
+    : null;
+  const dependentShops = shopsData.shops.filter(
+    (s) => s.id !== shopsData.activeShopId && s.sharedIngredientsFromShopId === shopsData.activeShopId,
+  );
 
   const menusPerIngredient = new Map<string, Set<string>>();
   const menusPerPackaging = new Map<string, Set<string>>();
@@ -105,6 +114,36 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
         : "ตั้งค่ารายการวัตถุดิบ ราคากลาง และบันทึกบิลเมื่อซื้อของจริง ระบบคำนวณต้นทุนต่อหน่วยใช้ (กรัม/มล./ชิ้น) ให้อัตโนมัติ"}
     />
     <datalist id="pack-units">{PACK_UNITS.map((u) => <option key={u} value={u} />)}</datalist>
+
+    {(sharedSourceShop || dependentShops.length > 0) && (
+      <div className="shared-catalog-banner" role="status">
+        <div className="shared-catalog-banner-text">
+          <Link2 size={16} className="shared-catalog-banner-icon" />
+          <div>
+            {sharedSourceShop ? (
+              <>
+                <strong>กำลังใช้คลังวัตถุดิบและบรรจุภัณฑ์ร่วมกับร้าน “{sharedSourceShop.shopName}”</strong>
+                <span>
+                  เมื่อเพิ่ม แก้ไข หรืออัปเดตราคาต้นทุนจะมีผลร่วมกันทันที ส่วนบิลรายจ่ายจะบันทึกแยกเป็นของร้าน “{activeShop?.shopName}”
+                </span>
+              </>
+            ) : (
+              <>
+                <strong>
+                  คลังวัตถุดิบนี้เชื่อมใช้ร่วมกับร้าน: {dependentShops.map((s) => `“${s.shopName}”`).join(", ")}
+                </strong>
+                <span>
+                  ราคาต้นทุนต่อหน่วยจะซิงค์กันอัตโนมัติทุกสาขา ส่วนบิลรายจ่ายจะแยกตามร้านที่กดบันทึกซื้อของ
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        <Link href="/settings#shops" className="secondary-button shared-catalog-banner-btn">
+          ตั้งค่าการเชื่อมคลัง
+        </Link>
+      </div>
+    )}
 
     {/* แถบสลับหมวด: วัตถุดิบ | บรรจุภัณฑ์ */}
     <div className="segmented-tab-nav" role="tablist" aria-label="เลือกหมวดหมู่">
