@@ -34,6 +34,7 @@ import {
   sumSlipAmountsSatang,
 } from "@/lib/slip-merge";
 import { createClient } from "@/lib/supabase/client";
+import { encodeSaleNotesForShop, getClientActiveShopId } from "@/lib/shop-scope";
 
 export type BatchSlipRow = {
   id: string;
@@ -916,11 +917,11 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             payment_status: "paid",
             customer_name: row.customerName.trim() || null,
             sold_at: row.soldAt,
-            notes: [
+            notes: encodeSaleNotesForShop([
               multiSlipNote,
               allRefs.length > 0 ? `เลขอ้างอิง: ${allRefs.join(", ")}` : null,
               rowTipSatang > 0 ? `ทิป/โอนเกิน: ${formatBaht(rowTipSatang)}` : null,
-            ].filter(Boolean).join(" · ") || null,
+            ].filter(Boolean).join(" · ") || null, getClientActiveShopId()),
             reference_number: allRefs.join(", ") || null,
             ...(slipPayload ? { slip: slipPayload } : {}),
           },

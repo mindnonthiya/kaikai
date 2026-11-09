@@ -4,10 +4,11 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { PRICE_PRESETS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
 import type { PricePreset } from "@/lib/data/types";
+import { scopedSettingsKey } from "@/lib/shop-scope";
 import { InputError, dbError, runAction } from "@/lib/server-action";
 
 export async function saveAllPricePresets(presets: PricePreset[]): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     // Validate each preset
     for (const p of presets) {
       if (!p.name?.trim()) throw new InputError("กรุณาระบุชื่อสูตรเปิดบิลด่วน");
@@ -23,10 +24,11 @@ export async function saveAllPricePresets(presets: PricePreset[]): Promise<Actio
       }
     }
 
+    const key = scopedSettingsKey(PRICE_PRESETS_SETTINGS_KEY, shopId);
     const { error } = await supabase.from("settings").upsert(
       {
         owner_id: user.id,
-        key: PRICE_PRESETS_SETTINGS_KEY,
+        key,
         value: { presets },
         updated_at: new Date().toISOString(),
       },
@@ -44,11 +46,12 @@ export async function saveAllPricePresets(presets: PricePreset[]): Promise<Actio
 }
 
 export async function deletePricePreset(presetId: string): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
+    const key = scopedSettingsKey(PRICE_PRESETS_SETTINGS_KEY, shopId);
     const { data, error } = await supabase
       .from("settings")
       .select("value")
-      .eq("key", PRICE_PRESETS_SETTINGS_KEY)
+      .eq("key", key)
       .maybeSingle();
 
     if (error) dbError(error);
@@ -65,7 +68,7 @@ export async function deletePricePreset(presetId: string): Promise<ActionState> 
     const { error: upsertErr } = await supabase.from("settings").upsert(
       {
         owner_id: user.id,
-        key: PRICE_PRESETS_SETTINGS_KEY,
+        key,
         value: { presets: updated },
         updated_at: new Date().toISOString(),
       },

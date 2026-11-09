@@ -6,6 +6,7 @@ import { MENU_YIELDS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queri
 import { ADDON_CATEGORY, DISH_CATEGORY, SERVICE_CATEGORY } from "@/lib/data/types";
 import { recalculateMenuCosts } from "@/lib/menu-cost";
 import { syncHistoricalCosts } from "@/lib/historical-cost-sync";
+import { encodeShopText } from "@/lib/shop-scope";
 import { InputError, amountOrZero, dbError, id, money, oneOf, quantity, runAction, text } from "@/lib/server-action";
 
 type Row = Record<string, unknown>;
@@ -23,7 +24,7 @@ function revalidateMenus() {
 }
 
 export async function saveMenu(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const menuId = String(form.get("id") ?? "") || null;
     const name = text(form, "name", "ชื่อเมนู", { max: 120 });
     const category = oneOf(form, "category", [DISH_CATEGORY, ADDON_CATEGORY, SERVICE_CATEGORY] as const, "ประเภทเมนู");
@@ -32,7 +33,7 @@ export async function saveMenu(form: FormData): Promise<ActionState> {
     const imageFile = form.get("image") as File | null;
 
     const fields: Record<string, unknown> = {
-      name,
+      name: encodeShopText(name, shopId),
       category,
       selling_price_satang: price,
       updated_at: new Date().toISOString(),

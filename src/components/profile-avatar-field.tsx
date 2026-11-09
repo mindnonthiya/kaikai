@@ -4,33 +4,48 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, Check, Pencil, Trash2 } from "lucide-react";
 import { saveProfile } from "@/app/actions/settings";
+import { DEFAULT_SHOP_ID, getClientActiveShopId } from "@/lib/shop-scope";
 import { ProfileAvatarCropper } from "./profile-avatar-cropper";
 
 export const AVATAR_STORAGE_KEY = "kaikai_profile_avatar";
 export const AVATAR_REMOVED_KEY = "kaikai_profile_avatar_removed";
 export const AVATAR_UPDATED_EVENT = "kaikai:avatar-updated";
 
-export function notifyAvatarUpdated(avatarUrl: string | null) {
+export function getAvatarStorageKey(shopId?: string): string {
+  const id = shopId || getClientActiveShopId();
+  return id === DEFAULT_SHOP_ID ? AVATAR_STORAGE_KEY : `${AVATAR_STORAGE_KEY}:${id}`;
+}
+
+export function getAvatarRemovedKey(shopId?: string): string {
+  const id = shopId || getClientActiveShopId();
+  return id === DEFAULT_SHOP_ID ? AVATAR_REMOVED_KEY : `${AVATAR_REMOVED_KEY}:${id}`;
+}
+
+export function notifyAvatarUpdated(avatarUrl: string | null, shopId?: string) {
   if (typeof window === "undefined") return;
   try {
+    const storageKey = getAvatarStorageKey(shopId);
+    const removedKey = getAvatarRemovedKey(shopId);
     if (avatarUrl) {
-      window.localStorage.setItem(AVATAR_STORAGE_KEY, avatarUrl);
-      window.localStorage.removeItem(AVATAR_REMOVED_KEY);
+      window.localStorage.setItem(storageKey, avatarUrl);
+      window.localStorage.removeItem(removedKey);
     } else {
-      window.localStorage.removeItem(AVATAR_STORAGE_KEY);
-      window.localStorage.setItem(AVATAR_REMOVED_KEY, "true");
+      window.localStorage.removeItem(storageKey);
+      window.localStorage.setItem(removedKey, "true");
     }
-    window.dispatchEvent(new CustomEvent(AVATAR_UPDATED_EVENT, { detail: { avatarUrl } }));
+    window.dispatchEvent(new CustomEvent(AVATAR_UPDATED_EVENT, { detail: { avatarUrl, shopId } }));
   } catch {
     // Ignore storage quota or private mode errors
   }
 }
 
 export function ProfileAvatarField({
+  shopId = DEFAULT_SHOP_ID,
   currentAvatar,
   initialShopName,
   initialDisplayName,
 }: {
+  shopId?: string;
   currentAvatar?: string | null;
   initialShopName: string;
   initialDisplayName?: string;
@@ -52,9 +67,20 @@ export function ProfileAvatarField({
   const [editingShop, setEditingShop] = useState(false);
   const [editingDisplay, setEditingDisplay] = useState(false);
 
-  // Sync with server-provided currentAvatar or localStorage fallback
+  // Sync shopName and displayName when switching shops
+  useEffect(() => {
+    setShopName(initialShopName || "kaikai");
+    setDisplayName(initialDisplayName || "");
+    setEditingShop(false);
+    setEditingDisplay(false);
+    setSaveStatus(null);
+  }, [shopId, initialShopName, initialDisplayName]);
+
+  // Sync with server-provided currentAvatar or shop-scoped localStorage fallback
   useEffect(() => {
     setImgFailed(false);
+    const storageKey = getAvatarStorageKey(shopId);
+    const removedKey = getAvatarRemovedKey(shopId);
     if (currentAvatar) {
       setPreviewUrl(currentAvatar);
       if (currentAvatar.startsWith("data:image/")) {
@@ -62,15 +88,15 @@ export function ProfileAvatarField({
       }
       setRemoveAvatar(false);
       try {
-        window.localStorage.setItem(AVATAR_STORAGE_KEY, currentAvatar);
-        window.localStorage.removeItem(AVATAR_REMOVED_KEY);
+        window.localStorage.setItem(storageKey, currentAvatar);
+        window.localStorage.removeItem(removedKey);
       } catch {
         // Ignore
       }
     } else {
       try {
-        const wasRemoved = window.localStorage.getItem(AVATAR_REMOVED_KEY) === "true";
-        const cached = window.localStorage.getItem(AVATAR_STORAGE_KEY);
+        const wasRemoved = window.localStorage.getItem(removedKey) === "true";
+        const cached = window.localStorage.getItem(storageKey);
         if (!wasRemoved && cached) {
           setPreviewUrl(cached);
           if (cached.startsWith("data:image/")) {
@@ -78,12 +104,14 @@ export function ProfileAvatarField({
           }
         } else {
           setPreviewUrl(null);
+          setAvatarDataUrl("");
         }
       } catch {
         setPreviewUrl(null);
+        setAvatarDataUrl("");
       }
     }
-  }, [currentAvatar]);
+  }, [currentAvatar, shopId]);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -115,7 +143,7 @@ export function ProfileAvatarField({
     setAvatarDataUrl(croppedDataUrl);
     setRemoveAvatar(false);
     setRawCropSrc(null);
-    notifyAvatarUpdated(croppedDataUrl);
+    notifyAvatarUpdated(croppedDataUrl, shopId);
 
     // Auto-save immediately so the avatar sticks right after clicking "ใช้รูปนี้"
     setSaveStatus({ type: "saving", text: "กำลังบันทึกรูป…" });
@@ -153,7 +181,7 @@ export function ProfileAvatarField({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-    notifyAvatarUpdated(null);
+    notifyAvatarUpdated(null, shopId);
 
     setSaveStatus({ type: "saving", text: "กำลังลบรูป…" });
     startSaveTransition(async () => {
@@ -247,7 +275,7 @@ export function ProfileAvatarField({
       <div className="profile-details-col">
         {/* Row 1: Shop Name */}
         <div className="profile-item-row">
-          <span className="profile-item-label">ชื่อร้าน (ชื่อบัญชีร้าน)</span>
+          <span className="profile-item-label">ชื่อร้าน (ร้านที่กำลังเปิดอยู่)</span>
           {editingShop ? (
             <div className="profile-item-edit-wrap">
               <input
