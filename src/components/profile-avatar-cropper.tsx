@@ -9,7 +9,7 @@ export function ProfileAvatarCropper({
   onCancel,
 }: {
   imageSrc: string;
-  onCrop: (croppedFile: File, previewUrl: string) => void;
+  onCrop: (croppedFile: File, dataUrl: string) => void;
   onCancel: () => void;
 }) {
   const [imgElement, setImgElement] = useState<HTMLImageElement | null>(null);
@@ -87,14 +87,7 @@ export function ProfileAvatarCropper({
   async function handleApply() {
     if (!imgElement) return;
 
-    const R = CROP_DIAMETER / 2;
-    // Calculate source rect coordinates in natural image space
-    const srcX = (-R - offset.x) / currentScale + naturalWidth / 2;
-    const srcY = (-R - offset.y) / currentScale + naturalHeight / 2;
-    const srcW = CROP_DIAMETER / currentScale;
-    const srcH = CROP_DIAMETER / currentScale;
-
-    const OUTPUT_SIZE = 400;
+    const OUTPUT_SIZE = 256;
     const canvas = document.createElement("canvas");
     canvas.width = OUTPUT_SIZE;
     canvas.height = OUTPUT_SIZE;
@@ -104,28 +97,40 @@ export function ProfileAvatarCropper({
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
-    ctx.drawImage(imgElement, srcX, srcY, srcW, srcH, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    // Fill white background for transparent images and transform identically to the viewport
+    const ratio = OUTPUT_SIZE / CROP_DIAMETER;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    ctx.save();
+    ctx.translate(OUTPUT_SIZE / 2 + offset.x * ratio, OUTPUT_SIZE / 2 + offset.y * ratio);
+    ctx.scale(currentScale * ratio, currentScale * ratio);
+    ctx.drawImage(imgElement, -naturalWidth / 2, -naturalHeight / 2, naturalWidth, naturalHeight);
+    ctx.restore();
 
-    let blob: Blob | null = await new Promise((resolve) => {
-      canvas.toBlob((b) => resolve(b), "image/webp", 0.85);
-    });
-
+    let dataUrl = canvas.toDataURL("image/webp", 0.82);
     let mimeType = "image/webp";
-    let fileName = `avatar_${Date.now()}.webp`;
-
-    if (!blob) {
-      blob = await new Promise((resolve) => {
-        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.88);
-      });
+    let ext = "webp";
+    if (!dataUrl.startsWith("data:image/webp")) {
+      dataUrl = canvas.toDataURL("image/jpeg", 0.85);
       mimeType = "image/jpeg";
-      fileName = `avatar_${Date.now()}.jpg`;
+      ext = "jpg";
     }
 
-    if (!blob) return;
+    let blob: Blob | null = await new Promise((resolve) => {
+      canvas.toBlob((b) => resolve(b), mimeType, 0.84);
+    });
 
+    if (!blob) {
+      const base64Part = dataUrl.split(",")[1] ?? "";
+      const binary = atob(base64Part);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      blob = new Blob([bytes], { type: mimeType });
+    }
+
+    const fileName = `avatar_${Date.now()}.${ext}`;
     const croppedFile = new File([blob], fileName, { type: mimeType });
-    const previewUrl = URL.createObjectURL(blob);
-    onCrop(croppedFile, previewUrl);
+    onCrop(croppedFile, dataUrl);
   }
 
   return (

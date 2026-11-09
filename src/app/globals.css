@@ -3403,3 +3403,151 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
     }
   }
 }
+
+/* ---- Unit Preset Selector Cards & Full-Width Form Grid Helpers ---- */
+.form-grid > .wide {
+  grid-column: 1 / -1;
+}
+
+.unit-preset-section {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 15px;
+  background: #fbf9f4;
+  border: 1px solid var(--line);
+}
+
+.unit-preset-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.unit-preset-head strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.unit-preset-head span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.unit-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 8px;
+}
+
+.unit-preset-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .12s ease;
+}
+
+.unit-preset-card:hover {
+  border-color: #e9a37f;
+  background: #fffaf6;
+  transform: translateY(-1px);
+}
+
+.unit-preset-card.active {
+  border-color: var(--primary);
+  background: #fff6ef;
+  box-shadow: 0 4px 12px rgba(230, 103, 41, 0.12);
+}
+
+.unit-preset-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: background .15s ease;
+}
+
+.unit-preset-card.active .unit-preset-icon {
+  background: #ffe8d6;
+}
+
+.unit-preset-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.unit-preset-info strong {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.unit-preset-card.active .unit-preset-info strong {
+  color: var(--primary-dark);
+}
+
+.unit-preset-info small {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.unit-preset-hint {
+  margin: 0;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px dashed #e3dcd1;
+  color: #5a625c;
+  font-size: 11.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1.45;
+}
+
+.profile-avatar-status {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 99px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.profile-avatar-status.saving {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.profile-avatar-status.saved {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.profile-avatar-status.error {
+  color: #a7352c;
+  background: #fce8e6;
+}

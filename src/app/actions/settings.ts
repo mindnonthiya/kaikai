@@ -101,10 +101,18 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
       : shopName;
 
     const removeAvatar = form.get("remove_avatar") === "true";
+    const rawDataUrl = form.get("avatar_data_url");
+    const avatarDataUrl =
+      typeof rawDataUrl === "string" && rawDataUrl.trim().startsWith("data:image/")
+        ? rawDataUrl.trim()
+        : null;
+
     let avatarUrl: string | null | undefined = undefined;
 
     if (removeAvatar) {
       avatarUrl = null;
+    } else if (avatarDataUrl && avatarDataUrl.length <= 2 * 1024 * 1024) {
+      avatarUrl = avatarDataUrl;
     } else {
       const avatarFile = form.get("avatar") as File | null;
       if (avatarFile && avatarFile.size > 0 && typeof avatarFile.arrayBuffer === "function") {
@@ -112,33 +120,62 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
           throw new InputError("รูปโปรไฟล์ต้องมีขนาดไม่เกิน 5 MB");
         }
         const buffer = Buffer.from(await avatarFile.arrayBuffer());
-        const ext = avatarFile.name.split(".").pop()?.toLowerCase() || "jpg";
-        const cleanExt = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
-        const randomPart = Math.random().toString(36).substring(2, 8);
-        const filePath = `${user.id}/avatar_${Date.now()}_${randomPart}.${cleanExt}`;
-
-        try {
+        const mimeType = avatarFile.type || "image/jpeg";
+        if (buffer.length <= 2 * 1024 * 1024) {
+          avatarUrl = `data:${mimeType};base64,${buffer.toString("base64")}`;
+        } else {
+          const ext = avatarFile.name.split(".").pop()?.toLowerCase() || "jpg";
+          const cleanExt = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
+          const randomPart = Math.random().toString(36).substring(2, 8);
+          const filePath = `${user.id}/avatar_${Date.now()}_${randomPart}.${cleanExt}`;
           const { error: uploadError } = await supabase.storage
             .from("menu-images")
             .upload(filePath, buffer, {
-              contentType: avatarFile.type || "image/jpeg",
+              contentType: mimeType,
               upsert: true,
             });
-
           if (!uploadError) {
             const { data: { publicUrl } } = supabase.storage.from("menu-images").getPublicUrl(filePath);
             avatarUrl = publicUrl;
-          } else if (buffer.length <= 2 * 1024 * 1024) {
-            avatarUrl = `data:${avatarFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
-          }
-        } catch {
-          if (buffer.length <= 2 * 1024 * 1024) {
-            avatarUrl = `data:${avatarFile.type || "image/jpeg"};base64,${buffer.toString("base64")}`;
           }
         }
       }
     }
 
+    // 1. Persist to public.settings (key: "profile") — guaranteed to exist on all DB versions
+    const { data: existingProfileSetting } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("owner_id", user.id)
+      .eq("key", "profile")
+      .maybeSingle();
+    const prevVal = (existingProfileSetting?.value ?? {}) as Record<string, unknown>;
+    const resolvedAvatarUrl =
+      avatarUrl !== undefined
+        ? avatarUrl
+        : typeof prevVal.avatar_url === "string"
+        ? prevVal.avatar_url
+        : prevVal.avatar_url === null
+        ? null
+        : undefined;
+
+    const settingsPayload: Record<string, unknown> = {
+      shop_name: shopName,
+      display_name: displayName,
+      ...(resolvedAvatarUrl !== undefined ? { avatar_url: resolvedAvatarUrl } : {}),
+    };
+    const { error: settingsErr } = await supabase.from("settings").upsert(
+      {
+        owner_id: user.id,
+        key: "profile",
+        value: settingsPayload,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "owner_id,key" },
+    );
+    if (settingsErr) dbError(settingsErr);
+
+    // 2. Also update public.profiles (gracefully handling if avatar_url column is not migrated yet)
     const updatePayload: {
       shop_name: string;
       display_name: string;
@@ -149,35 +186,30 @@ export async function saveProfile(form: FormData): Promise<ActionState> {
       display_name: displayName,
       updated_at: new Date().toISOString(),
     };
-    if (avatarUrl !== undefined) {
-      updatePayload.avatar_url = avatarUrl;
+    if (resolvedAvatarUrl !== undefined) {
+      updatePayload.avatar_url = resolvedAvatarUrl;
     }
 
-    let { data, error } = await supabase.from("profiles")
+    const { error: profileErr } = await supabase.from("profiles")
       .update(updatePayload)
-      .eq("id", user.id).select("id");
+      .eq("id", user.id);
 
-    if (error && avatarUrl !== undefined) {
+    if (profileErr && resolvedAvatarUrl !== undefined) {
       delete updatePayload.avatar_url;
-      const resFallback = await supabase.from("profiles")
+      await supabase.from("profiles")
         .update(updatePayload)
-        .eq("id", user.id).select("id");
-      data = resFallback.data;
-      error = resFallback.error;
+        .eq("id", user.id);
     }
-    if (error) dbError(error);
-    if (!data?.length) throw new InputError("ไม่พบโปรไฟล์ของบัญชีนี้ — กรุณาติดต่อผู้ดูแลระบบ");
 
     const authMeta: { shop_name: string; display_name: string; avatar_url?: string | null } = {
       shop_name: shopName,
       display_name: displayName,
     };
-    if (avatarUrl !== undefined) {
+    if (resolvedAvatarUrl !== undefined) {
       // Only set avatar_url in auth metadata if it is null (removed) or a valid HTTP URL.
-      // Base64 strings must NEVER be stored in JWT user_metadata to avoid cookie size overflow (>4KB)
-      // which causes session corruption and "โหลดข้อมูลไม่สำเร็จ".
-      if (avatarUrl === null || avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://")) {
-        authMeta.avatar_url = avatarUrl;
+      // Base64 strings must NEVER be stored in JWT user_metadata to avoid cookie size overflow (>4KB).
+      if (resolvedAvatarUrl === null || resolvedAvatarUrl.startsWith("http://") || resolvedAvatarUrl.startsWith("https://")) {
+        authMeta.avatar_url = resolvedAvatarUrl;
       }
     }
     await supabase.auth.updateUser({ data: authMeta });

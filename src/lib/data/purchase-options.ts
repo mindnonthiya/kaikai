@@ -5,24 +5,38 @@ import {
   fetchIngredients,
   fetchLatestPurchases,
   fetchPackaging,
+  fetchPackagingDefaults,
   fetchPackagingPurchases,
+  type PackagingDefaultConfig,
 } from "./queries";
 import type { PackagingPurchaseRecord, PackagingRecord } from "./types";
 
 const bahtInput = (value: number) => (value > 0 ? satangToBahtInput(Math.round(value)) : "");
 const trimZeros = (value: number) => String(Math.round(value * 10_000) / 10_000);
 
-/** A unit price cannot establish pack size. Require pack inputs again after history is removed. */
+/**
+ * Resolves the default pack price & pieces per pack for a packaging item:
+ * 1) Uses the latest purchase record if one exists.
+ * 2) Otherwise uses the owner's configured pack default (`packaging_defaults` setting) if set when creating/updating the item.
+ * 3) Otherwise returns empty strings so the seller enters pack details on the next purchase.
+ */
 export function resolvePackagingDefaultPack(
   p: PackagingRecord,
   last?: PackagingPurchaseRecord,
   allPurchasesForItem?: PackagingPurchaseRecord[],
+  configuredDefault?: PackagingDefaultConfig,
 ): { packPrice: string; perPack: string } {
   const purchase = last ?? allPurchasesForItem?.find((row) => row.packagingItemId === p.id);
   if (purchase && purchase.packCount > 0 && purchase.packQuantity > 0) {
     return {
       packPrice: satangToBahtInput(Math.round(purchase.price / purchase.packCount)),
       perPack: trimZeros(purchase.packQuantity / purchase.packCount),
+    };
+  }
+  if (configuredDefault && configuredDefault.packPriceSatang > 0 && configuredDefault.packQuantity > 0) {
+    return {
+      packPrice: satangToBahtInput(Math.round(configuredDefault.packPriceSatang)),
+      perPack: trimZeros(configuredDefault.packQuantity),
     };
   }
   return { packPrice: "", perPack: "" };
@@ -35,11 +49,12 @@ export type PurchaseCatalog = {
 };
 
 export async function fetchPurchaseCatalog(): Promise<PurchaseCatalog> {
-  const [ingredients, packaging, latest, packPurchases] = await Promise.all([
+  const [ingredients, packaging, latest, packPurchases, packDefaults] = await Promise.all([
     fetchIngredients(),
     fetchPackaging(),
     fetchLatestPurchases(),
     fetchPackagingPurchases(),
+    fetchPackagingDefaults(),
   ]);
 
   const latestPack = new Map<string, PackagingPurchaseRecord>();
@@ -56,7 +71,7 @@ export async function fetchPurchaseCatalog(): Promise<PurchaseCatalog> {
   const activePackaging = packaging.filter((p) => p.isActive);
   const restockItems: RestockItem[] = activePackaging.map((p) => {
     const last = latestPack.get(p.id);
-    const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id));
+    const defaults = resolvePackagingDefaultPack(p, last, allPackByItem.get(p.id), packDefaults.get(p.id));
     return {
       id: p.id,
       name: p.name,

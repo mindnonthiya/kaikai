@@ -54,6 +54,7 @@ export function RecipeEditorForm({
 
   const isAddon = isAddonCategory(menu.category);
   const serveUnit = isAddon ? "ชิ้น" : unitLabel;
+  const effectiveYield = Number.isFinite(menu.recipeYield) && (menu.recipeYield ?? 0) > 0 ? Number(menu.recipeYield) : 1;
 
   // Build synthetic RecipeItemRecord[] from live state to compute live breakdown & costs
   const liveRecipeItems: RecipeItemRecord[] = [
@@ -65,12 +66,12 @@ export function RecipeEditorForm({
       .map((r) => ({ id: r.key, menuId: menu.id, ingredientId: null, packagingItemId: r.id, quantity: packQty[r.id] ?? 0 })),
   ];
 
-  const breakdown = recipeIngredientBreakdown(liveRecipeItems, ingredients, 1);
+  const breakdown = recipeIngredientBreakdown(liveRecipeItems, ingredients, effectiveYield);
   const breakdownById = new Map(breakdown.rows.map((b) => [b.ingredientId, b]));
 
   const ingCostMap = new Map(ingredientRows.map((r) => [r.id, r.unitCost]));
   const packCostMap = new Map(packRows.map((r) => [r.id, r.unitCost]));
-  const perServingParts = recipeCostParts(liveRecipeItems, ingCostMap, packCostMap, 1);
+  const perServingParts = recipeCostParts(liveRecipeItems, ingCostMap, packCostMap, effectiveYield);
   const pool = pooledCost(menu.price, pooledBps);
   const totalPerServing = Math.round(perServingParts.ingredients + perServingParts.packaging) + pool;
   const estProfit = menu.price - totalPerServing;

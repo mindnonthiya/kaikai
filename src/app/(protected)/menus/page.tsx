@@ -115,7 +115,7 @@ export default async function MenusPage() {
     const profit = menu.price - total;
     const marginBps = menu.price ? Math.round((profit * 10_000) / menu.price) : 0;
     const fixedFood = Math.max(0, menu.cost - menu.packagingCost);
-    const breakdownRows = !isService ? recipeIngredientBreakdown(items, ingredients, 1).rows : [];
+    const breakdownRows = !isService ? recipeIngredientBreakdown(items, ingredients, menu.recipeYield).rows : [];
 
     return <article className={`menu-card ${menu.isAvailable ? "" : "is-off"}`} key={menu.id}>
       {showImages && menu.imagePath && (

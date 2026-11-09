@@ -466,6 +466,20 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       }
       const saleId = String((data as { sale_id?: string })?.sale_id ?? "");
 
+      if (saleId && user && payment === "transfer" && primarySlip && uploadedPath) {
+        await supabase
+          .from("slip_uploads")
+          .update({
+            ocr_status: "confirmed",
+            ocr_amount_satang: primarySlip.amountSatang > 0 ? primarySlip.amountSatang : null,
+            ocr_bank: primarySlip.bank || null,
+            ocr_reference_number: primarySlip.referenceNumber || null,
+            user_confirmed_at: new Date().toISOString(),
+          })
+          .eq("sale_id", saleId)
+          .eq("storage_path", uploadedPath);
+      }
+
       // Upload & link any additional combined slips (extraSlips) to the created sale_id
       if (saleId && user && payment === "transfer" && extraSlips.length > 0) {
         for (const extra of extraSlips) {
