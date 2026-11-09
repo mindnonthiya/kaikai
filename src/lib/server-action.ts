@@ -1,15 +1,26 @@
 // Helpers for server actions: auth context, form parsing and Thai error messages.
+import { cookies } from "next/headers";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { DEMO_MODE_MESSAGE, type ActionState } from "@/lib/action-state";
 import { hasSupabaseEnv } from "@/lib/env";
 import { bahtToSatang } from "@/lib/money";
+import { ACTIVE_SHOP_COOKIE, DEFAULT_SHOP_ID, normalizeShopId } from "@/lib/shop-scope";
 import { createClient } from "@/lib/supabase/server";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 
 /** Thrown for user-facing validation problems; the message is shown as-is. */
 export class InputError extends Error {}
 
-type Context = { supabase: SupabaseClient; user: User };
+export type Context = { supabase: SupabaseClient; user: User; shopId: string };
+
+export async function getServerActiveShopId(): Promise<string> {
+  try {
+    const cookieStore = await cookies();
+    return normalizeShopId(cookieStore.get(ACTIVE_SHOP_COOKIE)?.value);
+  } catch {
+    return DEFAULT_SHOP_ID;
+  }
+}
 
 /**
  * Runs `fn` with a signed-in Supabase client and turns any thrown error into an ActionState,
@@ -18,10 +29,10 @@ type Context = { supabase: SupabaseClient; user: User };
 export async function runAction(fn: (ctx: Context) => Promise<ActionState | void>): Promise<ActionState> {
   if (!hasSupabaseEnv) return { error: DEMO_MODE_MESSAGE };
   try {
-    const supabase = await createClient();
+    const [supabase, shopId] = await Promise.all([createClient(), getServerActiveShopId()]);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { error: "หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่" };
-    return (await fn({ supabase, user })) ?? { ok: true };
+    return (await fn({ supabase, user, shopId })) ?? { ok: true };
   } catch (error) {
     if (error instanceof InputError) return { error: error.message };
     console.error(error);

@@ -9,6 +9,7 @@ import { MENU_YIELDS_SETTINGS_KEY, PACKAGING_DEFAULTS_SETTINGS_KEY, invalidateQu
 import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
+import { decodeShopText, encodeShopText, stripShopPrefix } from "@/lib/shop-scope";
 import { InputError, amountOrZero, dateField, dbError, id, money, oneOf, optionalText, quantity, runAction, text } from "@/lib/server-action";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 
@@ -47,7 +48,7 @@ const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value 
  * pooled: recorded by amount only when bought and costed as a % of food sales.
  */
 export async function createIngredient(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
     const costing = oneOf(form, "costing", ["per_unit", "pooled"] as const, "วิธีคิดต้นทุน");
 
@@ -69,7 +70,7 @@ export async function createIngredient(form: FormData): Promise<ActionState> {
 
     const insertPayload: Row = {
       owner_id: user.id,
-      name,
+      name: encodeShopText(name, shopId),
       costing,
       category: INGREDIENT_COSTING_LABELS[costing],
       purchase_unit: purchaseUnit,
@@ -113,7 +114,7 @@ export async function createIngredient(form: FormData): Promise<ActionState> {
  * Does not create any purchase or expense records.
  */
 export async function updateIngredient(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, shopId }) => {
     const ingredientId = id(form);
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
     const { data, error: readError } = await supabase.from("ingredients")
@@ -122,7 +123,7 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
     if (readError) dbError(readError);
     const current = data as Row;
     const now = new Date().toISOString();
-    let update: Row = { name, updated_at: now };
+    let update: Row = { name: encodeShopText(name, shopId), updated_at: now };
     if (current.costing !== "pooled") {
       const units = quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!;
       const rawPurchaseUnit = optionalText(form, "purchase_unit", "หน่วยที่ซื้อ", 30);
@@ -227,7 +228,7 @@ async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitI
   }
   if (updateError) dbError(updateError);
   await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingredient.id));
-  return `${ingredient.name} ตก${ingredient.base_unit}ละ ${formatUnitCost(unitCost)} (${units.toLocaleString("th-TH")} ${ingredient.base_unit}/${ingredient.purchase_unit ?? "หน่วย"})`;
+  return `${stripShopPrefix(ingredient.name)} ตก${ingredient.base_unit}ละ ${formatUnitCost(unitCost)} (${units.toLocaleString("th-TH")} ${ingredient.base_unit}/${ingredient.purchase_unit ?? "หน่วย"})`;
 }
 
 /**
@@ -251,7 +252,8 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
     const perUnit: PerUnitIngredient[] = [];
     const expensesToInsert: Row[] = [];
     for (const r of data as Row[]) {
-      const ingredientId = String(r.id), name = String(r.name);
+      const ingredientId = String(r.id), rawName = String(r.name);
+      const { shopId: itemShopId, text: name } = decodeShopText(rawName);
       const costing = String(r.costing) as IngredientCosting;
       if (costing === "pooled") {
         const amount = money(form, `amount_${ingredientId}`, `ราคา${name}`);
@@ -266,7 +268,7 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
           });
           expensesToInsert.push({
             owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
-            description: `ซื้อ${name}`, payee: vendor, payment_method: paymentMethod,
+            description: encodeShopText(`ซื้อ${name}`, itemShopId), payee: vendor, payment_method: paymentMethod,
             ...(receiptPath ? { receipt_path: receiptPath } : {}),
             ...(notesText ? { notes: notesText } : {}),
           });
@@ -285,7 +287,7 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       });
       expensesToInsert.push({
         owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
-        description: `ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, payee: vendor, payment_method: paymentMethod,
+        description: encodeShopText(`ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, itemShopId), payee: vendor, payment_method: paymentMethod,
         ...(receiptPath ? { receipt_path: receiptPath } : {}),
         ...(notesText ? { notes: notesText } : {}),
       });
@@ -374,13 +376,14 @@ async function savePackagingDefaultConfig(
  */
 async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string, item: PackagingItem, purchase: PackPurchase) {
   let expenseId: string | null = null;
+  const { shopId: itemShopId, text: cleanName } = decodeShopText(item.name);
   if (purchase.price > 0) {
     const packs = purchase.packCount > 1 ? `${purchase.packCount.toLocaleString("th-TH")} แพ็ก (${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit})` : `${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit}`;
     const { data, error } = await supabase.from("expenses").insert({
       owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY,
       kind: item.per_order ? "direct" : "operating",
       amount_satang: purchase.price,
-      description: `ซื้อ${item.name} ${packs}`,
+      description: encodeShopText(`ซื้อ${cleanName} ${packs}`, itemShopId),
       payee: purchase.vendor,
       payment_method: purchase.paymentMethod ?? "transfer",
       ...(purchase.receiptPath ? { receipt_path: purchase.receiptPath } : {}),
@@ -419,8 +422,9 @@ const perPiece = (unitCost: number, unit: string) => `ตก${unit}ละ ${form
  * When pack price & pieces per pack are given, sets the item's initial unit cost and remembers the pack default for future restocks.
  */
 export async function createPackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
+    const encodedName = encodeShopText(name, shopId);
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
     const packDefault = optionalPackDefaultFields(form);
@@ -428,13 +432,13 @@ export async function createPackaging(form: FormData): Promise<ActionState> {
 
     let { data, error } = await supabase
       .from("packaging_items")
-      .insert({ owner_id: user.id, name, unit, per_order: perOrder, unit_cost_satang: unitCost })
+      .insert({ owner_id: user.id, name: encodedName, unit, per_order: perOrder, unit_cost_satang: unitCost })
       .select("id")
       .single();
     if (error && error.code === "22P02" && error.message.includes("bigint")) {
       const fallback = await supabase
         .from("packaging_items")
-        .insert({ owner_id: user.id, name, unit, per_order: perOrder, unit_cost_satang: Math.round(unitCost) })
+        .insert({ owner_id: user.id, name: encodedName, unit, per_order: perOrder, unit_cost_satang: Math.round(unitCost) })
         .select("id")
         .single();
       data = fallback.data;
@@ -462,14 +466,15 @@ export async function createPackaging(form: FormData): Promise<ActionState> {
 }
 
 export async function updatePackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const packagingId = id(form);
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
+    const encodedName = encodeShopText(name, shopId);
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
     const hasPrice = String(form.get("pack_price") ?? "").trim() !== "";
     const hasQuantity = String(form.get("pack_quantity") ?? "").trim() !== "";
-    const updateFields: Row = { name, unit, per_order: perOrder, updated_at: new Date().toISOString() };
+    const updateFields: Row = { name: encodedName, unit, per_order: perOrder, updated_at: new Date().toISOString() };
     let newPackDefault: { packPriceSatang: number; packQuantity: number } | null = null;
 
     if (hasPrice && hasQuantity) {
@@ -515,11 +520,12 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
     if (error) dbError(error);
     const rows: Array<{ item: PackagingItem; purchase: PackPurchase }> = [];
     for (const item of data as PackagingItem[]) {
-      const packs = amountOrZero(form, `packs_${item.id}`, `จำนวนแพ็กของ${item.name}`);
+      const cleanName = stripShopPrefix(item.name);
+      const packs = amountOrZero(form, `packs_${item.id}`, `จำนวนแพ็กของ${cleanName}`);
       if (!packs) continue;
-      if (!Number.isInteger(packs)) throw new InputError(`จำนวนแพ็กของ${item.name}ต้องเป็นจำนวนเต็ม`);
-      const packPrice = money(form, `price_${item.id}`, `ราคาต่อแพ็กของ${item.name}`, { required: true });
-      const perPack = quantity(form, `qty_${item.id}`, `จำนวนต่อแพ็กของ${item.name}`)!;
+      if (!Number.isInteger(packs)) throw new InputError(`จำนวนแพ็กของ${cleanName}ต้องเป็นจำนวนเต็ม`);
+      const packPrice = money(form, `price_${item.id}`, `ราคาต่อแพ็กของ${cleanName}`, { required: true });
+      const perPack = quantity(form, `qty_${item.id}`, `จำนวนต่อแพ็กของ${cleanName}`)!;
       rows.push({
         item,
         purchase: {
@@ -583,7 +589,7 @@ export type ItemizedPurchasePayload = {
  * All records use the slip's date (`spentAt`), vendor/payee, payment method, and shared `receiptPath`.
  */
 export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     let purchasedAtDate: Date;
     try {
       purchasedAtDate = fromBangkokDateInput(payload.spentAt || bangkokDayKey(new Date()));
@@ -628,7 +634,8 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
       for (const item of perUnitInput) {
         const r = ingMap.get(item.ingredientId);
         if (!r) continue;
-        const name = String(r.name);
+        const rawName = String(r.name);
+        const { shopId: itemShopId, text: cleanName } = decodeShopText(rawName);
         const unit = String(r.purchase_unit ?? r.base_unit);
         const priceSatang = Math.round(item.quantity * item.unitPriceSatang);
         if (priceSatang <= 0) continue;
@@ -651,7 +658,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
           category: "วัตถุดิบ",
           kind: "direct",
           amount_satang: priceSatang,
-          description: `ซื้อ${name} ${item.quantity.toLocaleString("th-TH")} ${unit}`,
+          description: encodeShopText(`ซื้อ${cleanName} ${item.quantity.toLocaleString("th-TH")} ${unit}`, itemShopId),
           payee: vendor,
           payment_method: paymentMethod,
           ...(receiptPath ? { receipt_path: receiptPath } : {}),
@@ -659,7 +666,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
         });
         perUnitToRefresh.push({
           id: item.ingredientId,
-          name,
+          name: rawName,
           base_unit: String(r.base_unit),
           purchase_unit: unit,
           units_per_purchase_unit: Number(r.units_per_purchase_unit),
@@ -670,7 +677,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
       for (const item of pooledInput) {
         const r = ingMap.get(item.ingredientId);
         if (!r) continue;
-        const name = String(r.name);
+        const { shopId: itemShopId, text: cleanName } = decodeShopText(String(r.name));
         const amount = Math.round(item.amountSatang);
         if (amount <= 0) continue;
         totalSatang += amount;
@@ -689,7 +696,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
           category: "วัตถุดิบ",
           kind: "direct",
           amount_satang: amount,
-          description: `ซื้อ${name}`,
+          description: encodeShopText(`ซื้อ${cleanName}`, itemShopId),
           payee: vendor,
           payment_method: paymentMethod,
           ...(receiptPath ? { receipt_path: receiptPath } : {}),
@@ -708,7 +715,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
         category: extra.category.trim().slice(0, 60),
         kind: extra.kind,
         amount_satang: amount,
-        description: extra.description.trim().slice(0, 200),
+        description: encodeShopText(extra.description.trim().slice(0, 200), shopId),
         payee: vendor,
         payment_method: paymentMethod,
         ...(receiptPath ? { receipt_path: receiptPath } : {}),
@@ -805,6 +812,7 @@ export async function deleteIngredient(form: FormData): Promise<ActionState> {
       .eq("id", ingredientId)
       .maybeSingle();
     const ingName = ingRow ? String((ingRow as Row).name ?? "") : "";
+    const { shopId: ingShopId, text: cleanIngName } = decodeShopText(ingName);
 
     const affectedMenuIds = await menusUsing(supabase, "ingredient_id", ingredientId);
     if (affectedMenuIds.length > 0) {
@@ -821,7 +829,8 @@ export async function deleteIngredient(form: FormData): Promise<ActionState> {
       .eq("ingredient_id", ingredientId);
 
     if (purchases && purchases.length > 0) {
-      if (ingName) {
+      if (cleanIngName) {
+        const expPrefix = encodeShopText(`ซื้อ${cleanIngName}`, ingShopId);
         for (const p of purchases as Row[]) {
           const { data: matchedExp } = await supabase
             .from("expenses")
@@ -829,7 +838,7 @@ export async function deleteIngredient(form: FormData): Promise<ActionState> {
             .eq("category", "วัตถุดิบ")
             .eq("spent_at", String(p.purchased_at))
             .eq("amount_satang", Number(p.price_satang))
-            .ilike("description", `ซื้อ${ingName}%`)
+            .ilike("description", `${expPrefix}%`)
             .limit(1);
           if (matchedExp && matchedExp.length > 0) {
             await supabase.from("expenses").delete().eq("id", String((matchedExp[0] as Row).id));

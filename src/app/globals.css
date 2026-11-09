@@ -3551,3 +3551,834 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   color: #a7352c;
   background: #fce8e6;
 }
+
+
+/* ---- Multi-Shop Switcher & Instagram-style Account Sheet ---- */
+.topbar-shop-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.topbar-shop-trigger:hover,
+.topbar-shop-trigger.is-open {
+  border-color: var(--primary);
+  background: #fff7f1;
+  color: var(--primary-dark);
+}
+
+.topbar-shop-icon {
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.topbar-shop-text {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-shop-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.topbar-shop-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.topbar-shop-trigger.is-open .topbar-shop-chevron {
+  transform: rotate(180deg);
+}
+
+.topbar-avatar-btn {
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.topbar-avatar-btn:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 0 3px #ffe1cc;
+}
+
+.sidebar-footer-btn {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid #35433b;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0 0 12px 12px;
+  padding: 16px 8px 6px;
+  transition: opacity 0.15s ease;
+}
+
+.sidebar-footer-btn:hover .sidebar-manage-shops-link {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.sidebar-footer-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-footer-meta strong {
+  font-size: 13.5px;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer-meta span {
+  color: #93a199;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.sidebar-manage-shops-link {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+/* Mobile bottom-right profile avatar Instagram badge */
+.nav-avatar-wrap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.nav-avatar-ig-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 99px;
+  background: var(--primary);
+  color: #ffffff;
+  border: 1.5px solid #ffffff;
+  font-size: 8.5px;
+  font-weight: 900;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* Instagram-style Bottom Sheet & Account Switcher Modal */
+.ig-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(15, 20, 17, 0.52);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: igBackdropFade 0.18s ease-out;
+}
+
+@media (min-width: 641px) {
+  .ig-sheet-backdrop {
+    align-items: center;
+    padding: 20px;
+  }
+}
+
+.ig-sheet-card {
+  width: min(440px, 100%);
+  max-height: min(86vh, 640px);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 24px 24px 0 0;
+  border: 1px solid var(--line);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+  animation: igSheetSlideUp 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@media (min-width: 641px) {
+  .ig-sheet-card {
+    border-radius: 24px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+    padding-bottom: 6px;
+  }
+}
+
+@keyframes igBackdropFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes igSheetSlideUp {
+  from {
+    transform: translateY(28px);
+    opacity: 0.7;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.ig-sheet-grabber-wrap {
+  display: grid;
+  place-items: center;
+  padding: 10px 0 4px;
+  cursor: pointer;
+}
+
+.ig-sheet-grabber {
+  width: 40px;
+  height: 4.5px;
+  border-radius: 99px;
+  background: #d6d1c7;
+}
+
+.ig-sheet-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 4px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ig-sheet-header strong {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: -0.2px;
+}
+
+.ig-sheet-close {
+  position: absolute;
+  right: 12px;
+  top: 2px;
+  width: 34px;
+  height: 34px;
+}
+
+.ig-sheet-back {
+  position: absolute;
+  left: 12px;
+  top: 2px;
+  width: 34px;
+  height: 34px;
+}
+
+.ig-sheet-error {
+  margin: 10px 16px 0;
+}
+
+.ig-sheet-list {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.ig-account-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1.5px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.ig-account-row:hover {
+  background: #f7f3ec;
+}
+
+.ig-account-row.is-active {
+  background: #fff6ef;
+  border-color: #f6cdb0;
+}
+
+.ig-account-avatar-ring,
+.shop-item-avatar-ring {
+  padding: 2.5px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+
+.ig-account-avatar-ring.is-active,
+.shop-item-avatar-ring.is-active {
+  border-color: var(--primary);
+  background: linear-gradient(135deg, #fff5ed, #ffe2cc);
+}
+
+.ig-account-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f07638, #d95316);
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.ig-account-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ig-account-name-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.ig-account-info strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-account-tag {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1.5px 7px;
+  border-radius: 99px;
+  background: #eef2f6;
+  color: #475569;
+}
+
+.ig-account-info small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ig-account-radio {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid #d5cfc4;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #ffffff;
+  transition: all 0.15s ease;
+}
+
+.ig-account-radio.is-checked {
+  border-color: var(--primary);
+  background: var(--primary);
+  box-shadow: 0 2px 8px rgba(230, 103, 41, 0.3);
+}
+
+/* Instagram-style "+ เพิ่มร้านใหม่" row inside sheet */
+.ig-add-shop-row {
+  margin-top: 2px;
+}
+
+.ig-add-shop-circle {
+  width: 51px;
+  height: 51px;
+  border-radius: 50%;
+  border: 1.5px dashed #d7c7b8;
+  background: #fbf8f3;
+  color: var(--primary-dark);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.ig-add-shop-row:hover .ig-add-shop-circle {
+  border-color: var(--primary);
+  background: #fff0e5;
+  color: var(--primary);
+  transform: scale(1.03);
+}
+
+.ig-sheet-footer {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: #faf7f2;
+}
+
+.ig-sheet-settings-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--muted);
+  transition: all 0.14s ease;
+}
+
+.ig-sheet-settings-link:hover {
+  background: #efeae1;
+  color: var(--ink);
+}
+
+.ig-create-form {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.ig-create-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.ig-field-label {
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 750;
+  color: #4d554f;
+}
+
+.ig-field-label input {
+  min-height: 45px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 13px;
+  background: #ffffff;
+  color: var(--ink);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ig-field-label input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px #ffe9dc;
+}
+
+.ig-create-submit {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  font-size: 14.5px;
+  margin-top: 2px;
+}
+
+/* Settings page ShopSwitcherCard */
+.shop-manager-card {
+  margin-bottom: 18px;
+  border: 1.5px solid #edd9c8;
+  background: linear-gradient(180deg, #fffaf5 0%, var(--surface) 100%);
+}
+
+.shop-manager-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.shop-manager-head-text {
+  min-width: 240px;
+  flex: 1;
+}
+
+.shop-manager-eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--primary-dark);
+  background: #ffe8d6;
+  padding: 3px 10px;
+  border-radius: 99px;
+  margin-bottom: 6px;
+}
+
+.shop-add-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 18px 0 12px;
+  border-radius: 99px;
+  background: linear-gradient(135deg, #f07436 0%, #dd5313 100%);
+  color: #ffffff;
+  font-size: 13.5px;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(230, 103, 41, 0.25);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+}
+
+.shop-add-trigger-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(230, 103, 41, 0.34);
+  filter: brightness(1.03);
+}
+
+.shop-add-btn-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.form-notice {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.form-notice.ok {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.form-notice.err {
+  background: #fce8e6;
+  color: #a7352c;
+}
+
+.shop-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+}
+
+.shop-item-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  transition: all 0.15s ease;
+}
+
+.shop-item-card:not(.is-active) {
+  cursor: pointer;
+}
+
+.shop-item-card:not(.is-active):hover {
+  border-color: #eab293;
+  background: #fffaf6;
+}
+
+.shop-item-card.is-active {
+  border-color: var(--primary);
+  background: #fff7f0;
+  box-shadow: 0 6px 18px rgba(201, 78, 20, 0.08);
+}
+
+.shop-item-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shop-item-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f07638, #d95316);
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.shop-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.shop-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.shop-item-title-row strong {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.shop-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+.shop-badge.primary {
+  background: #eef2f6;
+  color: #475569;
+}
+
+.shop-badge.active {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.shop-item-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shop-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.shop-current-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--green);
+}
+
+.shop-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+}
+
+.shop-switch-btn {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+
+.shop-item-add-card {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1.5px dashed #decab8;
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.shop-item-add-card:hover {
+  border-color: var(--primary);
+  background: #fff6ee;
+  transform: translateY(-1px);
+}
+
+.shop-item-add-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #ffefe3;
+  color: var(--primary-dark);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.shop-item-add-card:hover .shop-item-add-avatar {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.shop-item-add-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.shop-item-add-copy strong {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: var(--primary-dark);
+}
+
+.shop-item-add-copy small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.icon-button.danger-subtle {
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+}
+
+.icon-button.danger-subtle:hover {
+  background: #fee4e2;
+}
+
+.shop-create-panel {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1.5px solid #f2c4a2;
+  background: #ffffff;
+  box-shadow: 0 8px 26px rgba(230, 103, 41, 0.08);
+  display: grid;
+  gap: 14px;
+}
+
+.shop-create-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shop-create-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary-dark);
+  font-size: 15px;
+}
+
+.shop-create-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.unit-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.unit-chip {
+  padding: 4px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: #faf7f2;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s ease;
+}
+
+.unit-chip:hover {
+  border-color: #eab293;
+}
+
+.unit-chip.is-selected {
+  border-color: var(--primary);
+  background: #fff1e6;
+  color: var(--primary-dark);
+  font-weight: 800;
+}
+
+.shop-copy-options {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #faf7f2;
+  border: 1px solid var(--line);
+}
+
+.shop-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}

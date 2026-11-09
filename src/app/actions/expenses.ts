@@ -8,6 +8,7 @@ import { weightedPricePerUnit } from "@/lib/analytics";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import type { ExpenseKind, PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
+import { decodeShopText, encodeShopText, stripShopPrefix } from "@/lib/shop-scope";
 import { InputError, dateField, dbError, id, money, oneOf, optionalText, runAction, text } from "@/lib/server-action";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 import { saveItemizedExpenseAction, type ItemizedPurchasePayload } from "./ingredients";
@@ -42,7 +43,7 @@ export async function revalidateExpensesAction(): Promise<ActionState> {
 }
 
 export async function saveExpense(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const spentAt = dateField(form, "spent_at", "วันที่จ่าย");
     const description = text(form, "description", "รายละเอียด", { max: 200 });
     const category = text(form, "category", "หมวดหมู่", { max: 60 });
@@ -55,7 +56,7 @@ export async function saveExpense(form: FormData): Promise<ActionState> {
     const { error } = await supabase.from("expenses").insert({
       owner_id: user.id,
       spent_at: spentAt.toISOString(),
-      description,
+      description: encodeShopText(description, shopId),
       category,
       kind,
       amount_satang: amount,
@@ -140,19 +141,19 @@ async function deleteExpensesByIds(
 
   // 2. Clean up matching ingredient_purchases rows
   const ingExpenseRows = rows.filter(
-    (r) => r.category === "วัตถุดิบ" && String(r.description ?? "").startsWith("ซื้อ")
+    (r) => r.category === "วัตถุดิบ" && stripShopPrefix(String(r.description ?? "")).startsWith("ซื้อ")
   );
   if (ingExpenseRows.length > 0) {
     const { data: ings } = await supabase
       .from("ingredients")
       .select("id, name, costing, units_per_purchase_unit");
     if (ings && ings.length > 0) {
-      const sortedIngs = [...ings].sort((a, b) => String(b.name).length - String(a.name).length);
+      const sortedIngs = [...ings].sort((a, b) => stripShopPrefix(String(b.name)).length - stripShopPrefix(String(a.name)).length);
       for (const existing of ingExpenseRows) {
-        const desc = String(existing.description);
+        const expDecoded = decodeShopText(String(existing.description));
         const matchedIng = sortedIngs.find((ing) => {
-          const name = String(ing.name);
-          return desc === `ซื้อ${name}` || desc.startsWith(`ซื้อ${name} `);
+          const ingDecoded = decodeShopText(String(ing.name));
+          return ingDecoded.shopId === expDecoded.shopId && (expDecoded.text === `ซื้อ${ingDecoded.text}` || expDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
         });
         if (matchedIng) {
           let query = supabase
@@ -354,16 +355,16 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
     }
 
     // 2. Sync matching ingredient_purchases if any
-    if (existing.category === "วัตถุดิบ" && String(existing.description ?? "").startsWith("ซื้อ")) {
-      const oldDesc = String(existing.description);
+    const oldDecoded = decodeShopText(String(existing.description ?? ""));
+    if (existing.category === "วัตถุดิบ" && oldDecoded.text.startsWith("ซื้อ")) {
       const { data: ings } = await supabase
         .from("ingredients")
         .select("id, name, costing, units_per_purchase_unit");
       if (ings && ings.length > 0) {
-        const sortedIngs = [...ings].sort((a, b) => String(b.name).length - String(a.name).length);
+        const sortedIngs = [...ings].sort((a, b) => stripShopPrefix(String(b.name)).length - stripShopPrefix(String(a.name)).length);
         const matchedIng = sortedIngs.find((ing) => {
-          const name = String(ing.name);
-          return oldDesc === `ซื้อ${name}` || oldDesc.startsWith(`ซื้อ${name} `);
+          const ingDecoded = decodeShopText(String(ing.name));
+          return ingDecoded.shopId === oldDecoded.shopId && (oldDecoded.text === `ซื้อ${ingDecoded.text}` || oldDecoded.text.startsWith(`ซื้อ${ingDecoded.text} `));
         });
         if (matchedIng) {
           let query = supabase
@@ -425,7 +426,7 @@ export async function updateExpenseAction(payload: UpdateExpensePayload): Promis
       .from("expenses")
       .update({
         spent_at: spentAtIso,
-        description,
+        description: encodeShopText(description, oldDecoded.shopId),
         category,
         kind,
         amount_satang: amountSatang,

@@ -17,6 +17,7 @@ import {
   sumSlipAmountsSatang,
 } from "@/lib/slip-merge";
 import { fromBangkokDateTimeInput, toBangkokDateTimeInput } from "@/lib/time";
+import { encodeSaleNotesForShop, getClientActiveShopId } from "@/lib/shop-scope";
 
 type Cart = Record<string, number>;
 type PaymentStatus = "paid" | "partial" | "unpaid";
@@ -453,7 +454,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         payment_status: paymentStatus,
         customer_name: customer.trim() || null,
         sold_at: fromBangkokDateTimeInput(soldAt),
-        notes: notesParts.join(" · ") || null,
+        notes: encodeSaleNotesForShop(notesParts.join(" · ") || null, getClientActiveShopId()),
         reference_number: allRefs.join(", ") || null,
         ...(slipPayload ? { slip: slipPayload } : {}),
       } });

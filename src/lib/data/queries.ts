@@ -1,9 +1,21 @@
 // Server-side data access. Reads through the signed-in user's session, so Row Level Security limits rows to that user.
 // When Supabase is not configured every function returns empty data (there is no sample data).
 import { cache } from "react";
+import { cookies } from "next/headers";
 import { COSTING_WINDOW_DAYS, pooledFoodRevenue, pooledIngredientBps } from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
+import {
+  ACTIVE_SHOP_COOKIE,
+  DEFAULT_SHOP_ID,
+  SHOPS_REGISTRY_SETTINGS_KEY,
+  matchesSaleShop,
+  matchesShopText,
+  normalizeShopId,
+  scopedSettingsKey,
+  stripShopPrefix,
+  type ShopSummary,
+} from "@/lib/shop-scope";
 import { createClient } from "@/lib/supabase/server";
 import { DAY_MS, DEFAULT_DAY_START_HOUR, normalizeDayStartHour } from "@/lib/time";
 import {
@@ -61,13 +73,42 @@ export function invalidateQueryCache(prefix?: string) {
   }
 }
 
-/** Cache the user ID for the lifetime of a single request to avoid duplicate auth roundtrips */
+/** Reads the active shop ID from the request cookie (verified against the signed-in user's shop registry). */
+export const getActiveShopId = cache(async (): Promise<string> => {
+  let rawCookieShop = DEFAULT_SHOP_ID;
+  try {
+    const cookieStore = await cookies();
+    rawCookieShop = normalizeShopId(cookieStore.get(ACTIVE_SHOP_COOKIE)?.value);
+  } catch {
+    return DEFAULT_SHOP_ID;
+  }
+  if (rawCookieShop === DEFAULT_SHOP_ID || !hasSupabaseEnv) {
+    return DEFAULT_SHOP_ID;
+  }
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
+      .maybeSingle();
+    const rawVal = (data?.value ?? {}) as Row;
+    const list = Array.isArray(rawVal.shops) ? (rawVal.shops as Row[]) : [];
+    const exists = list.some((s) => normalizeShopId(str(s.id)) === rawCookieShop);
+    return exists ? rawCookieShop : DEFAULT_SHOP_ID;
+  } catch {
+    return DEFAULT_SHOP_ID;
+  }
+});
+
+/** Cache the user ID + active shop ID for the lifetime of a single request to isolate caches per shop */
 export const getRequestUserId = cache(async (): Promise<string> => {
   if (!hasSupabaseEnv) return "anon";
   try {
-    const supabase = await createClient();
+    const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
     const { data: { user } } = await supabase.auth.getUser();
-    return user?.id ?? "anon";
+    if (!user) return "anon";
+    return `${user.id}:${shopId}`;
   } catch {
     return "anon";
   }
@@ -121,10 +162,9 @@ function mapSale(row: Row): SaleRecord {
   const fee = num(row.payment_fee_satang);
   const netRevenue = num(row.net_revenue_satang);
 
-  // If tip_satang exists in the database row, use it.
-  // In unmigrated databases, infer tip from netRevenue if net exceeds expected product revenue:
   const computedTip = Math.max(0, netRevenue - (productRev - discount + delivery - fee));
   const tip = row.tip_satang !== undefined && row.tip_satang !== null ? num(row.tip_satang) : computedTip;
+  const cleanNotes = stripShopPrefix(strOrNull(row.notes)).trim();
 
   return {
     id: str(row.id),
@@ -133,7 +173,7 @@ function mapSale(row: Row): SaleRecord {
     status: str(row.status) as SaleStatus,
     paymentStatus: str(row.payment_status) as PaymentStatus,
     customerName: strOrNull(row.customer_name),
-    notes: strOrNull(row.notes),
+    notes: cleanNotes || null,
     fulfillment: (str(row.fulfillment) || "pickup") as Fulfillment,
     productRevenue: productRev,
     discount,
@@ -148,7 +188,7 @@ function mapSale(row: Row): SaleRecord {
     slipPaths: rows(row.slip_uploads).map((s) => str(s.storage_path)).filter(Boolean),
     items: rows(row.sale_items).map((item) => ({
       menuId: str(item.menu_id),
-      name: str(item.menu_name_snapshot),
+      name: stripShopPrefix(str(item.menu_name_snapshot)),
       category: strOrNull(item.menu_category_snapshot),
       quantity: num(item.quantity),
       revenue: num(item.line_revenue_satang),
@@ -159,10 +199,10 @@ function mapSale(row: Row): SaleRecord {
   };
 }
 
-/** Sales with sold_at in [start, end), newest first. */
+/** Sales with sold_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const supabase = await createClient();
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
 
   const querySales = (cols: string) =>
     fetchAll("ข้อมูลการขาย", (from, to) =>
@@ -171,13 +211,13 @@ export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> 
 
   if (cachedHasTipColumn === false) {
     const data = await querySales(SALE_COLUMNS_LEGACY);
-    return data.map(mapSale);
+    return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
   }
 
   try {
     const data = await querySales(SALE_COLUMNS_WITH_TIP);
     cachedHasTipColumn = true;
-    return data.map(mapSale);
+    return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
   } catch (err: unknown) {
     const isMissingColumn =
       (err instanceof QueryError && (err.code === "42703" || err.originalMessage?.includes("tip_satang"))) ||
@@ -185,7 +225,7 @@ export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> 
     if (isMissingColumn) {
       cachedHasTipColumn = false;
       const data = await querySales(SALE_COLUMNS_LEGACY);
-      return data.map(mapSale);
+      return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
     }
     throw err;
   }
@@ -198,7 +238,7 @@ function mapExpense(row: Row): ExpenseRecord {
     category: str(row.category),
     kind: str(row.kind) as ExpenseKind,
     amount: num(row.amount_satang),
-    description: str(row.description),
+    description: stripShopPrefix(str(row.description)),
     payee: strOrNull(row.payee),
     paymentMethod: strOrNull(row.payment_method) as PaymentMethod | null,
     receiptPath: strOrNull(row.receipt_path),
@@ -206,14 +246,14 @@ function mapExpense(row: Row): ExpenseRecord {
   };
 }
 
-/** Expenses with spent_at in [start, end), newest first. */
+/** Expenses with spent_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchExpenses(start: Date, end: Date): Promise<ExpenseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const supabase = await createClient();
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
   const data = await fetchAll("ค่าใช้จ่าย", (from, to) =>
     supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
       .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to));
-  return data.map(mapExpense);
+  return data.filter((row) => matchesShopText(str(row.description), shopId)).map(mapExpense);
 }
 
 /** Batch yield divisor per menu ID (e.g. 1 batch = 30 crepes -> yield 30). */
@@ -266,7 +306,7 @@ export function mapMenu(row: Row, yieldOverride?: number): MenuRecord {
   const rawYield = yieldOverride ?? num(row.recipe_yield);
   return {
     id: str(row.id),
-    name: str(row.name),
+    name: stripShopPrefix(str(row.name)),
     category: str(row.category),
     imagePath: strOrNull(row.image_path),
     price: num(row.selling_price_satang),
@@ -280,7 +320,7 @@ export function mapMenu(row: Row, yieldOverride?: number): MenuRecord {
 
 export const fetchMenus = cache(async (): Promise<MenuRecord[]> => {
   if (!hasSupabaseEnv) return [];
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:menus`;
   const cached = getCached<MenuRecord[]>(cacheKey);
   if (cached) return cached;
@@ -292,13 +332,15 @@ export const fetchMenus = cache(async (): Promise<MenuRecord[]> => {
         .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to)),
     fetchMenuYields(),
   ]);
-  const res = data.map((row) => mapMenu(row, menuYields.get(str(row.id))));
+  const res = data
+    .filter((row) => matchesShopText(str(row.name), shopId))
+    .map((row) => mapMenu(row, menuYields.get(str(row.id))));
   return setCached(cacheKey, res, 60_000);
 });
 
 export const fetchIngredients = cache(async (): Promise<IngredientRecord[]> => {
   if (!hasSupabaseEnv) return [];
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:ingredients`;
   const cached = getCached<IngredientRecord[]>(cacheKey);
   if (cached) return cached;
@@ -308,18 +350,20 @@ export const fetchIngredients = cache(async (): Promise<IngredientRecord[]> => {
     supabase.from("ingredients")
       .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto,yield_updated_at,price_per_purchase_unit_satang,weighted_unit_cost_satang,is_active")
       .order("costing", { ascending: false }).order("name").range(from, to));
-  const res = data.map((row) => ({
-    id: str(row.id), name: str(row.name), category: str(row.category), costing: (str(row.costing) || "per_unit") as IngredientCosting,
-    baseUnit: str(row.base_unit), purchaseUnit: str(row.purchase_unit) || str(row.base_unit), unitsPerPurchaseUnit: num(row.units_per_purchase_unit) || 1,
-    yieldAuto: Boolean(row.yield_auto), yieldUpdatedAt: strOrNull(row.yield_updated_at),
-    pricePerPurchaseUnit: num(row.price_per_purchase_unit_satang), unitCost: num(row.weighted_unit_cost_satang), isActive: Boolean(row.is_active),
-  }));
+  const res = data
+    .filter((row) => matchesShopText(str(row.name), shopId))
+    .map((row) => ({
+      id: str(row.id), name: stripShopPrefix(str(row.name)), category: str(row.category), costing: (str(row.costing) || "per_unit") as IngredientCosting,
+      baseUnit: str(row.base_unit), purchaseUnit: str(row.purchase_unit) || str(row.base_unit), unitsPerPurchaseUnit: num(row.units_per_purchase_unit) || 1,
+      yieldAuto: Boolean(row.yield_auto), yieldUpdatedAt: strOrNull(row.yield_updated_at),
+      pricePerPurchaseUnit: num(row.price_per_purchase_unit_satang), unitCost: num(row.weighted_unit_cost_satang), isActive: Boolean(row.is_active),
+    }));
   return setCached(cacheKey, res, 60_000);
 });
 
 export const fetchPackaging = cache(async (): Promise<PackagingRecord[]> => {
   if (!hasSupabaseEnv) return [];
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:packaging`;
   const cached = getCached<PackagingRecord[]>(cacheKey);
   if (cached) return cached;
@@ -327,28 +371,32 @@ export const fetchPackaging = cache(async (): Promise<PackagingRecord[]> => {
   const supabase = await createClient();
   const data = await fetchAll("บรรจุภัณฑ์", (from, to) =>
     supabase.from("packaging_items").select("id,name,unit,unit_cost_satang,is_active,per_order").order("name").range(from, to));
-  const res = data.map((row) => ({
-    id: str(row.id), name: str(row.name), unit: str(row.unit), unitCost: num(row.unit_cost_satang),
-    isActive: Boolean(row.is_active), perOrder: row.per_order !== false,
-  }));
+  const res = data
+    .filter((row) => matchesShopText(str(row.name), shopId))
+    .map((row) => ({
+      id: str(row.id), name: stripShopPrefix(str(row.name)), unit: str(row.unit), unitCost: num(row.unit_cost_satang),
+      isActive: Boolean(row.is_active), perOrder: row.per_order !== false,
+    }));
   return setCached(cacheKey, res, 60_000);
 });
 
-/** All packaging purchases, newest first. */
+/** All packaging purchases for the active shop, newest first. */
 export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const supabase = await createClient();
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
   const data = await fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
     supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items(name,unit)")
       .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to));
-  return data.map((row) => {
-    const item = one(row.packaging_items);
-    return {
-      id: str(row.id), packagingItemId: str(row.packaging_item_id), itemName: str(item?.name), unit: str(item?.unit),
-      purchasedAt: str(row.purchased_at), price: num(row.price_satang), packQuantity: num(row.pack_quantity), packCount: num(row.pack_count) || 1,
-      vendor: strOrNull(row.vendor), expenseId: strOrNull(row.expense_id),
-    };
-  });
+  return data
+    .filter((row) => matchesShopText(str(one(row.packaging_items)?.name), shopId))
+    .map((row) => {
+      const item = one(row.packaging_items);
+      return {
+        id: str(row.id), packagingItemId: str(row.packaging_item_id), itemName: stripShopPrefix(str(item?.name)), unit: str(item?.unit),
+        purchasedAt: str(row.purchased_at), price: num(row.price_satang), packQuantity: num(row.pack_quantity), packCount: num(row.pack_count) || 1,
+        vendor: strOrNull(row.vendor), expenseId: strOrNull(row.expense_id),
+      };
+    });
 }
 
 const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients(name,costing)";
@@ -356,7 +404,7 @@ const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_q
 function mapPurchase(row: Row): PurchaseRecord {
   const ingredient = one(row.ingredients);
   return {
-    id: str(row.id), ingredientId: str(row.ingredient_id), ingredientName: str(ingredient?.name),
+    id: str(row.id), ingredientId: str(row.ingredient_id), ingredientName: stripShopPrefix(str(ingredient?.name)),
     costing: (str(ingredient?.costing) || "per_unit") as IngredientCosting, purchasedAt: str(row.purchased_at), price: num(row.price_satang),
     purchasedQuantity: row.purchased_quantity === null || row.purchased_quantity === undefined ? null : num(row.purchased_quantity),
     unit: strOrNull(row.purchase_unit), vendor: strOrNull(row.vendor),
@@ -365,21 +413,26 @@ function mapPurchase(row: Row): PurchaseRecord {
 
 export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const supabase = await createClient();
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
   const { data, error } = await supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
-    .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).limit(limit);
+    .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).limit(Math.max(limit * 4, 100));
   if (error) fail("ประวัติการซื้อ", error);
-  return rows(data).map(mapPurchase);
+  return rows(data)
+    .filter((row) => matchesShopText(str(one(row.ingredients)?.name), shopId))
+    .slice(0, limit)
+    .map(mapPurchase);
 }
 
-/** Ingredient purchases with purchased_at in [start, end), newest first. */
+/** Ingredient purchases with purchased_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchIngredientPurchases(start: Date, end: Date): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const supabase = await createClient();
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
   const data = await fetchAll("การซื้อวัตถุดิบ", (from, to) =>
     supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
       .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to));
-  return data.map(mapPurchase);
+  return data
+    .filter((row) => matchesShopText(str(one(row.ingredients)?.name), shopId))
+    .map(mapPurchase);
 }
 
 export type LatestPurchase = { purchasedAt: string; price: number; quantity: number | null };
@@ -426,13 +479,14 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
     unitLabel: DEFAULT_UNIT_LABEL,
   };
   if (!hasSupabaseEnv) return fallback;
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:settings:sales`;
   const cached = getCached<SaleSettings>(cacheKey);
   if (cached) return cached;
 
   const supabase = await createClient();
-  const { data, error } = await supabase.from("settings").select("value").eq("key", SALE_SETTINGS_KEY).maybeSingle();
+  const key = scopedSettingsKey(SALE_SETTINGS_KEY, shopId);
+  const { data, error } = await supabase.from("settings").select("value").eq("key", key).maybeSingle();
   if (error) fail("การตั้งค่า", error);
   const value = (data?.value ?? {}) as Row;
   const fee = Number(value.default_delivery_fee_satang);
@@ -459,13 +513,14 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
 
 export const fetchPricePresets = cache(async (): Promise<PricePreset[]> => {
   if (!hasSupabaseEnv) return [];
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:settings:presets`;
   const cached = getCached<PricePreset[]>(cacheKey);
   if (cached) return cached;
 
   const supabase = await createClient();
-  const { data, error } = await supabase.from("settings").select("value").eq("key", PRICE_PRESETS_SETTINGS_KEY).maybeSingle();
+  const key = scopedSettingsKey(PRICE_PRESETS_SETTINGS_KEY, shopId);
+  const { data, error } = await supabase.from("settings").select("value").eq("key", key).maybeSingle();
   if (error) fail("สูตรเปิดบิลด่วน", error);
   const value = data?.value;
   if (!value) return setCached(cacheKey, [], 60_000);
@@ -497,35 +552,59 @@ export type PooledRate = ReturnType<typeof pooledIngredientBps> & { pooledPurcha
 
 /**
  * Other-ingredient rate for new orders: purchases of pooled ingredients ÷ food sales,
- * over the last 30 days (or since the first pooled purchase, if more recent).
+ * over the last 30 days (or since the first pooled purchase of the active shop, if more recent).
  */
 export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<PooledRate> => {
   const initialBps = (settings ?? (await fetchSaleSettings())).initialPooledBps;
   const empty = { pooledPurchases: 0, foodRevenue: 0, historyDays: 0, initialBps };
   if (!hasSupabaseEnv) return { ...pooledIngredientBps(empty), ...empty };
 
-  const userId = await getRequestUserId();
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
   const cacheKey = `${userId}:pooled_rate`;
   const cached = getCached<PooledRate>(cacheKey);
   if (cached) return cached;
 
   const supabase = await createClient();
   const now = Date.now();
-  const first = await supabase.from("ingredient_purchases").select("purchased_at,ingredients!inner(costing)")
-    .eq("ingredients.costing", "pooled").lte("purchased_at", new Date(now).toISOString()).order("purchased_at").limit(1);
-  if (first.error) fail("การซื้อวัตถุดิบ", first.error);
-  const firstAt = rows(first.data)[0]?.purchased_at;
+  const allPooledPurchases = await fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+    supabase.from("ingredient_purchases")
+      .select("purchased_at,price_satang,ingredients!inner(name,costing)")
+      .eq("ingredients.costing", "pooled")
+      .lte("purchased_at", new Date(now).toISOString())
+      .order("purchased_at", { ascending: true })
+      .range(from, to),
+  );
+  const shopPurchases = allPooledPurchases.filter((r) => matchesShopText(str(one(r.ingredients)?.name), shopId));
+  const firstAt = shopPurchases[0]?.purchased_at;
   if (!firstAt) return setCached(cacheKey, { ...pooledIngredientBps(empty), ...empty }, 60_000);
+
   const start = new Date(Math.max(now - COSTING_WINDOW_DAYS * DAY_MS, Date.parse(str(firstAt))));
-  const [purchases, sales] = await Promise.all([
-    fetchAll("การซื้อวัตถุดิบ", (from, to) => supabase.from("ingredient_purchases").select("price_satang,ingredients!inner(costing)")
-      .eq("ingredients.costing", "pooled").gte("purchased_at", start.toISOString()).lte("purchased_at", new Date(now).toISOString()).order("id").range(from, to)),
-    fetchAll("ข้อมูลการขาย", (from, to) => supabase.from("sale_items").select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at)")
-      .eq("sales.status", "confirmed").gte("sales.sold_at", start.toISOString()).lte("sales.sold_at", new Date(now).toISOString()).order("id").range(from, to)),
-  ]);
+  const startIso = start.toISOString();
+  const windowPurchases = shopPurchases.filter((r) => str(r.purchased_at) >= startIso);
+
+  const rawSales = await fetchAll("ข้อมูลการขาย", (from, to) =>
+    supabase.from("sale_items")
+      .select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at,notes)")
+      .eq("sales.status", "confirmed")
+      .gte("sales.sold_at", startIso)
+      .lte("sales.sold_at", new Date(now).toISOString())
+      .order("id")
+      .range(from, to),
+  );
+  const shopSales = rawSales.filter((r) =>
+    matchesSaleShop({ notes: one(r.sales)?.notes, sale_items: [r] }, shopId),
+  );
+
   const input = {
-    pooledPurchases: purchases.reduce((sum, r) => sum + num(r.price_satang), 0),
-    foodRevenue: pooledFoodRevenue(sales.map(r => ({ menuId: strOrNull(r.menu_id), category: strOrNull(r.menu_category_snapshot), name: str(r.menu_name_snapshot), revenue: num(r.line_revenue_satang) }))),
+    pooledPurchases: windowPurchases.reduce((sum, r) => sum + num(r.price_satang), 0),
+    foodRevenue: pooledFoodRevenue(
+      shopSales.map((r) => ({
+        menuId: strOrNull(r.menu_id),
+        category: strOrNull(r.menu_category_snapshot),
+        name: stripShopPrefix(str(r.menu_name_snapshot)),
+        revenue: num(r.line_revenue_satang),
+      })),
+    ),
     historyDays: Math.floor((now - start.getTime()) / DAY_MS),
     initialBps,
   };
@@ -533,49 +612,132 @@ export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<Po
   return setCached(cacheKey, res, 60_000);
 });
 
+/** Fetches all shops registered under the current user's email account, plus the activeShopId. */
+export const fetchShops = cache(async (): Promise<{ activeShopId: string; shops: ShopSummary[]; email: string | null }> => {
+  const defaultFallback: ShopSummary = {
+    id: DEFAULT_SHOP_ID,
+    shopName: "kaikai",
+    displayName: "เจ้าของร้าน",
+    avatarUrl: null,
+    unitLabel: DEFAULT_UNIT_LABEL,
+    createdAt: new Date(0).toISOString(),
+  };
+  if (!hasSupabaseEnv) {
+    return { activeShopId: DEFAULT_SHOP_ID, shops: [defaultFallback], email: null };
+  }
+  try {
+    const [supabase, activeShopId] = await Promise.all([createClient(), getActiveShopId()]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { activeShopId: DEFAULT_SHOP_ID, shops: [defaultFallback], email: null };
+
+    const meta = (user.user_metadata ?? {}) as Row;
+    let defaultAvatar: string | null = str(meta.avatar_url) || str(meta.picture) || null;
+    let defaultDisplay = str(meta.display_name);
+    let defaultShopName = str(meta.shop_name);
+
+    const [profileRes, settingsRes] = await Promise.all([
+      supabase.from("profiles").select("display_name,shop_name,avatar_url").eq("id", user.id).maybeSingle(),
+      supabase.from("settings").select("key,value").eq("owner_id", user.id),
+    ]);
+
+    if (!profileRes.error && profileRes.data) {
+      if (str(profileRes.data.avatar_url)) defaultAvatar = str(profileRes.data.avatar_url);
+      if (str(profileRes.data.display_name)) defaultDisplay = str(profileRes.data.display_name);
+      if (str(profileRes.data.shop_name)) defaultShopName = str(profileRes.data.shop_name);
+    } else if (profileRes.error) {
+      const { data: dataFallback } = await supabase.from("profiles").select("display_name,shop_name").eq("id", user.id).maybeSingle();
+      if (dataFallback) {
+        if (str(dataFallback.display_name)) defaultDisplay = str(dataFallback.display_name);
+        if (str(dataFallback.shop_name)) defaultShopName = str(dataFallback.shop_name);
+      }
+    }
+
+    const settingsMap = new Map<string, Row>();
+    for (const sRow of rows(settingsRes.data)) {
+      const k = str(sRow.key);
+      if (k && sRow.value && typeof sRow.value === "object") {
+        settingsMap.set(k, sRow.value as Row);
+      }
+    }
+
+    const primaryProfileSetting = settingsMap.get("profile");
+    if (primaryProfileSetting) {
+      if (str(primaryProfileSetting.shop_name)) defaultShopName = str(primaryProfileSetting.shop_name);
+      if (str(primaryProfileSetting.display_name)) defaultDisplay = str(primaryProfileSetting.display_name);
+      if ("avatar_url" in primaryProfileSetting) {
+        defaultAvatar = primaryProfileSetting.avatar_url === null ? null : str(primaryProfileSetting.avatar_url) || defaultAvatar;
+      }
+    }
+    const primarySaleSetting = settingsMap.get(SALE_SETTINGS_KEY);
+    const defaultUnitLabel = str(primarySaleSetting?.unit_label).trim() || DEFAULT_UNIT_LABEL;
+
+    const primaryShop: ShopSummary = {
+      id: DEFAULT_SHOP_ID,
+      shopName: defaultShopName || "kaikai",
+      displayName: defaultDisplay || defaultShopName || "เจ้าของร้าน",
+      avatarUrl: defaultAvatar || null,
+      unitLabel: defaultUnitLabel,
+      createdAt: user.created_at ?? new Date(0).toISOString(),
+    };
+
+    const registryRow = settingsMap.get(SHOPS_REGISTRY_SETTINGS_KEY);
+    const rawList = Array.isArray(registryRow?.shops) ? (registryRow!.shops as Row[]) : [];
+    const extraShops: ShopSummary[] = [];
+    const seenIds = new Set<string>([DEFAULT_SHOP_ID]);
+
+    for (const item of rawList) {
+      const id = normalizeShopId(str(item.id));
+      if (id === DEFAULT_SHOP_ID || seenIds.has(id)) continue;
+      seenIds.add(id);
+
+      const profKey = scopedSettingsKey("profile", id);
+      const saleKey = scopedSettingsKey(SALE_SETTINGS_KEY, id);
+      const prof = settingsMap.get(profKey);
+      const sale = settingsMap.get(saleKey);
+
+      const sName = str(prof?.shop_name) || str(item.shopName ?? item.shop_name) || "ร้านสาขา";
+      const dName = str(prof?.display_name) || str(item.displayName ?? item.display_name) || sName;
+      let av: string | null = strOrNull(item.avatarUrl ?? item.avatar_url);
+      if (prof && "avatar_url" in prof) {
+        av = prof.avatar_url === null ? null : str(prof.avatar_url) || av;
+      }
+      const uLabel = str(sale?.unit_label).trim() || str(item.unitLabel ?? item.unit_label).trim() || DEFAULT_UNIT_LABEL;
+
+      extraShops.push({
+        id,
+        shopName: sName,
+        displayName: dName,
+        avatarUrl: av,
+        unitLabel: uLabel,
+        createdAt: str(item.createdAt ?? item.created_at) || new Date().toISOString(),
+      });
+    }
+
+    const allShops = [primaryShop, ...extraShops];
+    const resolvedActiveId = seenIds.has(activeShopId) ? activeShopId : DEFAULT_SHOP_ID;
+
+    return {
+      activeShopId: resolvedActiveId,
+      shops: allShops,
+      email: user.email ?? null,
+    };
+  } catch (err) {
+    console.error("fetchShops failed gracefully:", err);
+    return { activeShopId: DEFAULT_SHOP_ID, shops: [defaultFallback], email: null };
+  }
+});
+
 export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
   const fallback = { displayName: "เจ้าของร้าน", shopName: "kaikai", email: null, avatarUrl: null };
   if (!hasSupabaseEnv) return fallback;
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return fallback;
-    const meta = (user.user_metadata ?? {}) as Row;
-    let avatarUrl: string | null = str(meta.avatar_url) || str(meta.picture) || null;
-    let displayName = str(meta.display_name);
-    let shopName = str(meta.shop_name);
-
-    const [profileRes, settingRes] = await Promise.all([
-      supabase.from("profiles").select("display_name,shop_name,avatar_url").eq("id", user.id).maybeSingle(),
-      supabase.from("settings").select("value").eq("owner_id", user.id).eq("key", "profile").maybeSingle(),
-    ]);
-
-    if (!profileRes.error && profileRes.data) {
-      if (str(profileRes.data.avatar_url)) avatarUrl = str(profileRes.data.avatar_url);
-      if (str(profileRes.data.display_name)) displayName = str(profileRes.data.display_name);
-      if (str(profileRes.data.shop_name)) shopName = str(profileRes.data.shop_name);
-    } else if (profileRes.error) {
-      const { data: dataFallback } = await supabase.from("profiles").select("display_name,shop_name").eq("id", user.id).maybeSingle();
-      if (dataFallback) {
-        if (str(dataFallback.display_name)) displayName = str(dataFallback.display_name);
-        if (str(dataFallback.shop_name)) shopName = str(dataFallback.shop_name);
-      }
-    }
-
-    if (!settingRes.error && settingRes.data?.value) {
-      const sv = settingRes.data.value as Row;
-      if (str(sv.shop_name)) shopName = str(sv.shop_name);
-      if (str(sv.display_name)) displayName = str(sv.display_name);
-      if ("avatar_url" in sv) {
-        avatarUrl = sv.avatar_url === null ? null : str(sv.avatar_url) || avatarUrl;
-      }
-    }
-
+    const { activeShopId, shops, email } = await fetchShops();
+    const current = shops.find((s) => s.id === activeShopId) ?? shops[0] ?? fallback;
     return {
-      displayName: displayName || fallback.displayName,
-      shopName: shopName || fallback.shopName,
-      email: user.email ?? null,
-      avatarUrl: avatarUrl || null,
+      displayName: current.displayName || fallback.displayName,
+      shopName: current.shopName || fallback.shopName,
+      email,
+      avatarUrl: current.avatarUrl ?? null,
     };
   } catch (err) {
     console.error("fetchProfile failed gracefully:", err);
