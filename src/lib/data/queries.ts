@@ -24,6 +24,7 @@ export const DEFAULT_INITIAL_POOLED_BPS = 1000;
 export const SALE_SETTINGS_KEY = "sales";
 export const PRICE_PRESETS_SETTINGS_KEY = "price_presets";
 export const MENU_YIELDS_SETTINGS_KEY = "menu_yields";
+export const PACKAGING_DEFAULTS_SETTINGS_KEY = "packaging_defaults";
 
 // User-scoped in-memory cache to eliminate redundant Supabase roundtrips in serverless
 interface CacheEntry<T> {
@@ -234,6 +235,31 @@ export const fetchMenuYields = cache(async (): Promise<Map<string, number>> => {
     }
   }
   return setCached(cacheKey, yields, 60_000);
+});
+
+export type PackagingDefaultConfig = { packPriceSatang: number; packQuantity: number };
+
+/** Configured default pack price and quantity per packaging item ID (when no purchase record exists yet). */
+export const fetchPackagingDefaults = cache(async (): Promise<Map<string, PackagingDefaultConfig>> => {
+  const defaults = new Map<string, PackagingDefaultConfig>();
+  if (!hasSupabaseEnv) return defaults;
+  const userId = await getRequestUserId();
+  const cacheKey = `${userId}:settings:packaging_defaults`;
+  const cached = getCached<Map<string, PackagingDefaultConfig>>(cacheKey);
+  if (cached) return cached;
+
+  const supabase = await createClient();
+  const { data } = await supabase.from("settings").select("value").eq("key", PACKAGING_DEFAULTS_SETTINGS_KEY).maybeSingle();
+  const raw = (data?.value ?? {}) as Record<string, unknown>;
+  for (const [packId, val] of Object.entries(raw)) {
+    const entry = (val ?? {}) as Record<string, unknown>;
+    const packPriceSatang = Number(entry.packPriceSatang ?? entry.pack_price_satang);
+    const packQuantity = Number(entry.packQuantity ?? entry.pack_quantity);
+    if (Number.isFinite(packPriceSatang) && packPriceSatang > 0 && Number.isFinite(packQuantity) && packQuantity > 0) {
+      defaults.set(packId, { packPriceSatang, packQuantity });
+    }
+  }
+  return setCached(cacheKey, defaults, 60_000);
 });
 
 export function mapMenu(row: Row, yieldOverride?: number): MenuRecord {
@@ -511,12 +537,6 @@ export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
   const fallback = { displayName: "เจ้าของร้าน", shopName: "kaikai", email: null, avatarUrl: null };
   if (!hasSupabaseEnv) return fallback;
   try {
-    const userId = await getRequestUserId();
-    if (userId === "anon") return fallback;
-    const cacheKey = `${userId}:profile`;
-    const cached = getCached<ProfileRecord>(cacheKey);
-    if (cached) return cached;
-
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return fallback;
@@ -525,13 +545,16 @@ export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
     let displayName = str(meta.display_name);
     let shopName = str(meta.shop_name);
 
-    // Attempt to load from profiles table, gracefully handling if avatar_url is not yet migrated
-    const { data, error } = await supabase.from("profiles").select("display_name,shop_name,avatar_url").eq("id", user.id).maybeSingle();
-    if (!error && data) {
-      if (str(data.avatar_url)) avatarUrl = str(data.avatar_url);
-      if (str(data.display_name)) displayName = str(data.display_name);
-      if (str(data.shop_name)) shopName = str(data.shop_name);
-    } else if (error) {
+    const [profileRes, settingRes] = await Promise.all([
+      supabase.from("profiles").select("display_name,shop_name,avatar_url").eq("id", user.id).maybeSingle(),
+      supabase.from("settings").select("value").eq("owner_id", user.id).eq("key", "profile").maybeSingle(),
+    ]);
+
+    if (!profileRes.error && profileRes.data) {
+      if (str(profileRes.data.avatar_url)) avatarUrl = str(profileRes.data.avatar_url);
+      if (str(profileRes.data.display_name)) displayName = str(profileRes.data.display_name);
+      if (str(profileRes.data.shop_name)) shopName = str(profileRes.data.shop_name);
+    } else if (profileRes.error) {
       const { data: dataFallback } = await supabase.from("profiles").select("display_name,shop_name").eq("id", user.id).maybeSingle();
       if (dataFallback) {
         if (str(dataFallback.display_name)) displayName = str(dataFallback.display_name);
@@ -539,13 +562,21 @@ export const fetchProfile = cache(async (): Promise<ProfileRecord> => {
       }
     }
 
-    const res: ProfileRecord = {
+    if (!settingRes.error && settingRes.data?.value) {
+      const sv = settingRes.data.value as Row;
+      if (str(sv.shop_name)) shopName = str(sv.shop_name);
+      if (str(sv.display_name)) displayName = str(sv.display_name);
+      if ("avatar_url" in sv) {
+        avatarUrl = sv.avatar_url === null ? null : str(sv.avatar_url) || avatarUrl;
+      }
+    }
+
+    return {
       displayName: displayName || fallback.displayName,
       shopName: shopName || fallback.shopName,
       email: user.email ?? null,
       avatarUrl: avatarUrl || null,
     };
-    return setCached(cacheKey, res, 60_000);
   } catch (err) {
     console.error("fetchProfile failed gracefully:", err);
     return fallback;

@@ -78,7 +78,7 @@ export async function markSalePaidByTransfer(form: FormData): Promise<ActionStat
   });
 }
 
-/** Marks an unpaid or partially paid sale as fully paid by recording the remaining balance. */
+/** Marks an unpaid or partially paid sale as fully paid by recording the remaining customer-due balance. */
 export async function markSalePaid(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const saleId = id(form);
@@ -88,7 +88,7 @@ export async function markSalePaid(form: FormData): Promise<ActionState> {
 
     const { data: sale, error: saleErr } = await supabase
       .from("sales")
-      .select("id, net_revenue_satang, payment_status, status, payments(amount_satang)")
+      .select("id, net_revenue_satang, payment_fee_satang, payment_status, status, payments(amount_satang)")
       .eq("id", saleId)
       .maybeSingle();
     if (saleErr) dbError(saleErr);
@@ -101,7 +101,8 @@ export async function markSalePaid(form: FormData): Promise<ActionState> {
 
     const existingPayments = Array.isArray(sale.payments) ? sale.payments : [];
     const alreadyPaid = existingPayments.reduce((sum, p) => sum + Number((p as { amount_satang?: number }).amount_satang ?? 0), 0);
-    const remaining = Math.max(0, Number(sale.net_revenue_satang ?? 0) - alreadyPaid);
+    const customerDue = Number(sale.net_revenue_satang ?? 0) + Number(sale.payment_fee_satang ?? 0);
+    const remaining = Math.max(0, customerDue - alreadyPaid);
 
     if (remaining > 0) {
       const { error: payErr } = await supabase.from("payments").insert({

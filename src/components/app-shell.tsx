@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, Menu, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Brand } from "./brand";
 import { navItems } from "./icons";
+import { AVATAR_REMOVED_KEY, AVATAR_STORAGE_KEY, AVATAR_UPDATED_EVENT } from "./profile-avatar-field";
 import { PwaDrawerInstallButton } from "./pwa-install";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
@@ -27,6 +28,39 @@ export function AppShell({
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [liveAvatarUrl, setLiveAvatarUrl] = useState<string | null>(avatarUrl ?? null);
+  const [avatarBroken, setAvatarBroken] = useState(false);
+
+  useEffect(() => {
+    setAvatarBroken(false);
+    if (avatarUrl) {
+      setLiveAvatarUrl(avatarUrl);
+      try {
+        window.localStorage.setItem(AVATAR_STORAGE_KEY, avatarUrl);
+        window.localStorage.removeItem(AVATAR_REMOVED_KEY);
+      } catch {
+        // Ignore
+      }
+    } else {
+      try {
+        const wasRemoved = window.localStorage.getItem(AVATAR_REMOVED_KEY) === "true";
+        const cached = window.localStorage.getItem(AVATAR_STORAGE_KEY);
+        setLiveAvatarUrl(!wasRemoved && cached ? cached : null);
+      } catch {
+        setLiveAvatarUrl(null);
+      }
+    }
+  }, [avatarUrl]);
+
+  useEffect(() => {
+    function onAvatarUpdated(e: Event) {
+      const detail = (e as CustomEvent<{ avatarUrl: string | null }>).detail;
+      setAvatarBroken(false);
+      setLiveAvatarUrl(detail?.avatarUrl ?? null);
+    }
+    window.addEventListener(AVATAR_UPDATED_EVENT, onAvatarUpdated);
+    return () => window.removeEventListener(AVATAR_UPDATED_EVENT, onAvatarUpdated);
+  }, []);
 
   async function handleLogout() {
     if (!window.confirm("คุณต้องการออกจากระบบใช่หรือไม่?")) return;
@@ -44,6 +78,7 @@ export function AppShell({
 
   const active = (href: string) => href === "/dashboard" || href === "/sales" ? pathname === href : pathname.startsWith(href);
   const initial = Array.from((displayName || shopName || "ก").trim())[0] ?? "ก";
+  const showAvatar = Boolean(liveAvatarUrl && !avatarBroken);
   const itemByHref = new Map(navItems.map((item) => [item.href, item]));
   const bottomNavItems = [
     itemByHref.get("/dashboard")!,
@@ -82,9 +117,9 @@ export function AppShell({
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">
-            {avatarUrl ? (
+            {showAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt="" className="avatar-img" />
+              <img src={liveAvatarUrl!} alt="" className="avatar-img" onError={() => setAvatarBroken(true)} />
             ) : (
               initial
             )}
@@ -103,9 +138,9 @@ export function AppShell({
           {demoMode && <span className="demo-pill desktop-only">ยังไม่เชื่อมฐานข้อมูล</span>}
           <span className="topbar-shop">{shopName || displayName || "kaikai"}</span>
           <Link href="/settings" className="avatar small desktop-only" aria-label="ตั้งค่าบัญชี">
-            {avatarUrl ? (
+            {showAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt="" className="avatar-img" />
+              <img src={liveAvatarUrl!} alt="" className="avatar-img" onError={() => setAvatarBroken(true)} />
             ) : (
               initial
             )}
@@ -125,9 +160,9 @@ export function AppShell({
         ))}
         <Link href="/settings" className={`nav-profile-tab ${active("/settings") ? "active" : ""}`} aria-label="โปรไฟล์">
           <span className="nav-avatar">
-            {avatarUrl ? (
+            {showAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt="" className="avatar-img" />
+              <img src={liveAvatarUrl!} alt="" className="avatar-img" onError={() => setAvatarBroken(true)} />
             ) : (
               initial
             )}

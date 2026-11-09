@@ -13,6 +13,14 @@ describe("packaging purchase defaults", () => {
     expect(resolvePackagingDefaultPack(item)).toEqual({ packPrice: "", perPack: "" });
     expect(resolvePackagingDefaultPack({ ...item, unitCost: 260 })).toEqual({ packPrice: "", perPack: "" });
   });
+  it("uses configured pack default when no purchase record exists yet", () => {
+    expect(
+      resolvePackagingDefaultPack({ ...item, unitCost: 260 }, undefined, undefined, {
+        packPriceSatang: 6500,
+        packQuantity: 25,
+      }),
+    ).toEqual({ packPrice: "65.00", perPack: "25" });
+  });
   it("keeps quantities explicitly recorded for multiple packs", () => {
     const purchase = { price: 13000, packCount: 2, packQuantity: 100 } as PackagingPurchaseRecord;
     expect(resolvePackagingDefaultPack(item, purchase)).toEqual({ packPrice: "65.00", perPack: "50" });

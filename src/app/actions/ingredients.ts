@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { readCostRows } from "@/lib/cost-rows";
 import { learnedYield, weightedPricePerUnit, yieldWindow } from "@/lib/analytics";
-import { MENU_YIELDS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
+import { MENU_YIELDS_SETTINGS_KEY, PACKAGING_DEFAULTS_SETTINGS_KEY, invalidateQueryCache } from "@/lib/data/queries";
 import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
@@ -18,6 +18,7 @@ const POOLED_UNIT = "บาท";
 function revalidateCosts() {
   invalidateQueryCache("ingredients");
   invalidateQueryCache("packaging");
+  invalidateQueryCache("packaging_defaults");
   invalidateQueryCache("recipes");
   invalidateQueryCache("menus");
   invalidateQueryCache("pooled_rate");
@@ -37,31 +38,80 @@ function yieldAutoField(form: FormData) {
   return form.get("yield_auto") === "true" || form.get("yield_auto") === "on";
 }
 
+const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value * 1_000_000) / 1_000_000 : 0);
+
 /**
- * Adds an ingredient.
- * per_unit: bought by `purchase_unit` (กก., แผง, กระปุก, ลิตร), used in recipes by `base_unit` (กรัม, มล., ฟอง, ชิ้น), 1 purchase_unit ≈ `units_per_purchase_unit` base_units.
- * pooled: recorded by amount only and costed as a % of food sales.
+ * Adds an ingredient (master data only — never creates a fake purchase or expense row).
+ * per_unit: bought by `purchase_unit` (กก., แผง, กระปุก, ลิตร), used in recipes by `base_unit` (กรัม, มล., ฟอง, ชิ้น),
+ * 1 purchase_unit ≈ `units_per_purchase_unit` base_units, with optional `initial_price` per purchase unit.
+ * pooled: recorded by amount only when bought and costed as a % of food sales.
  */
 export async function createIngredient(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
     const costing = oneOf(form, "costing", ["per_unit", "pooled"] as const, "วิธีคิดต้นทุน");
-    const fields = costing === "per_unit"
-      ? {
-        purchase_unit: text(form, "purchase_unit", "หน่วยที่ซื้อ", { max: 30 }),
-        base_unit: text(form, "base_unit", "หน่วยที่ใช้ในสูตร", { max: 30 }),
-        units_per_purchase_unit: quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!,
-        yield_auto: yieldAutoField(form),
-      }
-      : { purchase_unit: null, base_unit: POOLED_UNIT, units_per_purchase_unit: 1, yield_auto: false };
-    const { error } = await supabase.from("ingredients").insert({ owner_id: user.id, name, costing, category: INGREDIENT_COSTING_LABELS[costing], ...fields });
+
+    let purchaseUnit: string | null = null;
+    let baseUnit = POOLED_UNIT;
+    let unitsPerPurchase = 1;
+    let yieldAuto = false;
+    let initialPrice = 0;
+    let unitCost = 0;
+
+    if (costing === "per_unit") {
+      purchaseUnit = text(form, "purchase_unit", "หน่วยที่ซื้อ", { max: 30 });
+      baseUnit = text(form, "base_unit", "หน่วยที่ใช้ในสูตร", { max: 30 });
+      unitsPerPurchase = quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!;
+      yieldAuto = yieldAutoField(form);
+      initialPrice = money(form, "initial_price", `ราคาต่อ${purchaseUnit}ตั้งต้น`);
+      unitCost = initialPrice > 0 ? roundCost(initialPrice / unitsPerPurchase) : 0;
+    }
+
+    const insertPayload: Row = {
+      owner_id: user.id,
+      name,
+      costing,
+      category: INGREDIENT_COSTING_LABELS[costing],
+      purchase_unit: purchaseUnit,
+      base_unit: baseUnit,
+      units_per_purchase_unit: unitsPerPurchase,
+      yield_auto: yieldAuto,
+      price_per_purchase_unit_satang: initialPrice,
+      weighted_unit_cost_satang: unitCost,
+    };
+
+    let { error } = await supabase.from("ingredients").insert(insertPayload);
+    if (error && error.code === "22P02" && error.message.includes("bigint")) {
+      const fallback = await supabase.from("ingredients").insert({
+        ...insertPayload,
+        price_per_purchase_unit_satang: Math.round(initialPrice),
+        weighted_unit_cost_satang: Math.round(unitCost),
+      });
+      error = fallback.error;
+    }
     if (error) dbError(error, { unique: `มีวัตถุดิบชื่อ “${name}” อยู่แล้ว` });
     revalidateCosts();
-    return { ok: true, message: costing === "per_unit" ? `เพิ่ม “${name}” แล้ว — ใส่ในสูตรเมนูและบันทึกการซื้อเพื่อคำนวณต้นทุน` : `เพิ่ม “${name}” แล้ว — บันทึกยอดซื้อเพื่อคำนวณ %` };
+
+    if (costing === "per_unit" && unitCost > 0) {
+      return {
+        ok: true,
+        message: `เพิ่ม “${name}” แล้ว · ตก${baseUnit}ละ ${formatUnitCost(unitCost)} (ตั้งเป็นต้นทุนเริ่มต้นแล้ว ยังไม่ถูกคิดเป็นบิลจ่ายเงิน)`,
+      };
+    }
+    return {
+      ok: true,
+      message:
+        costing === "per_unit"
+          ? `เพิ่ม “${name}” แล้ว — ใส่ในสูตรเมนูและตั้งราคาหรือบันทึกการซื้อเพื่อคำนวณต้นทุน`
+          : `เพิ่ม “${name}” แล้ว — บันทึกยอดซื้อเมื่อจ่ายตลาดจริงเพื่อคำนวณ %`,
+    };
   });
 }
 
-/** Renames an ingredient; for per-unit items also updates units, units per purchase unit, and whether yield is learned automatically. */
+/**
+ * Updates an ingredient's master data (name, units, units per purchase unit, optional base purchase price, and auto-yield).
+ * Does not create any purchase or expense records.
+ */
 export async function updateIngredient(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase }) => {
     const ingredientId = id(form);
@@ -77,13 +127,20 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
       const units = quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!;
       const rawPurchaseUnit = optionalText(form, "purchase_unit", "หน่วยที่ซื้อ", 30);
       const rawBaseUnit = optionalText(form, "base_unit", "หน่วยที่ใช้ในสูตร", 30);
+      const effectivePurchaseUnit = rawPurchaseUnit || String(current.purchase_unit ?? "กก.");
+      const rawPriceInput = String(form.get("price_per_purchase_unit") ?? "").trim();
+      const pricePerPurchaseUnit = rawPriceInput !== ""
+        ? money(form, "price_per_purchase_unit", `ราคาต่อ${effectivePurchaseUnit}`)
+        : Number(current.price_per_purchase_unit_satang);
+
       update = {
         ...update,
-        purchase_unit: rawPurchaseUnit || String(current.purchase_unit ?? "กก."),
+        purchase_unit: effectivePurchaseUnit,
         base_unit: rawBaseUnit || String(current.base_unit ?? "ชิ้น"),
         units_per_purchase_unit: units,
         yield_auto: yieldAutoField(form),
-        weighted_unit_cost_satang: roundCost(Number(current.price_per_purchase_unit_satang) / units),
+        price_per_purchase_unit_satang: pricePerPurchaseUnit,
+        weighted_unit_cost_satang: roundCost(pricePerPurchaseUnit / units),
       };
       if (units !== Number(current.units_per_purchase_unit)) update.yield_updated_at = now;
     }
@@ -91,6 +148,7 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
     if (error && error.code === "22P02" && error.message.includes("bigint") && update.weighted_unit_cost_satang !== undefined) {
       const fallback = await supabase.from("ingredients").update({
         ...update,
+        price_per_purchase_unit_satang: Math.round(Number(update.price_per_purchase_unit_satang ?? 0)),
         weighted_unit_cost_satang: Math.round(Number(update.weighted_unit_cost_satang)),
       }).eq("id", ingredientId);
       error = fallback.error;
@@ -101,8 +159,6 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
     return { ok: true, message: "บันทึกแล้ว และคำนวณต้นทุนเมนูใหม่" };
   });
 }
-
-const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value * 1_000_000) / 1_000_000 : 0);
 
 type PerUnitIngredient = { id: string; name: string; base_unit: string; purchase_unit: string | null; units_per_purchase_unit: number; yield_auto: boolean };
 
@@ -273,23 +329,46 @@ function perOrderField(form: FormData) {
   return value === "true";
 }
 
-/** Reads "pack price + pieces per pack" of the create form. Both empty = no purchase; one of them empty = error. */
-function firstPackFields(form: FormData): PackPurchase | null {
+/** Reads optional "pack price + pieces per pack" for setting up a packaging item's default cost. Both empty = no default; one empty = error. */
+function optionalPackDefaultFields(form: FormData): { priceSatang: number; packQuantity: number } | null {
   const hasPrice = String(form.get("pack_price") ?? "").trim() !== "";
   const hasQuantity = String(form.get("pack_quantity") ?? "").trim() !== "";
   if (!hasPrice && !hasQuantity) return null;
-  if (hasPrice !== hasQuantity) throw new InputError("กรอกทั้งราคาที่ซื้อและจำนวนในแพ็ก หรือเว้นว่างทั้งคู่");
+  if (hasPrice !== hasQuantity) throw new InputError("กรอกทั้งราคาต่อแพ็กและจำนวนในแพ็ก หรือเว้นว่างทั้งคู่");
   return {
-    purchasedAt: dateField(form, "purchased_at", "วันที่ซื้อ"),
-    price: money(form, "pack_price", "ราคาที่ซื้อ", { required: true }),
+    priceSatang: money(form, "pack_price", "ราคาต่อแพ็ก", { required: true, positive: true }),
     packQuantity: quantity(form, "pack_quantity", "จำนวนในแพ็ก")!,
-    packCount: 1,
-    vendor: optionalText(form, "vendor", "ร้านค้า", 120),
   };
 }
 
+async function savePackagingDefaultConfig(
+  supabase: SupabaseClient,
+  ownerId: string,
+  packagingId: string,
+  config: { packPriceSatang: number; packQuantity: number } | null,
+) {
+  const { data: existing } = await supabase
+    .from("settings")
+    .select("value")
+    .eq("key", PACKAGING_DEFAULTS_SETTINGS_KEY)
+    .maybeSingle();
+  const map: Record<string, unknown> = { ...((existing?.value ?? {}) as Record<string, unknown>) };
+  if (config && config.packPriceSatang > 0 && config.packQuantity > 0) {
+    map[packagingId] = {
+      packPriceSatang: Math.round(config.packPriceSatang),
+      packQuantity: config.packQuantity,
+    };
+  } else {
+    delete map[packagingId];
+  }
+  await supabase.from("settings").upsert(
+    { owner_id: ownerId, key: PACKAGING_DEFAULTS_SETTINGS_KEY, value: map, updated_at: new Date().toISOString() },
+    { onConflict: "owner_id,key" },
+  );
+}
+
 /**
- * Saves a packaging purchase and sets the item's cost per piece = Σ price ÷ Σ pieces of all its purchases.
+ * Saves an actual packaging purchase and sets the item's cost per piece = Σ price ÷ Σ pieces of all its purchases.
  * Items not counted per order (e.g. bags) are booked as an operating expense (deducted from profit).
  * Items counted per order (e.g. boxes, spoons) are booked as a direct expense (already in menu cost, not deducted twice).
  */
@@ -335,24 +414,55 @@ async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string
 
 const perPiece = (unitCost: number, unit: string) => `ตก${unit}ละ ${formatUnitCost(unitCost)}`;
 
-/** Adds a packaging item, optionally with its first pack purchase in the same form. */
+/**
+ * Adds a packaging item (master data only — never creates a fake purchase or expense row).
+ * When pack price & pieces per pack are given, sets the item's initial unit cost and remembers the pack default for future restocks.
+ */
 export async function createPackaging(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user }) => {
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
-    const purchase = firstPackFields(form);
-    const { data, error } = await supabase.from("packaging_items").insert({ owner_id: user.id, name, unit, per_order: perOrder, unit_cost_satang: 0 }).select("id").single();
+    const packDefault = optionalPackDefaultFields(form);
+    const unitCost = packDefault ? roundCost(packDefault.priceSatang / packDefault.packQuantity) : 0;
+
+    let { data, error } = await supabase
+      .from("packaging_items")
+      .insert({ owner_id: user.id, name, unit, per_order: perOrder, unit_cost_satang: unitCost })
+      .select("id")
+      .single();
+    if (error && error.code === "22P02" && error.message.includes("bigint")) {
+      const fallback = await supabase
+        .from("packaging_items")
+        .insert({ owner_id: user.id, name, unit, per_order: perOrder, unit_cost_satang: Math.round(unitCost) })
+        .select("id")
+        .single();
+      data = fallback.data;
+      error = fallback.error;
+    }
     if (error) dbError(error, { unique: `มีบรรจุภัณฑ์ชื่อ “${name}” อยู่แล้ว` });
-    const item = { id: String((data as Row).id), name, unit, per_order: perOrder };
-    const unitCost = purchase ? await recordPackagingPurchase(supabase, user.id, item, purchase) : null;
+    const packagingId = String((data as Row).id);
+
+    if (packDefault) {
+      await savePackagingDefaultConfig(supabase, user.id, packagingId, {
+        packPriceSatang: packDefault.priceSatang,
+        packQuantity: packDefault.packQuantity,
+      });
+    }
+
     revalidateCosts();
-    return { ok: true, message: unitCost === null ? `เพิ่ม “${name}” แล้ว — บันทึกการซื้อเพื่อคำนวณราคาต่อ${unit}` : `เพิ่ม “${name}” แล้ว · ${perPiece(unitCost, unit)}` };
+    return {
+      ok: true,
+      message:
+        packDefault === null
+          ? `เพิ่ม “${name}” แล้ว — ตั้งราคาหรือบันทึกการซื้อเพื่อคำนวณราคาต่อ${unit}`
+          : `เพิ่ม “${name}” แล้ว · ${perPiece(unitCost, unit)} (ตั้งเป็นต้นทุนเริ่มต้นแล้ว ยังไม่ถูกคิดเป็นบิลจ่ายเงิน)`,
+    };
   });
 }
 
 export async function updatePackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, user }) => {
     const packagingId = id(form);
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
     const unit = text(form, "unit", "หน่วย", { max: 30 });
@@ -360,15 +470,28 @@ export async function updatePackaging(form: FormData): Promise<ActionState> {
     const hasPrice = String(form.get("pack_price") ?? "").trim() !== "";
     const hasQuantity = String(form.get("pack_quantity") ?? "").trim() !== "";
     const updateFields: Row = { name, unit, per_order: perOrder, updated_at: new Date().toISOString() };
+    let newPackDefault: { packPriceSatang: number; packQuantity: number } | null = null;
+
     if (hasPrice && hasQuantity) {
       const packPrice = money(form, "pack_price", "ราคาต่อแพ็ก", { required: true });
       const packQty = quantity(form, "pack_quantity", "จำนวนต่อแพ็ก")!;
       if (packQty > 0) {
         updateFields.unit_cost_satang = roundCost(packPrice / packQty);
+        newPackDefault = { packPriceSatang: packPrice, packQuantity: packQty };
       }
     }
-    const { error } = await supabase.from("packaging_items").update(updateFields).eq("id", packagingId);
+    let { error } = await supabase.from("packaging_items").update(updateFields).eq("id", packagingId);
+    if (error && error.code === "22P02" && error.message.includes("bigint") && updateFields.unit_cost_satang !== undefined) {
+      const fallback = await supabase
+        .from("packaging_items")
+        .update({ ...updateFields, unit_cost_satang: Math.round(Number(updateFields.unit_cost_satang)) })
+        .eq("id", packagingId);
+      error = fallback.error;
+    }
     if (error) dbError(error, { unique: `มีบรรจุภัณฑ์ชื่อ “${name}” อยู่แล้ว` });
+    if (newPackDefault) {
+      await savePackagingDefaultConfig(supabase, user.id, packagingId, newPackDefault);
+    }
     await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packagingId));
     revalidateCosts();
     return { ok: true, message: "บันทึกแล้ว และคำนวณต้นทุนเมนูใหม่" };
@@ -667,17 +790,74 @@ export async function toggleIngredientActive(form: FormData): Promise<ActionStat
   });
 }
 
+/**
+ * Deletes an ingredient safely:
+ * 1) Automatically removes it from any menu recipes (`menu_recipe_items`) and recalculates those menus' costs.
+ * 2) Removes any purchase history (`ingredient_purchases`) and corresponding auto-created expense rows (`expenses`).
+ * 3) Deletes the ingredient row itself.
+ */
 export async function deleteIngredient(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase }) => {
     const ingredientId = id(form);
-    const { error } = await supabase.from("ingredients").delete().eq("id", ingredientId);
-    if (error) {
-      dbError(error, {
-        foreignKey: "ลบไม่ได้เพราะมีประวัติการซื้อหรือผูกอยู่ในสูตรเมนูแล้ว — แนะนำให้กด “ซ่อน” แทน",
-      });
+    const { data: ingRow } = await supabase
+      .from("ingredients")
+      .select("id,name")
+      .eq("id", ingredientId)
+      .maybeSingle();
+    const ingName = ingRow ? String((ingRow as Row).name ?? "") : "";
+
+    const affectedMenuIds = await menusUsing(supabase, "ingredient_id", ingredientId);
+    if (affectedMenuIds.length > 0) {
+      const { error: recipeDelErr } = await supabase
+        .from("menu_recipe_items")
+        .delete()
+        .eq("ingredient_id", ingredientId);
+      if (recipeDelErr) dbError(recipeDelErr);
     }
+
+    const { data: purchases } = await supabase
+      .from("ingredient_purchases")
+      .select("id,purchased_at,price_satang")
+      .eq("ingredient_id", ingredientId);
+
+    if (purchases && purchases.length > 0) {
+      if (ingName) {
+        for (const p of purchases as Row[]) {
+          const { data: matchedExp } = await supabase
+            .from("expenses")
+            .select("id,description")
+            .eq("category", "วัตถุดิบ")
+            .eq("spent_at", String(p.purchased_at))
+            .eq("amount_satang", Number(p.price_satang))
+            .ilike("description", `ซื้อ${ingName}%`)
+            .limit(1);
+          if (matchedExp && matchedExp.length > 0) {
+            await supabase.from("expenses").delete().eq("id", String((matchedExp[0] as Row).id));
+          }
+        }
+      }
+      const { error: purchaseDelErr } = await supabase
+        .from("ingredient_purchases")
+        .delete()
+        .eq("ingredient_id", ingredientId);
+      if (purchaseDelErr) dbError(purchaseDelErr);
+    }
+
+    const { error } = await supabase.from("ingredients").delete().eq("id", ingredientId);
+    if (error) dbError(error);
+
+    if (affectedMenuIds.length > 0) {
+      await recalculateMenuCosts(supabase, affectedMenuIds);
+    }
+
     revalidateCosts();
-    return { ok: true, message: "ลบวัตถุดิบแล้ว" };
+    return {
+      ok: true,
+      message:
+        affectedMenuIds.length > 0
+          ? `ลบวัตถุดิบแล้ว (ถอดออกจากสูตร ${affectedMenuIds.length} เมนู และคำนวณต้นทุนเมนูใหม่เรียบร้อย)`
+          : "ลบวัตถุดิบแล้ว",
+    };
   });
 }
 
@@ -695,16 +875,62 @@ export async function togglePackagingActive(form: FormData): Promise<ActionState
   });
 }
 
+/**
+ * Deletes a packaging item safely:
+ * 1) Automatically removes it from any menu recipes (`menu_recipe_items`) and recalculates those menus' costs.
+ * 2) Removes any purchase history (`packaging_purchases`) and linked `expenses` rows.
+ * 3) Removes any `sale_packaging` tracking rows (historical `sales.packaging_cost_satang` totals remain intact).
+ * 4) Deletes the packaging item row and cleans up its default pack setting.
+ */
 export async function deletePackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, user }) => {
     const packagingId = id(form);
-    const { error } = await supabase.from("packaging_items").delete().eq("id", packagingId);
-    if (error) {
-      dbError(error, {
-        foreignKey: "ลบไม่ได้เพราะมีประวัติการซื้อหรือใช้อยู่ในบิลขายแล้ว — แนะนำให้กด “ซ่อน” แทน",
-      });
+    const affectedMenuIds = await menusUsing(supabase, "packaging_item_id", packagingId);
+    if (affectedMenuIds.length > 0) {
+      const { error: recipeDelErr } = await supabase
+        .from("menu_recipe_items")
+        .delete()
+        .eq("packaging_item_id", packagingId);
+      if (recipeDelErr) dbError(recipeDelErr);
     }
+
+    const { data: packPurchases } = await supabase
+      .from("packaging_purchases")
+      .select("id,expense_id")
+      .eq("packaging_item_id", packagingId);
+
+    if (packPurchases && packPurchases.length > 0) {
+      const expenseIds = (packPurchases as Row[])
+        .map((p) => (p.expense_id ? String(p.expense_id) : ""))
+        .filter(Boolean);
+      const { error: packPurchaseDelErr } = await supabase
+        .from("packaging_purchases")
+        .delete()
+        .eq("packaging_item_id", packagingId);
+      if (packPurchaseDelErr) dbError(packPurchaseDelErr);
+      if (expenseIds.length > 0) {
+        await supabase.from("expenses").delete().in("id", expenseIds);
+      }
+    }
+
+    await supabase.from("sale_packaging").delete().eq("packaging_item_id", packagingId);
+
+    const { error } = await supabase.from("packaging_items").delete().eq("id", packagingId);
+    if (error) dbError(error);
+
+    await savePackagingDefaultConfig(supabase, user.id, packagingId, null);
+
+    if (affectedMenuIds.length > 0) {
+      await recalculateMenuCosts(supabase, affectedMenuIds);
+    }
+
     revalidateCosts();
-    return { ok: true, message: "ลบบรรจุภัณฑ์แล้ว" };
+    return {
+      ok: true,
+      message:
+        affectedMenuIds.length > 0
+          ? `ลบบรรจุภัณฑ์แล้ว (ถอดออกจากสูตร ${affectedMenuIds.length} เมนู และคำนวณต้นทุนเมนูใหม่เรียบร้อย)`
+          : "ลบบรรจุภัณฑ์แล้ว",
+    };
   });
 }
