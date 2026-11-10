@@ -229,16 +229,20 @@ export async function POST(request: Request) {
     } else if (!creds.channelAccessToken) {
       pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
     } else {
-      // Enqueue job in DB and dispatch in background via Next.js after() so the customer response returns immediately!
-      const enqueueRes = await enqueueLoyaltyPushNotification(supabase, {
-        shopSecret,
-        lineUserId: verifiedLineUserId,
-        eventType: "stamp_claim",
-        messages: [flexMessage],
-        fallbackPlainText: plainText,
-      });
+      // If claim_loyalty_stamps already atomically inserted the push job in the same DB transaction,
+      // skip the extra RPC round-trip and immediately return the HTTP response while after() drains the queue!
+      const atomicallyQueued = Boolean(result.pushQueued || result.pushJobId);
+      if (!atomicallyQueued) {
+        await enqueueLoyaltyPushNotification(supabase, {
+          shopSecret,
+          lineUserId: verifiedLineUserId,
+          eventType: "stamp_claim",
+          messages: [flexMessage],
+          fallbackPlainText: plainText,
+        });
+      }
       queued = true;
-      pushReason = enqueueRes.queued ? "QUEUED_BACKGROUND" : "DISPATCHED_BACKGROUND";
+      pushReason = "QUEUED_BACKGROUND";
 
       after(async () => {
         try {
@@ -252,6 +256,7 @@ export async function POST(request: Request) {
               messages: [flexMessage],
               fallbackPlainText: plainText,
             },
+            trustedOrigin,
           );
         } catch {
           // Background push errors are recorded in loyalty_push_queue

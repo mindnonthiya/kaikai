@@ -176,15 +176,18 @@ export async function POST(request: Request) {
       } else if (!creds.channelAccessToken) {
         pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
       } else {
-        const enqueueRes = await enqueueLoyaltyPushNotification(supabase, {
-          shopSecret,
-          lineUserId: verifiedLineUserId,
-          eventType: "coupon_redeem",
-          messages: [flexMessage],
-          fallbackPlainText: plainText,
-        });
+        const atomicallyQueued = Boolean(result.pushQueued || result.pushJobId);
+        if (!atomicallyQueued) {
+          await enqueueLoyaltyPushNotification(supabase, {
+            shopSecret,
+            lineUserId: verifiedLineUserId,
+            eventType: "coupon_redeem",
+            messages: [flexMessage],
+            fallbackPlainText: plainText,
+          });
+        }
         queued = true;
-        pushReason = enqueueRes.queued ? "QUEUED_BACKGROUND" : "DISPATCHED_BACKGROUND";
+        pushReason = "QUEUED_BACKGROUND";
 
         after(async () => {
           try {
@@ -198,6 +201,7 @@ export async function POST(request: Request) {
                 messages: [flexMessage],
                 fallbackPlainText: plainText,
               },
+              request.url,
             );
           } catch {
             // Background push errors are recorded in loyalty_push_queue

@@ -24,6 +24,7 @@ import {
   decryptLoyaltySecret,
   encryptLoyaltySecret,
   getLoyaltyServerKeyHash,
+  hasLoyaltyServerSecret,
   isCurrentVersionEncryptedSecret,
   isEncryptedLoyaltySecret,
 } from "@/lib/loyalty-crypto";
@@ -193,6 +194,7 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
   });
 
   it("encrypts and decrypts LINE Channel Access Token with dedicated v2 AES-256-GCM key", () => {
+    expect(hasLoyaltyServerSecret()).toBe(true);
     const rawToken = "eyJhbGciOiJIUzI1NiJ9.sample_line_channel_access_token_123456";
     const encrypted = encryptLoyaltySecret(rawToken);
     expect(isEncryptedLoyaltySecret(encrypted)).toBe(true);

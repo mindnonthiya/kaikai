@@ -150,9 +150,43 @@ drop function if exists public.get_loyalty_server_credentials(text, text);
 drop function if exists public.get_loyalty_server_credentials(text, text, text);
 drop function if exists public.enqueue_loyalty_push_job(text, text, text, text, text, jsonb, text);
 drop function if exists public.claim_pending_loyalty_push_jobs(text, text, text, integer);
+drop function if exists public.claim_due_loyalty_push_jobs_batch(text, text, integer);
 drop function if exists public.complete_loyalty_push_job(uuid, text, text, text, text, text, integer);
+drop function if exists public.run_loyalty_housekeeping(uuid);
 drop function if exists public.admin_adjust_loyalty_stamps(text, uuid, integer);
 drop function if exists public.admin_redeem_coupon_by_code(text, text);
+
+-- 0. Dedicated Daily & Opportunistic Housekeeping RPC
+--    Prunes loyalty_push_queue older than 14 days and loyalty_logs older than 180 days,
+--    regardless of whether LINE Push notifications are enabled or disabled.
+create or replace function public.run_loyalty_housekeeping(
+  p_owner_id uuid default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_deleted_queue integer := 0;
+  v_deleted_logs integer := 0;
+begin
+  delete from public.loyalty_push_queue
+  where (p_owner_id is null or owner_id = p_owner_id)
+    and created_at < now() - interval '14 days';
+  get diagnostics v_deleted_queue = row_count;
+
+  delete from public.loyalty_logs
+  where (p_owner_id is null or owner_id = p_owner_id)
+    and created_at < now() - interval '180 days';
+  get diagnostics v_deleted_logs = row_count;
+
+  return jsonb_build_object(
+    'ok', true,
+    'deletedPushQueue', v_deleted_queue,
+    'deletedLogs', v_deleted_logs
+  );
+end;
+$$;
 
 -- 1. Public RPC: Get Loyalty Card State & Member Progress
 --    - NEVER returns channelAccessToken or channelSecret
@@ -375,6 +409,9 @@ declare
   v_card_title text;
   v_reward_title text;
   v_liff_id text;
+  v_notify_mode text;
+  v_has_encrypted_token boolean := false;
+  v_push_job_id uuid := null;
   v_clean_user_id text := trim(coalesce(p_line_user_id, ''));
   v_member public.loyalty_members%rowtype;
   v_coupons jsonb := '[]'::jsonb;
@@ -560,6 +597,59 @@ begin
     'ลูกค้าสแกน QR สะสม +' || p_points::text || ' แต้ม'
   );
 
+  -- Atomic Transactional Outbox: Enqueue LINE Push job in the exact same transaction as stamp & coupon creation
+  v_notify_mode := coalesce(nullif(v_config->>'notifyMode', ''), 'all');
+  v_has_encrypted_token := trim(coalesce(v_config->>'channelAccessToken', '')) like 'enc:%'
+    and trim(coalesce(v_config->>'serverKeyHash', '')) <> '';
+
+  if v_has_encrypted_token
+     and left(v_clean_user_id, 1) = 'U'
+     and (v_notify_mode = 'all' or (v_notify_mode = 'reward_only' and v_rewards_unlocked > 0)) then
+    insert into public.loyalty_push_queue (
+      owner_id,
+      shop_scope_id,
+      shop_secret,
+      member_id,
+      line_user_id,
+      event_type,
+      messages,
+      fallback_text,
+      status,
+      attempts,
+      max_attempts,
+      next_retry_at
+    ) values (
+      v_owner_id,
+      v_shop_scope_id,
+      trim(p_shop_secret),
+      v_member.id,
+      v_member.line_user_id,
+      'stamp_claim',
+      jsonb_build_object(
+        'autoBuild', true,
+        'cardTitle', v_card_title,
+        'rewardTitle', v_reward_title,
+        'displayName', v_member.display_name,
+        'pointsAdded', p_points,
+        'newStamps', v_new_stamps,
+        'stampsPerReward', v_stamps_per_reward,
+        'rewardsUnlocked', v_rewards_unlocked,
+        'expiresAt', v_member.expires_at,
+        'liffId', v_liff_id,
+        'shopSecret', trim(p_shop_secret)
+      ),
+      '🐔 ' || v_card_title || E'\nสะสมแต้มสำเร็จ +' || p_points::text || ' แต้ม (แต้มปัจจุบัน ' || v_new_stamps::text || ' / ' || v_stamps_per_reward::text || ' แต้ม)',
+      'pending',
+      0,
+      3,
+      v_now
+    )
+    returning id into v_push_job_id;
+  end if;
+
+  -- Run housekeeping (14-day push queue & 180-day logs cleanup) regardless of whether push mode is on or off
+  perform public.run_loyalty_housekeeping(v_owner_id);
+
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'id', sub.id,
@@ -595,7 +685,9 @@ begin
     'cardTitle', v_card_title,
     'rewardTitle', v_reward_title,
     'liffId', v_liff_id,
-    'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all'),
+    'notifyMode', v_notify_mode,
+    'pushJobId', v_push_job_id,
+    'pushQueued', (v_push_job_id is not null),
     'displayName', v_member.display_name,
     'pointsAdded', p_points,
     'previousStamps', v_prev_stamps,
@@ -653,6 +745,11 @@ declare
   v_coupons jsonb := '[]'::jsonb;
   v_now timestamptz := now();
   v_already_claimed boolean := false;
+  v_notify_mode text;
+  v_has_encrypted_token boolean := false;
+  v_push_job_id uuid := null;
+  v_card_title text;
+  v_resolved_name text;
 begin
   select s.owner_id, s.key, s.value
     into v_owner_id, v_setting_key, v_config
@@ -691,6 +788,11 @@ begin
   end if;
 
   select * into v_member from public.loyalty_members where id = v_coupon.member_id;
+  v_card_title := coalesce(nullif(v_config->>'cardTitle', ''), 'GaiTomNamPla 🐔');
+  v_resolved_name := coalesce(v_member.display_name, coalesce(p_display_name, 'ลูกค้า LINE'));
+  v_notify_mode := coalesce(nullif(v_config->>'notifyMode', ''), 'all');
+  v_has_encrypted_token := trim(coalesce(v_config->>'channelAccessToken', '')) like 'enc:%'
+    and trim(coalesce(v_config->>'serverKeyHash', '')) <> '';
 
   if v_coupon.status = 'claimed' then
     v_already_claimed := true;
@@ -720,6 +822,49 @@ begin
       coalesce(v_member.stamps, 0),
       'ลูกค้ากดใช้คูปอง #' || v_coupon.code || ' (' || v_coupon.title || ')'
     );
+
+    -- Atomic Transactional Outbox: Enqueue coupon redemption LINE Push in the exact same transaction
+    if v_has_encrypted_token
+       and left(v_coupon.line_user_id, 1) = 'U'
+       and v_notify_mode <> 'off' then
+      insert into public.loyalty_push_queue (
+        owner_id,
+        shop_scope_id,
+        shop_secret,
+        member_id,
+        line_user_id,
+        event_type,
+        messages,
+        fallback_text,
+        status,
+        attempts,
+        max_attempts,
+        next_retry_at
+      ) values (
+        v_owner_id,
+        v_shop_scope_id,
+        trim(p_shop_secret),
+        v_coupon.member_id,
+        v_coupon.line_user_id,
+        'coupon_redeem',
+        jsonb_build_object(
+          'autoBuild', true,
+          'cardTitle', v_card_title,
+          'rewardTitle', v_coupon.title,
+          'couponCode', v_coupon.code,
+          'displayName', v_resolved_name,
+          'claimedAt', v_now
+        ),
+        '🎉 ใช้คูปองส่วนลดสำเร็จ #' || v_coupon.code || ' (' || v_coupon.title || ')',
+        'pending',
+        0,
+        3,
+        v_now
+      )
+      returning id into v_push_job_id;
+    end if;
+
+    perform public.run_loyalty_housekeeping(v_owner_id);
   end if;
 
   select coalesce(jsonb_agg(
@@ -760,10 +905,12 @@ begin
     'code', v_coupon.code,
     'title', v_coupon.title,
     'claimedAt', coalesce(v_coupon.claimed_at, v_now),
-    'cardTitle', coalesce(nullif(v_config->>'cardTitle', ''), 'GaiTomNamPla 🐔'),
+    'cardTitle', v_card_title,
     'liffId', coalesce(v_config->>'liffId', ''),
-    'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all'),
-    'displayName', coalesce(v_member.display_name, coalesce(p_display_name, 'ลูกค้า LINE')),
+    'notifyMode', v_notify_mode,
+    'pushJobId', v_push_job_id,
+    'pushQueued', (v_push_job_id is not null),
+    'displayName', v_resolved_name,
     'coupons', v_coupons
   );
 end;
@@ -933,16 +1080,7 @@ begin
   )
   returning id into v_job_id;
 
-  -- Opportunistic housekeeping to keep Supabase Free database compact:
-  -- 1) Remove completed push queue rows older than 14 days
-  delete from public.loyalty_push_queue
-  where owner_id = v_owner_id
-    and created_at < now() - interval '14 days';
-
-  -- 2) Remove loyalty_logs older than 180 days
-  delete from public.loyalty_logs
-  where owner_id = v_owner_id
-    and created_at < now() - interval '180 days';
+  perform public.run_loyalty_housekeeping(v_owner_id);
 
   return jsonb_build_object('ok', true, 'jobId', v_job_id);
 end;
@@ -1082,6 +1220,106 @@ begin
   end if;
 
   return jsonb_build_object('ok', true);
+end;
+$$;
+
+-- 5b. Server-Only Cron/Worker Batch Claim & Daily Housekeeping RPC
+create or replace function public.claim_due_loyalty_push_jobs_batch(
+  p_server_key_hash text,
+  p_legacy_key_hash text default null,
+  p_limit integer default 15
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_jobs jsonb := '[]'::jsonb;
+  v_housekeeping jsonb;
+begin
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return jsonb_build_object('ok', false, 'jobs', '[]'::jsonb);
+  end if;
+
+  v_housekeeping := public.run_loyalty_housekeeping(null);
+
+  with authorized_shops as (
+    select
+      s.owner_id,
+      trim(coalesce(s.value->>'shopSecret', '')) as shop_secret,
+      case
+        when trim(coalesce(s.value->>'channelAccessToken', '')) like 'enc:%'
+          then trim(coalesce(s.value->>'channelAccessToken', ''))
+        else ''
+      end as encrypted_access_token
+    from public.settings s
+    where (s.key = 'line_loyalty' or s.key like 's:%:line_loyalty')
+      and trim(coalesce(s.value->>'serverKeyHash', '')) <> ''
+      and (
+        trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_server_key_hash)
+        or (
+          p_legacy_key_hash is not null
+          and trim(p_legacy_key_hash) <> ''
+          and trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_legacy_key_hash)
+        )
+      )
+  ),
+  due as (
+    select
+      q.id,
+      a.encrypted_access_token
+    from public.loyalty_push_queue q
+    join authorized_shops a
+      on a.owner_id = q.owner_id
+     and a.shop_secret = q.shop_secret
+    where (
+        (q.status = 'pending' and q.next_retry_at <= now())
+        or (q.status = 'processing' and q.updated_at < now() - interval '30 seconds')
+      )
+      and q.attempts < q.max_attempts
+    order by q.next_retry_at asc
+    limit greatest(1, least(30, coalesce(p_limit, 15)))
+    for update of q skip locked
+  ),
+  claimed as (
+    update public.loyalty_push_queue q
+    set status = 'processing',
+        attempts = q.attempts + 1,
+        updated_at = now()
+    from due
+    where q.id = due.id
+    returning
+      q.id,
+      q.shop_secret,
+      due.encrypted_access_token,
+      q.line_user_id,
+      q.event_type,
+      q.messages,
+      q.fallback_text,
+      q.attempts,
+      q.max_attempts
+  )
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', c.id,
+      'shopSecret', c.shop_secret,
+      'channelAccessToken', c.encrypted_access_token,
+      'lineUserId', c.line_user_id,
+      'eventType', c.event_type,
+      'messages', c.messages,
+      'fallbackText', c.fallback_text,
+      'attempts', c.attempts,
+      'maxAttempts', c.max_attempts
+    )
+  ), '[]'::jsonb)
+  into v_jobs
+  from claimed c;
+
+  return jsonb_build_object(
+    'ok', true,
+    'jobs', v_jobs,
+    'housekeeping', v_housekeeping
+  );
 end;
 $$;
 
@@ -1297,6 +1535,12 @@ grant execute on function public.enqueue_loyalty_push_job(text, text, text, text
 revoke all on function public.claim_pending_loyalty_push_jobs(text, text, text, integer) from public;
 grant execute on function public.claim_pending_loyalty_push_jobs(text, text, text, integer) to anon, authenticated;
 
+revoke all on function public.run_loyalty_housekeeping(uuid) from public;
+grant execute on function public.run_loyalty_housekeeping(uuid) to authenticated;
+
+revoke all on function public.claim_due_loyalty_push_jobs_batch(text, text, integer) from public;
+grant execute on function public.claim_due_loyalty_push_jobs_batch(text, text, integer) to anon, authenticated;
+
 revoke all on function public.complete_loyalty_push_job(uuid, text, text, text, text, text, integer) from public;
 grant execute on function public.complete_loyalty_push_job(uuid, text, text, text, text, text, integer) to anon, authenticated;
 
@@ -1305,5 +1549,21 @@ grant execute on function public.admin_adjust_loyalty_stamps(text, uuid, integer
 
 revoke all on function public.admin_redeem_coupon_by_code(text, text) from public;
 grant execute on function public.admin_redeem_coupon_by_code(text, text) to authenticated;
+
+-- Register daily database housekeeping (02:00 AM ICT / 19:00 UTC) if pg_cron is enabled on the Supabase project
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.schedule(
+      'loyalty-daily-housekeeping',
+      '0 19 * * *',
+      $cron$select public.run_loyalty_housekeeping(null);$cron$
+    );
+  end if;
+exception
+  when others then
+    null;
+end;
+$$;
 
 notify pgrst, 'reload schema';

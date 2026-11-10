@@ -5,6 +5,8 @@ import path from "path";
 const ENCRYPTED_V2_PREFIX = "enc:v2:";
 const ENCRYPTED_V1_PREFIX = "enc:v1:";
 
+let ephemeralTestSecret = "";
+
 function readEnvFileVar(varNames: string[]): string {
   try {
     const cwd = process.cwd();
@@ -35,7 +37,7 @@ function readEnvFileVar(varNames: string[]): string {
 /**
  * Resolves the dedicated Loyalty encryption secret.
  * Never depends on OCR_API_KEY or GEMINI_API_KEY so rotating slip-reader API keys
- * never invalidates encrypted LINE tokens.
+ * never invalidates encrypted LINE tokens, and never falls back to a hardcoded string in code.
  */
 function resolvePrimaryLoyaltySecret(): string {
   const envSecret = (
@@ -48,15 +50,24 @@ function resolvePrimaryLoyaltySecret(): string {
   const fileSecret = readEnvFileVar(["LOYALTY_SERVER_SECRET", "SUPABASE_SERVICE_ROLE_KEY"]);
   if (fileSecret) return fileSecret;
 
-  return "kaikai-dedicated-loyalty-secret-v2-f89a4c2d1e7b6a30";
+  if (process.env.NODE_ENV === "test" || Boolean(process.env.VITEST)) {
+    if (!ephemeralTestSecret) {
+      ephemeralTestSecret = randomBytes(32).toString("hex");
+    }
+    return ephemeralTestSecret;
+  }
+
+  return "";
 }
 
 function resolveLegacyV1Secret(): string {
   const envLegacy = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
   if (envLegacy) return envLegacy;
-  const fileLegacy = readEnvFileVar(["OCR_API_KEY", "GEMINI_API_KEY"]);
-  if (fileLegacy) return fileLegacy;
-  return "kaikai-default-server-secret-v1";
+  return readEnvFileVar(["OCR_API_KEY", "GEMINI_API_KEY"]);
+}
+
+export function hasLoyaltyServerSecret(): boolean {
+  return resolvePrimaryLoyaltySecret().length >= 16;
 }
 
 function deriveAesKey(rawSecret: string): Buffer {
@@ -65,11 +76,13 @@ function deriveAesKey(rawSecret: string): Buffer {
 
 export function getLoyaltyServerKeyHash(): string {
   const raw = resolvePrimaryLoyaltySecret();
+  if (!raw) return "";
   return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
 }
 
 export function getLegacyLoyaltyServerKeyHash(): string {
   const raw = resolveLegacyV1Secret();
+  if (!raw) return "";
   return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
 }
 
@@ -93,7 +106,14 @@ export function encryptLoyaltySecret(plainText: string): string {
     : trimmed;
   if (!actualPlain) return "";
 
-  const key = deriveAesKey(resolvePrimaryLoyaltySecret());
+  const secret = resolvePrimaryLoyaltySecret();
+  if (!secret) {
+    throw new Error(
+      "Missing LOYALTY_SERVER_SECRET environment variable. Please set LOYALTY_SERVER_SECRET in your environment before saving LINE tokens.",
+    );
+  }
+
+  const key = deriveAesKey(secret);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(actualPlain, "utf8"), cipher.final()]);
@@ -124,19 +144,26 @@ export function decryptLoyaltySecret(storedValue: string): string {
   const trimmed = (storedValue ?? "").trim();
   if (!trimmed) return "";
 
+  const primarySecret = resolvePrimaryLoyaltySecret();
+
   if (trimmed.startsWith(ENCRYPTED_V2_PREFIX)) {
+    if (!primarySecret) return "";
     const payload = trimmed.slice(ENCRYPTED_V2_PREFIX.length);
-    return tryDecryptPayload(payload, deriveAesKey(resolvePrimaryLoyaltySecret())) ?? "";
+    return tryDecryptPayload(payload, deriveAesKey(primarySecret)) ?? "";
   }
 
   if (trimmed.startsWith(ENCRYPTED_V1_PREFIX)) {
     const payload = trimmed.slice(ENCRYPTED_V1_PREFIX.length);
-    // Try primary key first, then legacy v1 secret for seamless migration
-    return (
-      tryDecryptPayload(payload, deriveAesKey(resolvePrimaryLoyaltySecret())) ??
-      tryDecryptPayload(payload, deriveAesKey(resolveLegacyV1Secret())) ??
-      ""
-    );
+    if (primarySecret) {
+      const fromPrimary = tryDecryptPayload(payload, deriveAesKey(primarySecret));
+      if (fromPrimary) return fromPrimary;
+    }
+    const legacySecret = resolveLegacyV1Secret();
+    if (legacySecret) {
+      const fromLegacy = tryDecryptPayload(payload, deriveAesKey(legacySecret));
+      if (fromLegacy) return fromLegacy;
+    }
+    return "";
   }
 
   return trimmed;
