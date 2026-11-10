@@ -50,7 +50,7 @@ declare global {
   }
 }
 
-interface CardConfigState {
+export interface InitialLoyaltyCardConfig {
   cardTitle: string;
   cardHeadline: string;
   rewardTitle: string;
@@ -61,6 +61,8 @@ interface CardConfigState {
   liffId: string;
   botBasicId: string;
 }
+
+type CardConfigState = InitialLoyaltyCardConfig;
 
 interface MemberState {
   lineUserId: string;
@@ -89,6 +91,7 @@ export interface LoyaltyStampCardClientProps {
   initialPoints: number | null;
   initialToken: string;
   initialLiffId: string;
+  initialConfig?: InitialLoyaltyCardConfig | null;
 }
 
 const LOCAL_DEVICE_USER_KEY = "kaikai_loyalty_device_user_v1";
@@ -145,19 +148,22 @@ export function LoyaltyStampCardClient({
   initialPoints,
   initialToken,
   initialLiffId,
+  initialConfig = null,
 }: LoyaltyStampCardClientProps) {
   const [shopSecret, setShopSecret] = useState(initialShopSecret);
-  const [config, setConfig] = useState<CardConfigState>({
-    cardTitle: "GaiTomNamPla 🐔",
-    cardHeadline: "สะสม 10 กล่อง ลด 50%",
-    rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
-    stampsPerReward: 10,
-    validityMonths: 3,
-    cooldownMinutes: 5,
-    rulesText: DEFAULT_LOYALTY_RULES_TEXT,
-    liffId: initialLiffId,
-    botBasicId: "",
-  });
+  const [config, setConfig] = useState<CardConfigState>(
+    initialConfig ?? {
+      cardTitle: "GaiTomNamPla 🐔",
+      cardHeadline: "สะสม 10 กล่อง ลด 50%",
+      rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
+      stampsPerReward: 10,
+      validityMonths: 3,
+      cooldownMinutes: 5,
+      rulesText: DEFAULT_LOYALTY_RULES_TEXT,
+      liffId: initialLiffId,
+      botBasicId: "",
+    },
+  );
 
   const [member, setMember] = useState<MemberState>({
     lineUserId: "",
@@ -170,6 +176,8 @@ export function LoyaltyStampCardClient({
     lastStampedAt: null,
     expiredReset: false,
   });
+  const [memberLoaded, setMemberLoaded] = useState(false);
+  const [lineAuthError, setLineAuthError] = useState<string | null>(null);
 
   const [coupons, setCoupons] = useState<LoyaltyCouponRecord[]>([]);
   const [activeTab, setActiveTab] = useState<"unclaimed" | "claimed">("unclaimed");
@@ -219,29 +227,50 @@ export function LoyaltyStampCardClient({
       resolvedShopSecret: string,
       userProfile: { userId: string; displayName: string; pictureUrl: string | null },
       liffAccessTokenOverride?: string,
+      configOnly = false,
     ) => {
-      const liffAccessToken = liffAccessTokenOverride ?? getActiveLiffAccessToken();
+      const liffAccessToken = configOnly
+        ? ""
+        : (liffAccessTokenOverride ?? getActiveLiffAccessToken());
       const response = await fetch("/api/loyalty/state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shopSecret: resolvedShopSecret,
+          configOnly,
           liffAccessToken,
-          lineUserId: userProfile.userId,
+          lineUserId: configOnly ? "" : userProfile.userId,
           displayName: userProfile.displayName,
           pictureUrl: userProfile.pictureUrl,
         }),
       });
       const data = (await response.json()) as Record<string, unknown>;
       if (!data.ok) {
+        if (data.config && typeof data.config === "object") {
+          const cfg = data.config as Record<string, unknown>;
+          setConfig((prev) => ({
+            ...prev,
+            cardTitle: String(cfg.cardTitle ?? prev.cardTitle),
+            cardHeadline: String(cfg.cardHeadline ?? prev.cardHeadline),
+            rewardTitle: String(cfg.rewardTitle ?? prev.rewardTitle),
+            stampsPerReward: Math.max(1, Number(cfg.stampsPerReward ?? prev.stampsPerReward)),
+            validityMonths: Math.max(1, Number(cfg.validityMonths ?? prev.validityMonths)),
+            cooldownMinutes: Math.max(0, Number(cfg.cooldownMinutes ?? prev.cooldownMinutes)),
+            rulesText: String(cfg.rulesText ?? prev.rulesText),
+            liffId: String(cfg.liffId ?? prev.liffId),
+            botBasicId: String(cfg.botBasicId ?? prev.botBasicId),
+          }));
+        }
+        if (data.code === "LINE_AUTH_REQUIRED" || data.code === "LINE_AUTH_FAILED") {
+          setLineAuthError(String(data.message ?? "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่"));
+          setMemberLoaded(false);
+          return null;
+        }
         setErrorMessage(String(data.message ?? "ไม่สามารถโหลดข้อมูลบัตรสะสมแต้มได้"));
         return null;
       }
 
       const cfg = (data.config ?? {}) as Record<string, unknown>;
-      const mem = (data.member ?? {}) as Record<string, unknown>;
-      const rawCoupons = Array.isArray(data.coupons) ? (data.coupons as Array<Record<string, unknown>>) : [];
-
       const nextConfig: CardConfigState = {
         cardTitle: String(cfg.cardTitle ?? "GaiTomNamPla 🐔"),
         cardHeadline: String(cfg.cardHeadline ?? "สะสม 10 กล่อง ลด 50%"),
@@ -255,6 +284,13 @@ export function LoyaltyStampCardClient({
       };
       setConfig(nextConfig);
 
+      if (configOnly || !data.member || typeof data.member !== "object") {
+        return { config: nextConfig, member: null, coupons: [] };
+      }
+
+      const mem = data.member as Record<string, unknown>;
+      const rawCoupons = Array.isArray(data.coupons) ? (data.coupons as Array<Record<string, unknown>>) : [];
+
       const nextMember: MemberState = {
         lineUserId: String(mem.lineUserId ?? userProfile.userId),
         displayName: String(mem.displayName ?? userProfile.displayName),
@@ -267,6 +303,8 @@ export function LoyaltyStampCardClient({
         expiredReset: Boolean(mem.expiredReset),
       };
       setMember(nextMember);
+      setMemberLoaded(true);
+      setLineAuthError(null);
 
       const mappedCoupons: LoyaltyCouponRecord[] = rawCoupons.map((c) => ({
         id: String(c.id),
@@ -309,12 +347,34 @@ export function LoyaltyStampCardClient({
         const data = (await response.json()) as Record<string, unknown>;
 
         if (!data.ok) {
+          if (data.code === "LINE_AUTH_REQUIRED" || data.code === "LINE_AUTH_FAILED") {
+            setLineAuthError(String(data.message ?? "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่"));
+            setMemberLoaded(false);
+            return;
+          }
           setClaimBanner({
             type: data.code === "COOLDOWN_ACTIVE" ? "warning" : "error",
             title: data.code === "COOLDOWN_ACTIVE" ? "สแกนซ้ำเร็วเกินไป" : "ไม่สามารถสะสมแต้มได้",
             subtitle: String(data.message ?? "คิวอาร์โค้ดไม่ถูกต้องหรือหมดอายุ"),
           });
+          // Load member state if it was skipped before claim so customer still sees their real balance
+          await fetchCardState(targetShopSecret, userProfile, liffAccessToken);
           return;
+        }
+
+        if (data.config && typeof data.config === "object") {
+          const cfg = data.config as Record<string, unknown>;
+          setConfig((prev) => ({
+            cardTitle: String(cfg.cardTitle ?? prev.cardTitle),
+            cardHeadline: String(cfg.cardHeadline ?? prev.cardHeadline),
+            rewardTitle: String(cfg.rewardTitle ?? prev.rewardTitle),
+            stampsPerReward: Math.max(1, Number(cfg.stampsPerReward ?? prev.stampsPerReward)),
+            validityMonths: Math.max(1, Number(cfg.validityMonths ?? prev.validityMonths)),
+            cooldownMinutes: Math.max(0, Number(cfg.cooldownMinutes ?? prev.cooldownMinutes)),
+            rulesText: String(cfg.rulesText ?? prev.rulesText),
+            liffId: String(cfg.liffId ?? prev.liffId),
+            botBasicId: String(cfg.botBasicId ?? prev.botBasicId),
+          }));
         }
 
         const pointsAdded = Number(data.pointsAdded ?? points);
@@ -359,6 +419,8 @@ export function LoyaltyStampCardClient({
             lastStampedAt: mem.lastStampedAt ? String(mem.lastStampedAt) : prev.lastStampedAt,
             expiredReset: Boolean(mem.expiredReset),
           }));
+          setMemberLoaded(true);
+          setLineAuthError(null);
           setCoupons(
             rawCoupons.map((c) => ({
               id: String(c.id),
@@ -466,68 +528,82 @@ export function LoyaltyStampCardClient({
         displayName: fallbackName,
         pictureUrl: null as string | null,
       };
+      const hasPendingQrClaim = Boolean(resolvedPoints && resolvedToken);
 
-      // Fetch shop config first (without creating a guest member row yet) to check if liffId is configured
-      const initialState = await fetchCardState(resolvedShopSecret, {
-        userId: "",
-        displayName: fallbackName,
-        pictureUrl: null,
-      });
-      if (cancelled) return;
+      // Only fetch config on client if SSR didn't already supply initialConfig
+      let effectiveLiffId = initialLiffId || initialConfig?.liffId || "";
+      if (!initialConfig) {
+        const configState = await fetchCardState(
+          resolvedShopSecret,
+          { userId: "", displayName: fallbackName, pictureUrl: null },
+          "",
+          true,
+        );
+        if (cancelled) return;
+        effectiveLiffId = effectiveLiffId || configState?.config.liffId || "";
+      }
 
-      const effectiveLiffId = initialLiffId || initialState?.config.liffId || "";
       if (effectiveLiffId) {
         const liff = await loadLiffSdkScript();
-        if (liff && !cancelled) {
-          try {
-            await liff.init({ liffId: effectiveLiffId });
-            const inClient = liff.isInClient();
-            setIsInLineClient(inClient);
-
-            // If opened inside the LINE app via a direct web URL instead of liff.line.me, upgrade to LIFF URL automatically
-            if (
-              !inClient &&
-              typeof navigator !== "undefined" &&
-              /Line\//i.test(navigator.userAgent) &&
-              typeof window !== "undefined" &&
-              !window.location.search.includes("liff.state") &&
-              !window.location.search.includes("code=")
-            ) {
-              const targetParams = new URLSearchParams();
-              targetParams.set("s", resolvedShopSecret);
-              if (resolvedPoints && resolvedToken) {
-                targetParams.set("p", String(resolvedPoints));
-                targetParams.set("t", resolvedToken);
-              }
-              window.location.replace(`https://liff.line.me/${effectiveLiffId}?${targetParams.toString()}`);
-              return;
-            }
-
-            if (liff.isLoggedIn()) {
-              const profile = await liff.getProfile();
-              userProfile = {
-                userId: profile.userId,
-                displayName: profile.displayName || fallbackName,
-                pictureUrl: profile.pictureUrl ?? null,
-              };
-              await fetchCardState(resolvedShopSecret, userProfile);
-            } else {
-              // Redirect to LINE Login so we always get the customer's real LINE userId (U...) for OA Push notifications
-              const redirectUrl = new URL(window.location.href);
-              redirectUrl.searchParams.set("s", resolvedShopSecret);
-              if (resolvedPoints && resolvedToken) {
-                redirectUrl.searchParams.set("p", String(resolvedPoints));
-                redirectUrl.searchParams.set("t", resolvedToken);
-              }
-              liff.login({ redirectUri: redirectUrl.toString() });
-              return;
-            }
-          } catch {
-            // Continue smoothly with browser device ID if LIFF init fails or domain doesn't match yet
-            await fetchCardState(resolvedShopSecret, userProfile);
-          }
+        if (cancelled) return;
+        if (!liff) {
+          setLineAuthError("เชื่อมต่อ LINE ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่");
+          setLoading(false);
+          return;
         }
-      } else {
+        try {
+          await liff.init({ liffId: effectiveLiffId });
+          const inClient = liff.isInClient();
+          setIsInLineClient(inClient);
+
+          // If opened inside the LINE app via a direct web URL instead of liff.line.me, upgrade to LIFF URL automatically
+          if (
+            !inClient &&
+            typeof navigator !== "undefined" &&
+            /Line\//i.test(navigator.userAgent) &&
+            typeof window !== "undefined" &&
+            !window.location.search.includes("liff.state") &&
+            !window.location.search.includes("code=")
+          ) {
+            const targetParams = new URLSearchParams();
+            targetParams.set("s", resolvedShopSecret);
+            if (resolvedPoints && resolvedToken) {
+              targetParams.set("p", String(resolvedPoints));
+              targetParams.set("t", resolvedToken);
+            }
+            window.location.replace(`https://liff.line.me/${effectiveLiffId}?${targetParams.toString()}`);
+            return;
+          }
+
+          if (liff.isLoggedIn()) {
+            const profile = await liff.getProfile();
+            userProfile = {
+              userId: profile.userId,
+              displayName: profile.displayName || fallbackName,
+              pictureUrl: profile.pictureUrl ?? null,
+            };
+            // Skip redundant fetchCardState when a QR claim is about to run (claim returns full member + coupons!)
+            if (!hasPendingQrClaim) {
+              await fetchCardState(resolvedShopSecret, userProfile);
+            }
+          } else {
+            const redirectUrl = new URL(window.location.href);
+            redirectUrl.searchParams.set("s", resolvedShopSecret);
+            if (resolvedPoints && resolvedToken) {
+              redirectUrl.searchParams.set("p", String(resolvedPoints));
+              redirectUrl.searchParams.set("t", resolvedToken);
+            }
+            liff.login({ redirectUri: redirectUrl.toString() });
+            return;
+          }
+        } catch {
+          // Do NOT fall back to a fake web_... guest when the shop has configured LIFF!
+          setLineAuthError("เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดบัตรสะสมแต้มผ่านแอป LINE แล้วลองใหม่");
+          setMemberLoaded(false);
+          setLoading(false);
+          return;
+        }
+      } else if (!hasPendingQrClaim) {
         await fetchCardState(resolvedShopSecret, userProfile);
       }
 
@@ -552,7 +628,7 @@ export function LoyaltyStampCardClient({
     return () => {
       cancelled = true;
     };
-  }, [executeStampClaim, fetchCardState, initialLiffId, initialPoints, initialShopSecret, initialToken]);
+  }, [executeStampClaim, fetchCardState, initialConfig, initialLiffId, initialPoints, initialShopSecret, initialToken]);
 
   const unclaimedCoupons = useMemo(
     () => coupons.filter((c) => c.status === "unclaimed"),
@@ -748,74 +824,135 @@ export function LoyaltyStampCardClient({
             </div>
 
             <h1 className="line-stamp-title">{config.cardTitle}</h1>
-            <p className="line-stamp-valid">Valid till {member.validTillFormatted}</p>
+            <p className="line-stamp-valid">
+              {memberLoaded ? `Valid till ${member.validTillFormatted}` : "LINE Official Stamp Card"}
+            </p>
             <p className="line-stamp-headline">{config.cardHeadline}</p>
 
-            {/* Customer identity pill (allows setting name when testing outside LINE) */}
-            <div className="line-stamp-user-bar">
-              <span>
-                👤 {member.displayName}
-                {isInLineClient ? " (LINE)" : ""}
-              </span>
-              {!isInLineClient && (
+            {/* Customer identity pill */}
+            {memberLoaded && (
+              <div className="line-stamp-user-bar">
+                <span>
+                  👤 {member.displayName}
+                  {isInLineClient ? " (LINE)" : ""}
+                </span>
+                {!isInLineClient && !config.liffId && (
+                  <button
+                    type="button"
+                    className="line-stamp-edit-name-btn"
+                    onClick={() => {
+                      setNameDraft(member.displayName === "ลูกค้า LINE" ? "" : member.displayName);
+                      setShowNameModal(true);
+                    }}
+                  >
+                    ตั้งชื่อของคุณ
+                  </button>
+                )}
+              </div>
+            )}
+
+            {lineAuthError ? (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: "16px",
+                  borderRadius: 14,
+                  background: "rgba(0, 0, 0, 0.22)",
+                  color: "#ffffff",
+                  textAlign: "center",
+                }}
+              >
+                <strong style={{ display: "block", fontSize: "0.98rem", marginBottom: 6 }}>
+                  ⚠️ {lineAuthError}
+                </strong>
+                <p style={{ fontSize: "0.84rem", opacity: 0.9, marginBottom: 12 }}>
+                  ระบบยังไม่แสดงยอดแต้มเพื่อป้องกันความสับสน กรุณากดปุ่มด้านล่างเพื่อเชื่อมต่อบัญชี LINE ของคุณอีกครั้ง
+                </p>
                 <button
                   type="button"
-                  className="line-stamp-edit-name-btn"
+                  style={{
+                    background: "#06C755",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: 999,
+                    padding: "10px 20px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
                   onClick={() => {
-                    setNameDraft(member.displayName === "ลูกค้า LINE" ? "" : member.displayName);
-                    setShowNameModal(true);
+                    if (config.liffId) {
+                      window.location.href = `https://liff.line.me/${config.liffId}?s=${encodeURIComponent(shopSecret)}`;
+                    } else {
+                      window.location.reload();
+                    }
                   }}
                 >
-                  ตั้งชื่อของคุณ
+                  เชื่อมต่อ LINE อีกครั้ง
                 </button>
-              )}
-            </div>
-
-            {/* ★REWARD progress bar */}
-            <button
-              type="button"
-              className="line-stamp-progress-row"
-              onClick={() => setGridExpanded((prev) => !prev)}
-              aria-expanded={gridExpanded}
-            >
-              <div className="line-stamp-progress-left">
-                <span className="line-stamp-reward-badge">★REWARD</span>
-                <span className="line-stamp-progress-text">
-                  {stampsRemaining} stamp(s) till reward
-                </span>
               </div>
-              <span className={`line-stamp-chevron ${gridExpanded ? "open" : ""}`} aria-hidden>
-                ⌃
-              </span>
-            </button>
+            ) : !memberLoaded && (loading || claiming) ? (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: "18px 16px",
+                  borderRadius: 14,
+                  background: "rgba(255, 255, 255, 0.14)",
+                  color: "#ffffff",
+                  textAlign: "center",
+                  fontWeight: 600,
+                }}
+              >
+                ⏳ กำลังเชื่อมต่อ LINE และโหลดแต้มสะสมของคุณ...
+              </div>
+            ) : (
+              <>
+                {/* ★REWARD progress bar */}
+                <button
+                  type="button"
+                  className="line-stamp-progress-row"
+                  onClick={() => setGridExpanded((prev) => !prev)}
+                  aria-expanded={gridExpanded}
+                >
+                  <div className="line-stamp-progress-left">
+                    <span className="line-stamp-reward-badge">★REWARD</span>
+                    <span className="line-stamp-progress-text">
+                      {stampsRemaining} stamp(s) till reward
+                    </span>
+                  </div>
+                  <span className={`line-stamp-chevron ${gridExpanded ? "open" : ""}`} aria-hidden>
+                    ⌃
+                  </span>
+                </button>
 
-            {/* 2x5 Circular Stamp Grid */}
-            {gridExpanded && (
-              <div className="line-stamp-grid">
-                {Array.from({ length: totalSlots }, (_, idx) => {
-                  const slotNumber = idx + 1;
-                  const isFilled = slotNumber <= member.stamps;
-                  const isFinalSlot = slotNumber === totalSlots;
+                {/* 2x5 Circular Stamp Grid */}
+                {gridExpanded && (
+                  <div className="line-stamp-grid">
+                    {Array.from({ length: totalSlots }, (_, idx) => {
+                      const slotNumber = idx + 1;
+                      const isFilled = slotNumber <= member.stamps;
+                      const isFinalSlot = slotNumber === totalSlots;
 
-                  return (
-                    <div
-                      key={slotNumber}
-                      className={`line-stamp-slot ${isFilled ? "filled" : "empty"} ${isFinalSlot ? "final" : ""}`}
-                      aria-label={`Stamp ${slotNumber} of ${totalSlots}${isFilled ? " (สะสมแล้ว)" : ""}`}
-                    >
-                      <div className="line-stamp-emblem">
-                        <div className="line-stamp-emblem-inner">
-                          {isFinalSlot && !isFilled ? (
-                            <span className="line-stamp-star">★</span>
-                          ) : (
-                            <span className="line-stamp-word">STAMP</span>
-                          )}
+                      return (
+                        <div
+                          key={slotNumber}
+                          className={`line-stamp-slot ${isFilled ? "filled" : "empty"} ${isFinalSlot ? "final" : ""}`}
+                          aria-label={`Stamp ${slotNumber} of ${totalSlots}${isFilled ? " (สะสมแล้ว)" : ""}`}
+                        >
+                          <div className="line-stamp-emblem">
+                            <div className="line-stamp-emblem-inner">
+                              {isFinalSlot && !isFilled ? (
+                                <span className="line-stamp-star">★</span>
+                              ) : (
+                                <span className="line-stamp-word">STAMP</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

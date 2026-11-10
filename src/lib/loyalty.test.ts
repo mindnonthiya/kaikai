@@ -24,9 +24,11 @@ import {
   decryptLoyaltySecret,
   encryptLoyaltySecret,
   getLoyaltyServerKeyHash,
+  isCurrentVersionEncryptedSecret,
   isEncryptedLoyaltySecret,
 } from "@/lib/loyalty-crypto";
 import { generateQrMatrix, qrMatrixToSvgPath } from "@/lib/qr-code";
+import { checkLoyaltyRateLimit } from "@/lib/rate-limit";
 
 describe("LINE Loyalty Stamp Card & QR System", () => {
   it("normalizes default loyalty config with 1..10 distinct QR tokens", () => {
@@ -190,13 +192,39 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     expect(verifyLineWebhookSignature(body, "invalid_signature", secret)).toBe(false);
   });
 
-  it("encrypts and decrypts LINE Channel Access Token with AES-256-GCM", () => {
+  it("encrypts and decrypts LINE Channel Access Token with dedicated v2 AES-256-GCM key", () => {
     const rawToken = "eyJhbGciOiJIUzI1NiJ9.sample_line_channel_access_token_123456";
     const encrypted = encryptLoyaltySecret(rawToken);
     expect(isEncryptedLoyaltySecret(encrypted)).toBe(true);
+    expect(isCurrentVersionEncryptedSecret(encrypted)).toBe(true);
+    expect(encrypted).toMatch(/^enc:v2:/);
     expect(encrypted).not.toContain(rawToken);
     expect(decryptLoyaltySecret(encrypted)).toBe(rawToken);
     expect(getLoyaltyServerKeyHash()).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("enforces sliding-window rate limits per IP and shop secret", () => {
+    const ip = "203.0.113.55";
+    const shop = "ls_test_rate_limit_shop";
+    for (let i = 0; i < 3; i += 1) {
+      const okRes = checkLoyaltyRateLimit({
+        route: "claim",
+        ip,
+        shopSecret: shop,
+        maxRequests: 3,
+        windowMs: 10_000,
+      });
+      expect(okRes.allowed).toBe(true);
+    }
+    const blockedRes = checkLoyaltyRateLimit({
+      route: "claim",
+      ip,
+      shopSecret: shop,
+      maxRequests: 3,
+      windowMs: 10_000,
+    });
+    expect(blockedRes.allowed).toBe(false);
+    expect(blockedRes.retryAfterSeconds).toBeGreaterThanOrEqual(1);
   });
 
   it("validates LIFF IDs and quota-saving notification modes", () => {

@@ -22,10 +22,21 @@ import {
   decryptLoyaltySecret,
   encryptLoyaltySecret,
   getLoyaltyServerKeyHash,
+  isCurrentVersionEncryptedSecret,
 } from "@/lib/loyalty-crypto";
 import { InputError, dbError, optionalText, runAction, text } from "@/lib/server-action";
 import { DEFAULT_SHOP_ID, normalizeShopId, scopedSettingsKey } from "@/lib/shop-scope";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+export interface LoyaltyPushQueueSummary {
+  id: string;
+  eventType: "stamp_claim" | "coupon_redeem";
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
 
 export interface LoyaltyAdminSnapshot {
   config: LoyaltyConfig;
@@ -33,6 +44,7 @@ export interface LoyaltyAdminSnapshot {
   isTableReady: boolean;
   members: LoyaltyMemberSummary[];
   recentCoupons: Array<LoyaltyCouponRecord & { displayName: string }>;
+  recentPushJobs?: LoyaltyPushQueueSummary[];
 }
 
 function isMissingRelationError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -61,6 +73,7 @@ export async function fetchLoyaltyAdminData(
       isTableReady: true,
       members: [],
       recentCoupons: [],
+      recentPushJobs: [],
     };
   }
 
@@ -76,6 +89,7 @@ export async function fetchLoyaltyAdminData(
       isTableReady: true,
       members: [],
       recentCoupons: [],
+      recentPushJobs: [],
     };
   }
 
@@ -89,29 +103,68 @@ export async function fetchLoyaltyAdminData(
 
   const persisted = Boolean(settingRow?.value && typeof settingRow.value === "object");
   const normalized = normalizeLoyaltyConfig(settingRow?.value, fallbackShopName);
+  const decryptedSecret = decryptLoyaltySecret(normalized.channelSecret);
+  const decryptedAccessToken = decryptLoyaltySecret(normalized.channelAccessToken);
+
+  // Automatically upgrade legacy unencrypted or v1-encrypted settings rows to v2 AES-256-GCM + current serverKeyHash
+  const currentServerKeyHash = getLoyaltyServerKeyHash();
+  if (
+    persisted &&
+    (normalized.serverKeyHash !== currentServerKeyHash ||
+      (normalized.channelAccessToken && !isCurrentVersionEncryptedSecret(normalized.channelAccessToken)) ||
+      (normalized.channelSecret && !isCurrentVersionEncryptedSecret(normalized.channelSecret)))
+  ) {
+    const upgradedConfig: LoyaltyConfig = {
+      ...normalized,
+      channelSecret: decryptedSecret ? encryptLoyaltySecret(decryptedSecret) : "",
+      channelAccessToken: decryptedAccessToken ? encryptLoyaltySecret(decryptedAccessToken) : "",
+      serverKeyHash: currentServerKeyHash,
+    };
+    await supabase.from("settings").upsert(
+      {
+        owner_id: user.id,
+        key: settingKey,
+        value: upgradedConfig,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "owner_id,key" },
+    );
+  }
+
   const config: LoyaltyConfig = {
     ...normalized,
-    channelSecret: decryptLoyaltySecret(normalized.channelSecret),
-    channelAccessToken: decryptLoyaltySecret(normalized.channelAccessToken),
+    channelSecret: decryptedSecret,
+    channelAccessToken: decryptedAccessToken,
+    serverKeyHash: currentServerKeyHash,
   };
 
-  const [{ data: memberRows, error: memberErr }, { data: couponRows, error: couponErr }] =
-    await Promise.all([
-      supabase
-        .from("loyalty_members")
-        .select("id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at")
-        .eq("owner_id", user.id)
-        .eq("shop_scope_id", shopId)
-        .order("updated_at", { ascending: false })
-        .limit(100),
-      supabase
-        .from("loyalty_coupons")
-        .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at")
-        .eq("owner_id", user.id)
-        .eq("shop_scope_id", shopId)
-        .order("issued_at", { ascending: false })
-        .limit(100),
-    ]);
+  const [
+    { data: memberRows, error: memberErr },
+    { data: couponRows, error: couponErr },
+    { data: pushRows },
+  ] = await Promise.all([
+    supabase
+      .from("loyalty_members")
+      .select("id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .order("updated_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("loyalty_coupons")
+      .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .order("issued_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("loyalty_push_queue")
+      .select("id,event_type,status,attempts,last_error,created_at,sent_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .order("created_at", { ascending: false })
+      .limit(10),
+  ]);
 
   if (isMissingRelationError(memberErr) || isMissingRelationError(couponErr)) {
     return {
@@ -120,6 +173,7 @@ export async function fetchLoyaltyAdminData(
       isTableReady: false,
       members: [],
       recentCoupons: [],
+      recentPushJobs: [],
     };
   }
 
@@ -173,12 +227,25 @@ export async function fetchLoyaltyAdminData(
     displayName: memberNameById.get(c.memberId) ?? "ลูกค้า LINE",
   }));
 
+  const recentPushJobs: LoyaltyPushQueueSummary[] = ((pushRows ?? []) as Array<Record<string, unknown>>).map(
+    (row) => ({
+      id: String(row.id),
+      eventType: row.event_type === "coupon_redeem" ? "coupon_redeem" : "stamp_claim",
+      status: String(row.status ?? "pending"),
+      attempts: Number(row.attempts ?? 0),
+      lastError: row.last_error ? String(row.last_error) : null,
+      createdAt: String(row.created_at ?? new Date().toISOString()),
+      sentAt: row.sent_at ? String(row.sent_at) : null,
+    }),
+  );
+
   return {
     config,
     persisted,
     isTableReady: true,
     members,
     recentCoupons,
+    recentPushJobs,
   };
 }
 
@@ -223,7 +290,6 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
     const rawChannelSecret = optionalText(form, "channel_secret", "Channel Secret", 240) ?? "";
     const rawChannelAccessToken = optionalText(form, "channel_access_token", "Channel Access Token", 600) ?? "";
 
-    // Allow preserving existing secrets passed from hidden inputs if not yet persisted
     const formShopSecret = optionalText(form, "shop_secret", "Shop Secret", 80) ?? "";
     const formWebhookSecret = optionalText(form, "webhook_secret", "Webhook Secret", 80) ?? "";
     const rawQrTokensJson = String(form.get("qr_tokens_json") ?? "").trim();
@@ -335,7 +401,6 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
     }
     const delta = Math.max(-50, Math.min(50, Math.round(rawDelta)));
 
-    // 1. Prefer atomic PostgreSQL RPC (row locking + expiry check + coupon issue + audit log in 1 transaction)
     const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_adjust_loyalty_stamps", {
       p_shop_scope_id: shopId,
       p_member_id: memberId,
@@ -367,7 +432,6 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       dbError(rpcErr);
     }
 
-    // 2. Fallback if the updated SQL RPC has not been applied yet
     const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
     const { data: existingRow, error: readErr } = await supabase
       .from("settings")
@@ -401,7 +465,6 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
     let currentStamps = Math.max(0, Number(memberRow.stamps ?? 0));
     const currentLifetime = Math.max(0, Number(memberRow.lifetime_stamps ?? 0));
 
-    // Check expiry before adding positive stamps
     if (
       delta > 0 &&
       memberRow.expires_at &&
@@ -481,7 +544,6 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
       throw new InputError("กรุณากรอกรหัสคูปอง เช่น GT-XXXXXX");
     }
 
-    // 1. Prefer atomic RPC
     const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_redeem_coupon_by_code", {
       p_shop_scope_id: shopId,
       p_coupon_code: cleanCode,
@@ -517,7 +579,6 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
       dbError(rpcErr);
     }
 
-    // 2. Fallback if RPC not yet applied
     const { data: couponRow, error: readErr } = await supabase
       .from("loyalty_coupons")
       .select("*")

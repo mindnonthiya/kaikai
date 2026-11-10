@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
+  enqueueLoyaltyPushNotification,
   fetchShopLoyaltyServerCredentials,
-  sendLinePushMessageDetailed,
+  processPendingLoyaltyPushJobs,
   verifyLineLiffAccessToken,
 } from "@/lib/line-messaging";
 import {
@@ -14,6 +15,7 @@ import {
   resolveTrustedAppOrigin,
   shouldSendStampPushNotification,
 } from "@/lib/loyalty";
+import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -31,6 +33,22 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, code: "INVALID_PARAMS", message: "ข้อมูลคิวอาร์โค้ดสะสมแต้มไม่ครบถ้วนหรือไม่ถูกต้อง" },
         { status: 400 },
+      );
+    }
+
+    const rate = checkLoyaltyRateLimit({
+      route: "claim",
+      ip: resolveClientIp(request),
+      shopSecret,
+    });
+    if (!rate.allowed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "RATE_LIMITED",
+          message: `คำขอสแกนถี่เกินไป กรุณารอ ${rate.retryAfterSeconds} วินาทีแล้วลองใหม่`,
+        },
+        { status: 429 },
       );
     }
 
@@ -73,17 +91,15 @@ export async function POST(request: Request) {
           plainText,
           flexMessage,
           pushed: false,
+          queued: false,
           pushReason: "DEMO_MODE",
         },
       });
     }
 
     const supabase = await createSupabaseServerClient();
-
-    // Fetch shop's server-side config & encrypted credentials first
     const creds = await fetchShopLoyaltyServerCredentials(supabase, shopSecret);
 
-    // Server-side verification of LINE identity
     let verifiedLineUserId = "";
     let verifiedDisplayName = clientDisplayName;
     let verifiedPictureUrl = clientPictureUrl;
@@ -95,7 +111,7 @@ export async function POST(request: Request) {
           {
             ok: false,
             code: "LINE_AUTH_REQUIRED",
-            message: "ยืนยันตัวตน LINE ไม่สำเร็จหรือเซสชันหมดอายุ กรุณาเปิดสแกนผ่านแอป LINE อีกครั้ง",
+            message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดสแกนผ่านแอป LINE อีกครั้ง",
           },
           { status: 401 },
         );
@@ -104,7 +120,6 @@ export async function POST(request: Request) {
       verifiedDisplayName = verification.displayName;
       verifiedPictureUrl = verification.pictureUrl;
     } else if (creds.liffId) {
-      // When the shop has configured LIFF ID, strictly require verified LINE token before awarding stamps
       return NextResponse.json(
         {
           ok: false,
@@ -114,14 +129,13 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     } else if (clientLineUserId && !clientLineUserId.startsWith("U")) {
-      // Only allow browser preview ID ('web_...') when the shop has NOT configured LIFF ID yet
       verifiedLineUserId = clientLineUserId;
     } else {
       return NextResponse.json(
         {
           ok: false,
           code: "LINE_AUTH_REQUIRED",
-          message: "ไม่พบข้อมูลยืนยันตัวตนลูกค้า กรุณาเปิดผ่านแอป LINE",
+          message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
         },
         { status: 401 },
       );
@@ -155,7 +169,14 @@ export async function POST(request: Request) {
 
     const result = (data ?? {}) as Record<string, unknown>;
     if (!result.ok) {
-      const status = result.code === "COOLDOWN_ACTIVE" ? 429 : result.code === "INVALID_QR_TOKEN" ? 403 : 400;
+      const status =
+        result.code === "COOLDOWN_ACTIVE"
+          ? 429
+          : result.code === "INVALID_QR_TOKEN"
+            ? 403
+            : result.code === "LINE_AUTH_REQUIRED"
+              ? 401
+              : 400;
       return NextResponse.json(result, { status });
     }
 
@@ -168,7 +189,6 @@ export async function POST(request: Request) {
     const expiresAt = result.expiresAt ? String(result.expiresAt) : null;
     const validTill = formatValidTillDate(expiresAt);
 
-    // Strictly use LIFF ID from database config and trusted server origin (never from client body)
     const authoritativeLiffId = String(result.liffId ?? creds.liffId ?? "").trim();
     const rawNotifyMode = String(result.notifyMode ?? creds.notifyMode ?? "all").trim();
     const notifyMode: LoyaltyNotifyMode =
@@ -199,29 +219,44 @@ export async function POST(request: Request) {
       validTill,
     });
 
-    // Resolve channelAccessToken from server credentials (or legacy RPC fallback if SQL wasn't re-run yet)
-    const finalCredentials = creds.channelAccessToken
-      ? creds
-      : await fetchShopLoyaltyServerCredentials(supabase, shopSecret, {
-          channelAccessToken: typeof result.channelAccessToken === "string" ? result.channelAccessToken : "",
-          liffId: authoritativeLiffId,
-          notifyMode,
-        });
-
-    let pushed = false;
+    let queued = false;
     let pushReason = "SKIPPED";
 
     if (!shouldSendStampPushNotification(notifyMode, rewardsUnlocked)) {
       pushReason = notifyMode === "off" ? "NOTIFY_MODE_OFF" : "NOTIFY_MODE_REWARD_ONLY";
+    } else if (!verifiedLineUserId.startsWith("U")) {
+      pushReason = "NOT_LINE_USER_ID";
+    } else if (!creds.channelAccessToken) {
+      pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
     } else {
-      const pushRes = await sendLinePushMessageDetailed(
-        finalCredentials.channelAccessToken,
-        verifiedLineUserId,
-        [flexMessage],
-        plainText,
-      );
-      pushed = pushRes.ok;
-      pushReason = pushRes.reason ?? (pushRes.ok ? "PUSH_REQUEST_ACCEPTED" : "PUSH_FAILED");
+      // Enqueue job in DB and dispatch in background via Next.js after() so the customer response returns immediately!
+      const enqueueRes = await enqueueLoyaltyPushNotification(supabase, {
+        shopSecret,
+        lineUserId: verifiedLineUserId,
+        eventType: "stamp_claim",
+        messages: [flexMessage],
+        fallbackPlainText: plainText,
+      });
+      queued = true;
+      pushReason = enqueueRes.queued ? "QUEUED_BACKGROUND" : "DISPATCHED_BACKGROUND";
+
+      after(async () => {
+        try {
+          const bgSupabase = await createSupabaseServerClient();
+          await processPendingLoyaltyPushJobs(
+            bgSupabase,
+            shopSecret,
+            creds.channelAccessToken,
+            {
+              lineUserId: verifiedLineUserId,
+              messages: [flexMessage],
+              fallbackPlainText: plainText,
+            },
+          );
+        } catch {
+          // Background push errors are recorded in loyalty_push_queue
+        }
+      });
     }
 
     const safeResult = { ...result };
@@ -240,7 +275,8 @@ export async function POST(request: Request) {
       notification: {
         plainText,
         flexMessage,
-        pushed,
+        pushed: queued,
+        queued,
         pushReason,
       },
     });
