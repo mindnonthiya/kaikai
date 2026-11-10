@@ -9,12 +9,20 @@ import {
   type LoyaltyConfig,
   type LoyaltyCouponRecord,
   type LoyaltyMemberSummary,
+  type LoyaltyNotifyMode,
   computeExpiryDateIso,
   computeStampAwardProgress,
   createDefaultQrTokens,
+  formatThaiDateTime,
   generateCouponCode,
+  isValidLiffId,
   normalizeLoyaltyConfig,
 } from "@/lib/loyalty";
+import {
+  decryptLoyaltySecret,
+  encryptLoyaltySecret,
+  getLoyaltyServerKeyHash,
+} from "@/lib/loyalty-crypto";
 import { InputError, dbError, optionalText, runAction, text } from "@/lib/server-action";
 import { DEFAULT_SHOP_ID, normalizeShopId, scopedSettingsKey } from "@/lib/shop-scope";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -32,6 +40,13 @@ function isMissingRelationError(error: { code?: string; message?: string } | nul
   if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST204") return true;
   const msg = String(error.message ?? "");
   return msg.includes("loyalty_") && (msg.includes("does not exist") || msg.includes("schema cache"));
+}
+
+function isMissingRpcError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  const msg = String(error.message ?? "");
+  return msg.includes("Could not find the function") || msg.includes("does not exist");
 }
 
 export async function fetchLoyaltyAdminData(
@@ -73,7 +88,12 @@ export async function fetchLoyaltyAdminData(
     .maybeSingle();
 
   const persisted = Boolean(settingRow?.value && typeof settingRow.value === "object");
-  const config = normalizeLoyaltyConfig(settingRow?.value, fallbackShopName);
+  const normalized = normalizeLoyaltyConfig(settingRow?.value, fallbackShopName);
+  const config: LoyaltyConfig = {
+    ...normalized,
+    channelSecret: decryptLoyaltySecret(normalized.channelSecret),
+    channelAccessToken: decryptLoyaltySecret(normalized.channelAccessToken),
+  };
 
   const [{ data: memberRows, error: memberErr }, { data: couponRows, error: couponErr }] =
     await Promise.all([
@@ -190,10 +210,18 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
     const cooldownMinutes = Math.max(0, Math.min(1440, Math.round(Number.isFinite(rawCooldownMinutes) ? rawCooldownMinutes : 5)));
 
     const rulesText = optionalText(form, "rules_text", "เงื่อนไขการสะสมแต้ม", 1500) ?? "";
-    const liffId = optionalText(form, "liff_id", "LIFF ID", 120) ?? "";
+    const liffId = (optionalText(form, "liff_id", "LIFF ID", 120) ?? "").trim();
+    if (liffId && !isValidLiffId(liffId)) {
+      throw new InputError("รูปแบบ LIFF ID ไม่ถูกต้อง (ตัวอย่างที่ถูกต้อง: 2009769853-BWR6D81k)");
+    }
+
     const botBasicId = optionalText(form, "bot_basic_id", "LINE OA Basic ID", 80) ?? "";
-    const channelSecret = optionalText(form, "channel_secret", "Channel Secret", 160) ?? "";
-    const channelAccessToken = optionalText(form, "channel_access_token", "Channel Access Token", 400) ?? "";
+    const rawNotifyMode = String(form.get("notify_mode") ?? current.notifyMode ?? "all").trim();
+    const notifyMode: LoyaltyNotifyMode =
+      rawNotifyMode === "reward_only" || rawNotifyMode === "off" ? rawNotifyMode : "all";
+
+    const rawChannelSecret = optionalText(form, "channel_secret", "Channel Secret", 240) ?? "";
+    const rawChannelAccessToken = optionalText(form, "channel_access_token", "Channel Access Token", 600) ?? "";
 
     // Allow preserving existing secrets passed from hidden inputs if not yet persisted
     const formShopSecret = optionalText(form, "shop_secret", "Shop Secret", 80) ?? "";
@@ -225,8 +253,10 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
       rulesText: rulesText || current.rulesText,
       liffId,
       botBasicId: botBasicId ? (botBasicId.startsWith("@") ? botBasicId : `@${botBasicId}`) : "",
-      channelSecret,
-      channelAccessToken,
+      notifyMode,
+      channelSecret: rawChannelSecret ? encryptLoyaltySecret(rawChannelSecret) : "",
+      channelAccessToken: rawChannelAccessToken ? encryptLoyaltySecret(rawChannelAccessToken) : "",
+      serverKeyHash: getLoyaltyServerKeyHash(),
       qrTokens: parsedQrTokens,
     };
 
@@ -247,7 +277,7 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
     return {
       ok: true,
       message: enabled
-        ? "บันทึกและเปิดใช้งานระบบสะสมแต้ม LINE OA สำหรับร้านนี้แล้ว"
+        ? "บันทึกและเข้ารหัส Token ระบบสะสมแต้ม LINE OA สำหรับร้านนี้เรียบร้อยแล้ว"
         : "บันทึกการตั้งค่าระบบสะสมแต้ม LINE OA แล้ว (สถานะ: ปิดใช้งานสำหรับร้านนี้)",
     };
   });
@@ -267,6 +297,11 @@ export async function regenerateLoyaltyQrTokensAction(): Promise<ActionState> {
     const current = normalizeLoyaltyConfig(existingRow?.value);
     const nextConfig: LoyaltyConfig = {
       ...current,
+      channelSecret: current.channelSecret ? encryptLoyaltySecret(decryptLoyaltySecret(current.channelSecret)) : "",
+      channelAccessToken: current.channelAccessToken
+        ? encryptLoyaltySecret(decryptLoyaltySecret(current.channelAccessToken))
+        : "",
+      serverKeyHash: getLoyaltyServerKeyHash(),
       qrTokens: createDefaultQrTokens(),
     };
 
@@ -293,6 +328,46 @@ export async function regenerateLoyaltyQrTokensAction(): Promise<ActionState> {
 
 export async function adjustMemberStampsAction(form: FormData): Promise<ActionState> {
   return runAction(async ({ supabase, user, shopId }) => {
+    const memberId = String(form.get("member_id") ?? "").trim();
+    const rawDelta = Number(form.get("delta_stamps") ?? 0);
+    if (!Number.isFinite(rawDelta) || Math.round(rawDelta) === 0) {
+      throw new InputError("กรุณาระบุจำนวนแต้มที่ต้องการเพิ่มหรือลด");
+    }
+    const delta = Math.max(-50, Math.min(50, Math.round(rawDelta)));
+
+    // 1. Prefer atomic PostgreSQL RPC (row locking + expiry check + coupon issue + audit log in 1 transaction)
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_adjust_loyalty_stamps", {
+      p_shop_scope_id: shopId,
+      p_member_id: memberId,
+      p_delta: delta,
+    });
+
+    if (!rpcErr && rpcData) {
+      const res = rpcData as Record<string, unknown>;
+      if (!res.ok) {
+        throw new InputError(String(res.message ?? "ไม่สามารถปรับแต้มลูกค้าได้"));
+      }
+      const displayName = String(res.displayName ?? "ลูกค้า LINE");
+      const nextStamps = Number(res.nextStamps ?? 0);
+      const stampsPerReward = Number(res.stampsPerReward ?? 10);
+      const issuedCouponsCount = Number(res.issuedCouponsCount ?? 0);
+
+      invalidateQueryCache();
+      revalidatePath("/settings");
+      return {
+        ok: true,
+        message:
+          delta > 0
+            ? `เพิ่ม +${delta} แต้มให้ “${displayName}” แล้ว (แต้มปัจจุบัน ${nextStamps}/${stampsPerReward}${issuedCouponsCount > 0 ? ` · ออกคูปองใหม่ +${issuedCouponsCount} ใบ` : ""})`
+            : `ปรับลด ${delta} แต้มของ “${displayName}” แล้ว (แต้มปัจจุบัน ${nextStamps}/${stampsPerReward})`,
+      };
+    }
+
+    if (rpcErr && !isMissingRpcError(rpcErr)) {
+      dbError(rpcErr);
+    }
+
+    // 2. Fallback if the updated SQL RPC has not been applied yet
     const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
     const { data: existingRow, error: readErr } = await supabase
       .from("settings")
@@ -302,13 +377,6 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       .maybeSingle();
     if (readErr) dbError(readErr);
     const config = normalizeLoyaltyConfig(existingRow?.value);
-
-    const memberId = String(form.get("member_id") ?? "").trim();
-    const rawDelta = Number(form.get("delta_stamps") ?? 0);
-    if (!Number.isFinite(rawDelta) || Math.round(rawDelta) === 0) {
-      throw new InputError("กรุณาระบุจำนวนแต้มที่ต้องการเพิ่มหรือลด");
-    }
-    const delta = Math.max(-50, Math.min(50, Math.round(rawDelta)));
 
     const { data: memberRow, error: memberReadErr } = await supabase
       .from("loyalty_members")
@@ -326,11 +394,22 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       throw new InputError("ไม่พบข้อมูลลูกค้ารายนี้");
     }
 
-    const currentStamps = Math.max(0, Number(memberRow.stamps ?? 0));
-    const currentLifetime = Math.max(0, Number(memberRow.lifetime_stamps ?? 0));
     const now = new Date();
     const nowIso = now.toISOString();
     const nextExpiresIso = computeExpiryDateIso(now, config.validityMonths);
+
+    let currentStamps = Math.max(0, Number(memberRow.stamps ?? 0));
+    const currentLifetime = Math.max(0, Number(memberRow.lifetime_stamps ?? 0));
+
+    // Check expiry before adding positive stamps
+    if (
+      delta > 0 &&
+      memberRow.expires_at &&
+      new Date(String(memberRow.expires_at)).getTime() < now.getTime() &&
+      currentStamps > 0
+    ) {
+      currentStamps = 0;
+    }
 
     let nextStamps = currentStamps;
     let issuedCouponsCount = 0;
@@ -370,7 +449,7 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       if (couponInsErr) dbError(couponInsErr);
     }
 
-    await supabase.from("loyalty_logs").insert({
+    const { error: logErr } = await supabase.from("loyalty_logs").insert({
       owner_id: user.id,
       shop_scope_id: shopId,
       member_id: memberId,
@@ -380,6 +459,7 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       balance_after: nextStamps,
       note: delta > 0 ? `ร้านค้าเพิ่มแต้มพิเศษ +${delta}` : `ร้านค้าปรับลดแต้ม ${delta}`,
     });
+    if (logErr) dbError(logErr);
 
     invalidateQueryCache();
     revalidatePath("/settings");
@@ -389,6 +469,112 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
         delta > 0
           ? `เพิ่ม +${delta} แต้มให้ “${String(memberRow.display_name)}” แล้ว (แต้มปัจจุบัน ${nextStamps}/${config.stampsPerReward}${issuedCouponsCount > 0 ? ` · ออกคูปองใหม่ +${issuedCouponsCount} ใบ` : ""})`
           : `ปรับลด ${delta} แต้มของ “${String(memberRow.display_name)}” แล้ว (แต้มปัจจุบัน ${nextStamps}/${config.stampsPerReward})`,
+    };
+  });
+}
+
+export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user, shopId }) => {
+    const rawCode = String(form.get("coupon_code") ?? "").trim();
+    const cleanCode = rawCode.replace(/^#/, "").trim().toUpperCase();
+    if (cleanCode.length < 4) {
+      throw new InputError("กรุณากรอกรหัสคูปอง เช่น GT-XXXXXX");
+    }
+
+    // 1. Prefer atomic RPC
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_redeem_coupon_by_code", {
+      p_shop_scope_id: shopId,
+      p_coupon_code: cleanCode,
+    });
+
+    if (!rpcErr && rpcData) {
+      const res = rpcData as Record<string, unknown>;
+      if (!res.ok) {
+        throw new InputError(String(res.message ?? `ไม่พบรหัสคูปอง #${cleanCode}`));
+      }
+      const alreadyClaimed = Boolean(res.alreadyClaimed);
+      const code = String(res.code ?? cleanCode);
+      const title = String(res.title ?? "ส่วนลด 50%");
+      const displayName = String(res.displayName ?? "ลูกค้า LINE");
+      const claimedAtText = formatThaiDateTime(res.claimedAt ? String(res.claimedAt) : new Date());
+
+      invalidateQueryCache();
+      revalidatePath("/settings");
+
+      if (alreadyClaimed) {
+        return {
+          ok: true,
+          message: `ℹ️ คูปอง #${code} (${title}) ของ “${displayName}” ถูกกดใช้สิทธิ์ไปแล้วเมื่อ ${claimedAtText}`,
+        };
+      }
+      return {
+        ok: true,
+        message: `✅ ยืนยันและตัดสิทธิ์คูปอง #${code} (${title}) ของ “${displayName}” เรียบร้อยแล้ว (${claimedAtText})`,
+      };
+    }
+
+    if (rpcErr && !isMissingRpcError(rpcErr)) {
+      dbError(rpcErr);
+    }
+
+    // 2. Fallback if RPC not yet applied
+    const { data: couponRow, error: readErr } = await supabase
+      .from("loyalty_coupons")
+      .select("*")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .ilike("code", cleanCode)
+      .order("issued_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (readErr) dbError(readErr);
+    if (!couponRow) {
+      throw new InputError(`ไม่พบรหัสคูปอง #${cleanCode} ในร้านนี้`);
+    }
+
+    const { data: memberRow } = await supabase
+      .from("loyalty_members")
+      .select("display_name,stamps")
+      .eq("id", String(couponRow.member_id))
+      .maybeSingle();
+
+    const displayName = String(memberRow?.display_name ?? "ลูกค้า LINE");
+
+    if (couponRow.status === "claimed") {
+      return {
+        ok: true,
+        message: `ℹ️ คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” ถูกใช้สิทธิ์ไปแล้วเมื่อ ${formatThaiDateTime(String(couponRow.claimed_at))}`,
+      };
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: updErr } = await supabase
+      .from("loyalty_coupons")
+      .update({
+        status: "claimed",
+        claimed_at: nowIso,
+      })
+      .eq("id", String(couponRow.id))
+      .eq("owner_id", user.id);
+    if (updErr) dbError(updErr);
+
+    await supabase.from("loyalty_logs").insert({
+      owner_id: user.id,
+      shop_scope_id: shopId,
+      member_id: String(couponRow.member_id),
+      line_user_id: String(couponRow.line_user_id),
+      action: "admin_coupon_redeem",
+      points_delta: 0,
+      balance_after: Number(memberRow?.stamps ?? 0),
+      note: `ร้านค้ายืนยันการตัดสิทธิ์คูปอง #${String(couponRow.code)}`,
+    });
+
+    invalidateQueryCache();
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message: `✅ ยืนยันและตัดสิทธิ์คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” เรียบร้อยแล้ว`,
     };
   });
 }

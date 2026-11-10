@@ -94,8 +94,11 @@ drop function if exists public.redeem_loyalty_coupon(text, text, uuid);
 drop function if exists public.redeem_loyalty_coupon(text, uuid, text, text);
 drop function if exists public.get_loyalty_webhook_context(text, text);
 drop function if exists public.get_loyalty_webhook_context(text);
+drop function if exists public.get_loyalty_server_credentials(text, text);
+drop function if exists public.admin_adjust_loyalty_stamps(text, uuid, integer);
+drop function if exists public.admin_redeem_coupon_by_code(text, text);
 
--- 1. Public RPC: Get Loyalty Card State & Member Progress
+-- 1. Public RPC: Get Loyalty Card State & Member Progress (NEVER returns channelAccessToken or channelSecret)
 create or replace function public.get_loyalty_card_state(
   p_shop_secret text,
   p_line_user_id text default null,
@@ -197,21 +200,36 @@ begin
       );
     end if;
 
+    -- Return all unclaimed coupons + at most 20 most recent claimed coupons
     select coalesce(jsonb_agg(
       jsonb_build_object(
-        'id', c.id,
-        'code', c.code,
-        'title', c.title,
-        'status', c.status,
-        'issuedAt', c.issued_at,
-        'claimedAt', c.claimed_at
+        'id', sub.id,
+        'code', sub.code,
+        'title', sub.title,
+        'status', sub.status,
+        'issuedAt', sub.issued_at,
+        'claimedAt', sub.claimed_at
       ) order by
-        case when c.status = 'unclaimed' then 0 else 1 end,
-        coalesce(c.claimed_at, c.issued_at) desc
+        case when sub.status = 'unclaimed' then 0 else 1 end,
+        coalesce(sub.claimed_at, sub.issued_at) desc
     ), '[]'::jsonb)
     into v_coupons
-    from public.loyalty_coupons c
-    where c.member_id = v_member.id;
+    from (
+      (
+        select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+        from public.loyalty_coupons c
+        where c.member_id = v_member.id and c.status = 'unclaimed'
+        order by c.issued_at desc
+      )
+      union all
+      (
+        select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+        from public.loyalty_coupons c
+        where c.member_id = v_member.id and c.status = 'claimed'
+        order by coalesce(c.claimed_at, c.issued_at) desc
+        limit 20
+      )
+    ) sub;
   end if;
 
   return jsonb_build_object(
@@ -225,7 +243,8 @@ begin
       'cooldownMinutes', coalesce((v_config->>'cooldownMinutes')::integer, 5),
       'rulesText', coalesce(nullif(v_config->>'rulesText', ''), ''),
       'liffId', coalesce(v_config->>'liffId', ''),
-      'botBasicId', coalesce(v_config->>'botBasicId', '')
+      'botBasicId', coalesce(v_config->>'botBasicId', ''),
+      'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all')
     ),
     'member', jsonb_build_object(
       'lineUserId', coalesce(v_member.line_user_id, coalesce(p_line_user_id, '')),
@@ -243,6 +262,7 @@ end;
 $$;
 
 -- 2. Public RPC: Atomically Claim Stamps from a Static 1..10 Box QR Code
+-- NEVER returns channelAccessToken or channelSecret; returns updated member + coupons in single round-trip.
 create or replace function public.claim_loyalty_stamps(
   p_shop_secret text,
   p_points integer,
@@ -267,6 +287,7 @@ declare
   v_card_title text;
   v_reward_title text;
   v_member public.loyalty_members%rowtype;
+  v_coupons jsonb := '[]'::jsonb;
   v_now timestamptz := now();
   v_elapsed_seconds integer;
   v_remaining_minutes integer;
@@ -440,10 +461,42 @@ begin
     'ลูกค้าสแกน QR สะสม +' || p_points::text || ' แต้ม'
   );
 
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', sub.id,
+      'code', sub.code,
+      'title', sub.title,
+      'status', sub.status,
+      'issuedAt', sub.issued_at,
+      'claimedAt', sub.claimed_at
+    ) order by
+      case when sub.status = 'unclaimed' then 0 else 1 end,
+      coalesce(sub.claimed_at, sub.issued_at) desc
+  ), '[]'::jsonb)
+  into v_coupons
+  from (
+    (
+      select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+      from public.loyalty_coupons c
+      where c.member_id = v_member.id and c.status = 'unclaimed'
+      order by c.issued_at desc
+    )
+    union all
+    (
+      select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+      from public.loyalty_coupons c
+      where c.member_id = v_member.id and c.status = 'claimed'
+      order by coalesce(c.claimed_at, c.issued_at) desc
+      limit 20
+    )
+  ) sub;
+
   return jsonb_build_object(
     'ok', true,
     'cardTitle', v_card_title,
     'rewardTitle', v_reward_title,
+    'liffId', coalesce(v_config->>'liffId', ''),
+    'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all'),
     'displayName', v_member.display_name,
     'pointsAdded', p_points,
     'previousStamps', v_prev_stamps,
@@ -452,12 +505,22 @@ begin
     'stampsRemaining', v_stamps_per_reward - v_new_stamps,
     'rewardsUnlocked', v_rewards_unlocked,
     'expiresAt', v_member.expires_at,
-    'channelAccessToken', coalesce(v_config->>'channelAccessToken', '')
+    'member', jsonb_build_object(
+      'lineUserId', v_member.line_user_id,
+      'displayName', v_member.display_name,
+      'pictureUrl', v_member.picture_url,
+      'stamps', v_member.stamps,
+      'lifetimeStamps', v_member.lifetime_stamps,
+      'expiresAt', v_member.expires_at,
+      'lastStampedAt', v_member.last_stamped_at,
+      'expiredReset', false
+    ),
+    'coupons', v_coupons
   );
 end;
 $$;
 
--- 3. Public RPC: Self-Service Coupon Redemption (ลูกค้ากดใช้คูปองเองแล้วแคปส่งร้าน)
+-- 3. Public RPC: Self-Service Coupon Redemption (NEVER returns channelAccessToken or channelSecret)
 create or replace function public.redeem_loyalty_coupon(
   p_shop_secret text,
   p_coupon_id uuid,
@@ -475,6 +538,7 @@ declare
   v_shop_scope_id text;
   v_coupon public.loyalty_coupons%rowtype;
   v_member public.loyalty_members%rowtype;
+  v_coupons jsonb := '[]'::jsonb;
   v_now timestamptz := now();
   v_already_claimed boolean := false;
 begin
@@ -546,6 +610,36 @@ begin
     );
   end if;
 
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', sub.id,
+      'code', sub.code,
+      'title', sub.title,
+      'status', sub.status,
+      'issuedAt', sub.issued_at,
+      'claimedAt', sub.claimed_at
+    ) order by
+      case when sub.status = 'unclaimed' then 0 else 1 end,
+      coalesce(sub.claimed_at, sub.issued_at) desc
+  ), '[]'::jsonb)
+  into v_coupons
+  from (
+    (
+      select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+      from public.loyalty_coupons c
+      where c.member_id = v_coupon.member_id and c.status = 'unclaimed'
+      order by c.issued_at desc
+    )
+    union all
+    (
+      select c.id, c.code, c.title, c.status, c.issued_at, c.claimed_at
+      from public.loyalty_coupons c
+      where c.member_id = v_coupon.member_id and c.status = 'claimed'
+      order by coalesce(c.claimed_at, c.issued_at) desc
+      limit 20
+    )
+  ) sub;
+
   return jsonb_build_object(
     'ok', true,
     'alreadyClaimed', v_already_claimed,
@@ -554,15 +648,18 @@ begin
     'title', v_coupon.title,
     'claimedAt', coalesce(v_coupon.claimed_at, v_now),
     'cardTitle', coalesce(nullif(v_config->>'cardTitle', ''), 'GaiTomNamPla 🐔'),
+    'liffId', coalesce(v_config->>'liffId', ''),
+    'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all'),
     'displayName', coalesce(v_member.display_name, coalesce(p_display_name, 'ลูกค้า LINE')),
-    'channelAccessToken', coalesce(v_config->>'channelAccessToken', '')
+    'coupons', v_coupons
   );
 end;
 $$;
 
--- 4. Public RPC: Resolve Webhook Context by Private Webhook Secret
-create or replace function public.get_loyalty_webhook_context(
-  p_webhook_secret text
+-- 4. Server-Only Credential Lookup RPC (requires serverKeyHash match + returns AES-256-GCM encrypted tokens)
+create or replace function public.get_loyalty_server_credentials(
+  p_lookup_secret text,
+  p_server_key_hash text
 ) returns jsonb
 language plpgsql
 security definer
@@ -572,8 +669,13 @@ declare
   v_owner_id uuid;
   v_setting_key text;
   v_config jsonb;
+  v_stored_hash text;
 begin
-  if p_webhook_secret is null or length(trim(p_webhook_secret)) < 6 then
+  if p_lookup_secret is null or length(trim(p_lookup_secret)) < 6 then
+    return jsonb_build_object('ok', false);
+  end if;
+
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 16 then
     return jsonb_build_object('ok', false);
   end if;
 
@@ -581,23 +683,226 @@ begin
     into v_owner_id, v_setting_key, v_config
   from public.settings s
   where (s.key = 'line_loyalty' or s.key like 's:%:line_loyalty')
-    and s.value->>'webhookSecret' = trim(p_webhook_secret)
-    and coalesce((s.value->>'enabled')::boolean, false) = true
+    and (
+      s.value->>'shopSecret' = trim(p_lookup_secret)
+      or s.value->>'webhookSecret' = trim(p_lookup_secret)
+    )
   limit 1;
 
   if v_owner_id is null then
     return jsonb_build_object('ok', false);
   end if;
 
+  v_stored_hash := coalesce(v_config->>'serverKeyHash', '');
+  if v_stored_hash <> '' and v_stored_hash <> trim(p_server_key_hash) then
+    return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY');
+  end if;
+
   return jsonb_build_object(
     'ok', true,
+    'enabled', coalesce((v_config->>'enabled')::boolean, false),
     'shopSecret', coalesce(v_config->>'shopSecret', ''),
     'channelSecret', coalesce(v_config->>'channelSecret', ''),
     'channelAccessToken', coalesce(v_config->>'channelAccessToken', ''),
     'cardTitle', coalesce(nullif(v_config->>'cardTitle', ''), 'GaiTomNamPla 🐔'),
     'rewardTitle', coalesce(nullif(v_config->>'rewardTitle', ''), 'ลด 50% เมนูหลัก 1 กล่อง'),
     'stampsPerReward', greatest(1, least(30, coalesce((v_config->>'stampsPerReward')::integer, 10))),
-    'liffId', coalesce(v_config->>'liffId', '')
+    'liffId', coalesce(v_config->>'liffId', ''),
+    'notifyMode', coalesce(nullif(v_config->>'notifyMode', ''), 'all')
+  );
+end;
+$$;
+
+-- 5. Authenticated Shop Owner RPC: Atomic Stamp Adjustment (locks row, checks expiry, issues coupons & logs atomically)
+create or replace function public.admin_adjust_loyalty_stamps(
+  p_shop_scope_id text,
+  p_member_id uuid,
+  p_delta integer
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_shop text := coalesce(nullif(trim(p_shop_scope_id), ''), 'default');
+  v_setting_key text;
+  v_config jsonb := '{}'::jsonb;
+  v_stamps_per_reward integer;
+  v_validity_months integer;
+  v_reward_title text;
+  v_member public.loyalty_members%rowtype;
+  v_now timestamptz := now();
+  v_base_stamps integer;
+  v_combined integer;
+  v_next_stamps integer;
+  v_issued_count integer := 0;
+  v_i integer;
+  v_code text;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'message', 'กรุณาเข้าสู่ระบบก่อนจัดการแต้มลูกค้า');
+  end if;
+
+  if p_delta is null or p_delta = 0 or p_delta < -50 or p_delta > 50 then
+    return jsonb_build_object('ok', false, 'message', 'จำนวนแต้มที่ต้องการปรับไม่ถูกต้อง');
+  end if;
+
+  v_setting_key := case when v_shop = 'default' then 'line_loyalty' else 's:' || v_shop || ':line_loyalty' end;
+
+  select s.value into v_config
+  from public.settings s
+  where s.owner_id = v_user_id and s.key = v_setting_key
+  limit 1;
+
+  v_stamps_per_reward := greatest(1, least(30, coalesce((v_config->>'stampsPerReward')::integer, 10)));
+  v_validity_months := greatest(1, least(36, coalesce((v_config->>'validityMonths')::integer, 3)));
+  v_reward_title := coalesce(nullif(v_config->>'rewardTitle', ''), 'ลด 50% เมนูหลัก 1 กล่อง');
+
+  select * into v_member
+  from public.loyalty_members
+  where id = p_member_id
+    and owner_id = v_user_id
+    and shop_scope_id = v_shop
+  for update;
+
+  if v_member.id is null then
+    return jsonb_build_object('ok', false, 'message', 'ไม่พบข้อมูลลูกค้ารายนี้');
+  end if;
+
+  v_base_stamps := greatest(0, v_member.stamps);
+  if p_delta > 0 and v_member.expires_at is not null and v_member.expires_at < v_now and v_base_stamps > 0 then
+    v_base_stamps := 0;
+  end if;
+
+  if p_delta > 0 then
+    v_combined := v_base_stamps + p_delta;
+    v_issued_count := v_combined / v_stamps_per_reward;
+    v_next_stamps := mod(v_combined, v_stamps_per_reward);
+  else
+    v_next_stamps := greatest(0, v_base_stamps + p_delta);
+  end if;
+
+  update public.loyalty_members
+  set stamps = v_next_stamps,
+      lifetime_stamps = case when p_delta > 0 then lifetime_stamps + p_delta else lifetime_stamps end,
+      expires_at = case when p_delta > 0 then v_now + (v_validity_months || ' months')::interval else expires_at end,
+      updated_at = v_now
+  where id = v_member.id
+  returning * into v_member;
+
+  if v_issued_count > 0 then
+    for v_i in 1..v_issued_count loop
+      v_code := 'GT-' || upper(substr(md5(gen_random_uuid()::text), 1, 6));
+      insert into public.loyalty_coupons (
+        owner_id, shop_scope_id, member_id, line_user_id, code, title, status, issued_at
+      ) values (
+        v_user_id, v_shop, v_member.id, v_member.line_user_id, v_code, v_reward_title, 'unclaimed', v_now
+      );
+    end loop;
+  end if;
+
+  insert into public.loyalty_logs (
+    owner_id, shop_scope_id, member_id, line_user_id, action, points_delta, balance_after, note
+  ) values (
+    v_user_id,
+    v_shop,
+    v_member.id,
+    v_member.line_user_id,
+    'manual_adjust',
+    p_delta,
+    v_next_stamps,
+    case when p_delta > 0 then 'ร้านค้าเพิ่มแต้มพิเศษ +' || p_delta::text else 'ร้านค้าปรับลดแต้ม ' || p_delta::text end
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'displayName', v_member.display_name,
+    'nextStamps', v_next_stamps,
+    'stampsPerReward', v_stamps_per_reward,
+    'issuedCouponsCount', v_issued_count
+  );
+end;
+$$;
+
+-- 6. Authenticated Shop Owner RPC: Verify & Redeem Coupon by Code in Backoffice
+create or replace function public.admin_redeem_coupon_by_code(
+  p_shop_scope_id text,
+  p_coupon_code text
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_shop text := coalesce(nullif(trim(p_shop_scope_id), ''), 'default');
+  v_clean_code text;
+  v_coupon public.loyalty_coupons%rowtype;
+  v_member public.loyalty_members%rowtype;
+  v_now timestamptz := now();
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'message', 'กรุณาเข้าสู่ระบบก่อนตรวจสอบคูปอง');
+  end if;
+
+  v_clean_code := upper(regexp_replace(trim(coalesce(p_coupon_code, '')), '^#', ''));
+  if length(v_clean_code) < 4 then
+    return jsonb_build_object('ok', false, 'message', 'กรุณาระบุรหัสคูปอง เช่น GT-XXXXXX');
+  end if;
+
+  select * into v_coupon
+  from public.loyalty_coupons
+  where owner_id = v_user_id
+    and shop_scope_id = v_shop
+    and upper(code) = v_clean_code
+  order by issued_at desc
+  limit 1
+  for update;
+
+  if v_coupon.id is null then
+    return jsonb_build_object('ok', false, 'message', 'ไม่พบรหัสคูปอง #' || v_clean_code || ' ในร้านนี้');
+  end if;
+
+  select * into v_member from public.loyalty_members where id = v_coupon.member_id;
+
+  if v_coupon.status = 'claimed' then
+    return jsonb_build_object(
+      'ok', true,
+      'alreadyClaimed', true,
+      'code', v_coupon.code,
+      'title', v_coupon.title,
+      'displayName', coalesce(v_member.display_name, 'ลูกค้า LINE'),
+      'claimedAt', v_coupon.claimed_at
+    );
+  end if;
+
+  update public.loyalty_coupons
+  set status = 'claimed',
+      claimed_at = v_now
+  where id = v_coupon.id
+  returning * into v_coupon;
+
+  insert into public.loyalty_logs (
+    owner_id, shop_scope_id, member_id, line_user_id, action, points_delta, balance_after, note
+  ) values (
+    v_user_id,
+    v_shop,
+    v_coupon.member_id,
+    v_coupon.line_user_id,
+    'admin_coupon_redeem',
+    0,
+    coalesce(v_member.stamps, 0),
+    'ร้านค้ายืนยันการตัดสิทธิ์คูปอง #' || v_coupon.code
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'alreadyClaimed', false,
+    'code', v_coupon.code,
+    'title', v_coupon.title,
+    'displayName', coalesce(v_member.display_name, 'ลูกค้า LINE'),
+    'claimedAt', v_coupon.claimed_at
   );
 end;
 $$;
@@ -611,7 +916,13 @@ grant execute on function public.claim_loyalty_stamps(text, integer, text, text,
 revoke all on function public.redeem_loyalty_coupon(text, uuid, text, text) from public;
 grant execute on function public.redeem_loyalty_coupon(text, uuid, text, text) to anon, authenticated;
 
-revoke all on function public.get_loyalty_webhook_context(text) from public;
-grant execute on function public.get_loyalty_webhook_context(text) to anon, authenticated;
+revoke all on function public.get_loyalty_server_credentials(text, text) from public;
+grant execute on function public.get_loyalty_server_credentials(text, text) to anon, authenticated;
+
+revoke all on function public.admin_adjust_loyalty_stamps(text, uuid, integer) from public;
+grant execute on function public.admin_adjust_loyalty_stamps(text, uuid, integer) to authenticated;
+
+revoke all on function public.admin_redeem_coupon_by_code(text, text) from public;
+grant execute on function public.admin_redeem_coupon_by_code(text, text) to authenticated;
 
 notify pgrst, 'reload schema';

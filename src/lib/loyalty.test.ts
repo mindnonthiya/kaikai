@@ -1,6 +1,9 @@
 import { createHmac } from "crypto";
 import { describe, expect, it } from "vitest";
-import { verifyLineWebhookSignature } from "@/lib/line-messaging";
+import {
+  extractLineChannelIdFromLiffId,
+  verifyLineWebhookSignature,
+} from "@/lib/line-messaging";
 import {
   LOYALTY_POINT_TIERS,
   buildCouponRedeemFlexMessage,
@@ -12,9 +15,17 @@ import {
   computeExpiryDateIso,
   computeStampAwardProgress,
   formatValidTillDate,
+  isValidLiffId,
   normalizeLoyaltyConfig,
   parseLoyaltyQueryParams,
+  shouldSendStampPushNotification,
 } from "@/lib/loyalty";
+import {
+  decryptLoyaltySecret,
+  encryptLoyaltySecret,
+  getLoyaltyServerKeyHash,
+  isEncryptedLoyaltySecret,
+} from "@/lib/loyalty-crypto";
 import { generateQrMatrix, qrMatrixToSvgPath } from "@/lib/qr-code";
 
 describe("LINE Loyalty Stamp Card & QR System", () => {
@@ -169,12 +180,34 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     expect(svg.pathData).toContain("M2,2h1v1h-1z");
   });
 
-  it("verifies LINE Webhook HMAC-SHA256 signatures accurately", () => {
+  it("verifies LINE Webhook HMAC-SHA256 signatures accurately (both plaintext and encrypted secret)", () => {
     const body = JSON.stringify({ events: [] });
     const secret = "my_line_channel_secret";
     const validSignature = createHmac("sha256", secret).update(body, "utf8").digest("base64");
 
     expect(verifyLineWebhookSignature(body, validSignature, secret)).toBe(true);
+    expect(verifyLineWebhookSignature(body, validSignature, encryptLoyaltySecret(secret))).toBe(true);
     expect(verifyLineWebhookSignature(body, "invalid_signature", secret)).toBe(false);
+  });
+
+  it("encrypts and decrypts LINE Channel Access Token with AES-256-GCM", () => {
+    const rawToken = "eyJhbGciOiJIUzI1NiJ9.sample_line_channel_access_token_123456";
+    const encrypted = encryptLoyaltySecret(rawToken);
+    expect(isEncryptedLoyaltySecret(encrypted)).toBe(true);
+    expect(encrypted).not.toContain(rawToken);
+    expect(decryptLoyaltySecret(encrypted)).toBe(rawToken);
+    expect(getLoyaltyServerKeyHash()).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("validates LIFF IDs and quota-saving notification modes", () => {
+    expect(isValidLiffId("")).toBe(true);
+    expect(isValidLiffId("2009769853-BWR6D81k")).toBe(true);
+    expect(isValidLiffId("https://evil.example.com")).toBe(false);
+    expect(extractLineChannelIdFromLiffId("2009769853-BWR6D81k")).toBe("2009769853");
+
+    expect(shouldSendStampPushNotification("all", 0)).toBe(true);
+    expect(shouldSendStampPushNotification("reward_only", 0)).toBe(false);
+    expect(shouldSendStampPushNotification("reward_only", 1)).toBe(true);
+    expect(shouldSendStampPushNotification("off", 1)).toBe(false);
   });
 });

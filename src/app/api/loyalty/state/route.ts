@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
+import { verifyLineLiffAccessToken } from "@/lib/line-messaging";
 import { DEFAULT_LOYALTY_RULES_TEXT, formatValidTillDate } from "@/lib/loyalty";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -7,9 +8,10 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const shopSecret = String(body.shopSecret ?? "").trim();
-    const lineUserId = String(body.lineUserId ?? "").trim();
-    const displayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
-    const pictureUrl = body.pictureUrl ? String(body.pictureUrl).trim() : null;
+    const liffAccessToken = String(body.liffAccessToken ?? "").trim();
+    const clientLineUserId = String(body.lineUserId ?? "").trim();
+    const clientDisplayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
+    const clientPictureUrl = body.pictureUrl ? String(body.pictureUrl).trim() : null;
 
     if (!shopSecret) {
       return NextResponse.json(
@@ -18,8 +20,24 @@ export async function POST(request: Request) {
       );
     }
 
+    // Verify LINE access token when provided; never allow unverified callers to query/mutate a real 'U...' LINE user ID
+    let resolvedUserId = "";
+    let resolvedDisplayName = clientDisplayName;
+    let resolvedPictureUrl = clientPictureUrl;
+
+    if (liffAccessToken) {
+      const verified = await verifyLineLiffAccessToken(liffAccessToken);
+      if (verified.ok) {
+        resolvedUserId = verified.userId;
+        resolvedDisplayName = verified.displayName;
+        resolvedPictureUrl = verified.pictureUrl;
+      }
+    } else if (clientLineUserId && !clientLineUserId.startsWith("U")) {
+      // Allow non-LINE local preview ID ('web_...') only when testing outside LINE
+      resolvedUserId = clientLineUserId;
+    }
+
     if (!hasSupabaseEnv) {
-      // Demo / Offline preview fallback
       const now = new Date();
       return NextResponse.json({
         ok: true,
@@ -33,11 +51,12 @@ export async function POST(request: Request) {
           rulesText: DEFAULT_LOYALTY_RULES_TEXT,
           liffId: "",
           botBasicId: "",
+          notifyMode: "all",
         },
         member: {
-          lineUserId: lineUserId || "demo-user",
-          displayName,
-          pictureUrl,
+          lineUserId: resolvedUserId || "demo-user",
+          displayName: resolvedDisplayName,
+          pictureUrl: resolvedPictureUrl,
           stamps: 1,
           lifetimeStamps: 1,
           expiresAt: new Date(now.getFullYear(), now.getMonth() + 3, now.getDate()).toISOString(),
@@ -52,9 +71,9 @@ export async function POST(request: Request) {
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase.rpc("get_loyalty_card_state", {
       p_shop_secret: shopSecret,
-      p_line_user_id: lineUserId,
-      p_display_name: displayName,
-      p_picture_url: pictureUrl,
+      p_line_user_id: resolvedUserId,
+      p_display_name: resolvedDisplayName,
+      p_picture_url: resolvedPictureUrl,
     });
 
     if (error) {
