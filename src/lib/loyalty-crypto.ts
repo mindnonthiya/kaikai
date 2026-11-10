@@ -2,19 +2,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 import fs from "fs";
 import path from "path";
 
-const ENCRYPTED_PREFIX = "enc:v1:";
+const ENCRYPTED_V2_PREFIX = "enc:v2:";
+const ENCRYPTED_V1_PREFIX = "enc:v1:";
 
-function resolveRawServerSecret(): string {
-  const envSecret = (
-    process.env.LOYALTY_SERVER_SECRET ??
-    process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    process.env.OCR_API_KEY ??
-    process.env.GEMINI_API_KEY ??
-    ""
-  ).trim();
-
-  if (envSecret) return envSecret;
-
+function readEnvFileVar(varNames: string[]): string {
   try {
     const cwd = process.cwd();
     const envPaths = [
@@ -22,12 +13,14 @@ function resolveRawServerSecret(): string {
       path.join(cwd, ".env.cloud"),
       path.join(cwd, ".env"),
     ];
+    const pattern = new RegExp(
+      `^\\s*(?:${varNames.join("|")})\\s*=\\s*([^\\r\\n#]+)`,
+      "m",
+    );
     for (const p of envPaths) {
       if (fs.existsSync(p)) {
         const content = fs.readFileSync(p, "utf-8");
-        const match = content.match(
-          /^\s*(?:LOYALTY_SERVER_SECRET|SUPABASE_SERVICE_ROLE_KEY|OCR_API_KEY|GEMINI_API_KEY)\s*=\s*([^\r\n#]+)/m,
-        );
+        const match = content.match(pattern);
         if (match && match[1]?.trim()) {
           return match[1].trim().replace(/^["']|["']$/g, "");
         }
@@ -36,51 +29,84 @@ function resolveRawServerSecret(): string {
   } catch {
     // Ignore fs errors in edge/browser environments
   }
+  return "";
+}
 
+/**
+ * Resolves the dedicated Loyalty encryption secret.
+ * Never depends on OCR_API_KEY or GEMINI_API_KEY so rotating slip-reader API keys
+ * never invalidates encrypted LINE tokens.
+ */
+function resolvePrimaryLoyaltySecret(): string {
+  const envSecret = (
+    process.env.LOYALTY_SERVER_SECRET ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    ""
+  ).trim();
+  if (envSecret) return envSecret;
+
+  const fileSecret = readEnvFileVar(["LOYALTY_SERVER_SECRET", "SUPABASE_SERVICE_ROLE_KEY"]);
+  if (fileSecret) return fileSecret;
+
+  return "kaikai-dedicated-loyalty-secret-v2-f89a4c2d1e7b6a30";
+}
+
+function resolveLegacyV1Secret(): string {
+  const envLegacy = (process.env.OCR_API_KEY ?? process.env.GEMINI_API_KEY ?? "").trim();
+  if (envLegacy) return envLegacy;
+  const fileLegacy = readEnvFileVar(["OCR_API_KEY", "GEMINI_API_KEY"]);
+  if (fileLegacy) return fileLegacy;
   return "kaikai-default-server-secret-v1";
 }
 
-function deriveAesKey(): Buffer {
-  const raw = resolveRawServerSecret();
-  return createHash("sha256").update(`kaikai:loyalty:aes:${raw}`, "utf8").digest();
+function deriveAesKey(rawSecret: string): Buffer {
+  return createHash("sha256").update(`kaikai:loyalty:aes:${rawSecret}`, "utf8").digest();
 }
 
 export function getLoyaltyServerKeyHash(): string {
-  const raw = resolveRawServerSecret();
+  const raw = resolvePrimaryLoyaltySecret();
+  return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
+}
+
+export function getLegacyLoyaltyServerKeyHash(): string {
+  const raw = resolveLegacyV1Secret();
   return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
 }
 
 export function isEncryptedLoyaltySecret(value: string): boolean {
-  return value.trim().startsWith(ENCRYPTED_PREFIX);
+  const trimmed = (value ?? "").trim();
+  return trimmed.startsWith(ENCRYPTED_V2_PREFIX) || trimmed.startsWith(ENCRYPTED_V1_PREFIX);
+}
+
+export function isCurrentVersionEncryptedSecret(value: string): boolean {
+  return (value ?? "").trim().startsWith(ENCRYPTED_V2_PREFIX);
 }
 
 export function encryptLoyaltySecret(plainText: string): string {
-  const trimmed = plainText.trim();
+  const trimmed = (plainText ?? "").trim();
   if (!trimmed) return "";
-  if (isEncryptedLoyaltySecret(trimmed)) return trimmed;
+  if (trimmed.startsWith(ENCRYPTED_V2_PREFIX)) return trimmed;
 
-  const key = deriveAesKey();
+  // If input is a legacy v1 ciphertext, decrypt it first and re-encrypt with v2
+  const actualPlain = trimmed.startsWith(ENCRYPTED_V1_PREFIX)
+    ? decryptLoyaltySecret(trimmed)
+    : trimmed;
+  if (!actualPlain) return "";
+
+  const key = deriveAesKey(resolvePrimaryLoyaltySecret());
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(trimmed, "utf8"), cipher.final()]);
+  const encrypted = Buffer.concat([cipher.update(actualPlain, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
 
-  return `${ENCRYPTED_PREFIX}${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted.toString("hex")}`;
+  return `${ENCRYPTED_V2_PREFIX}${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted.toString("hex")}`;
 }
 
-export function decryptLoyaltySecret(storedValue: string): string {
-  const trimmed = (storedValue ?? "").trim();
-  if (!trimmed) return "";
-  if (!isEncryptedLoyaltySecret(trimmed)) {
-    return trimmed;
-  }
-
+function tryDecryptPayload(payload: string, key: Buffer): string | null {
   try {
-    const payload = trimmed.slice(ENCRYPTED_PREFIX.length);
     const [ivHex, tagHex, cipherHex] = payload.split(":");
-    if (!ivHex || !tagHex || !cipherHex) return "";
+    if (!ivHex || !tagHex || !cipherHex) return null;
 
-    const key = deriveAesKey();
     const iv = Buffer.from(ivHex, "hex");
     const authTag = Buffer.from(tagHex, "hex");
     const encrypted = Buffer.from(cipherHex, "hex");
@@ -90,6 +116,28 @@ export function decryptLoyaltySecret(storedValue: string): string {
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     return decrypted.toString("utf8");
   } catch {
-    return "";
+    return null;
   }
+}
+
+export function decryptLoyaltySecret(storedValue: string): string {
+  const trimmed = (storedValue ?? "").trim();
+  if (!trimmed) return "";
+
+  if (trimmed.startsWith(ENCRYPTED_V2_PREFIX)) {
+    const payload = trimmed.slice(ENCRYPTED_V2_PREFIX.length);
+    return tryDecryptPayload(payload, deriveAesKey(resolvePrimaryLoyaltySecret())) ?? "";
+  }
+
+  if (trimmed.startsWith(ENCRYPTED_V1_PREFIX)) {
+    const payload = trimmed.slice(ENCRYPTED_V1_PREFIX.length);
+    // Try primary key first, then legacy v1 secret for seamless migration
+    return (
+      tryDecryptPayload(payload, deriveAesKey(resolvePrimaryLoyaltySecret())) ??
+      tryDecryptPayload(payload, deriveAesKey(resolveLegacyV1Secret())) ??
+      ""
+    );
+  }
+
+  return trimmed;
 }

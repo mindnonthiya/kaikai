@@ -134,7 +134,7 @@ function renderQrCardPngDataUrl(params: {
 }
 
 export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardProps) {
-  const { config, persisted, isTableReady, members, recentCoupons } = snapshot;
+  const { config, persisted, isTableReady, members, recentCoupons, recentPushJobs = [] } = snapshot;
   const [origin, setOrigin] = useState("https://your-domain.vercel.app");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
@@ -503,7 +503,7 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
                   แจ้งเตือนทุกครั้งที่สแกนรับแต้ม + ตอนใช้คูปอง (ใช้โควตา Push 1 ข้อความ/การสแกน)
                 </option>
                 <option value="reward_only">
-                  ประหยัดโควตา 10 เท่า — แจ้งเตือนเฉพาะตอนสะสมครบรับคูปองส่วนลด + ตอนกดใช้คูปอง
+                  ประหยัดโควตาได้สูงสุดประมาณ 10 เท่า — แจ้งเตือนเฉพาะตอนสะสมครบรับคูปองส่วนลด + ตอนกดใช้คูปอง
                 </option>
                 <option value="off">
                   ปิดการส่ง Push อัตโนมัติ (ลูกค้าดูแต้มบนหน้าบัตร + พิมพ์ “เช็คแต้ม” ฟรีผ่าน Webhook)
@@ -736,6 +736,44 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
                       {c.status === "claimed" ? "✓ ใช้สิทธิ์แล้ว" : "ยังไม่ใช้สิทธิ์"}
                     </span>
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {recentPushJobs.length > 0 && (
+          <div style={{ marginTop: 18 }}>
+            <h4 style={{ fontSize: "0.95rem", marginBottom: 8 }}>
+              สถานะคิวส่งข้อความแจ้งเตือน LINE OA เบื้องหลังล่าสุด ({recentPushJobs.length} รายการ)
+            </h4>
+            <div className="loyalty-members-list">
+              {recentPushJobs.slice(0, 6).map((job) => (
+                <div key={job.id} className="loyalty-member-row">
+                  <div className="loyalty-member-info">
+                    <strong>
+                      {job.eventType === "coupon_redeem" ? "🎟️ แจ้งใช้คูปองส่วนลด" : "🐔 แจ้งสะสมแต้ม QR"}
+                    </strong>
+                    <span className="loyalty-member-meta">
+                      สร้างเมื่อ {formatThaiDateTime(job.createdAt)} · พยายามส่ง {job.attempts} ครั้ง
+                      {job.lastError ? ` · สาเหตุ: ${job.lastError}` : ""}
+                    </span>
+                  </div>
+                  <span
+                    className={`loyalty-coupon-status ${
+                      job.status === "sent" ? "claimed" : "unclaimed"
+                    }`}
+                  >
+                    {job.status === "sent"
+                      ? "✓ ส่งสำเร็จ"
+                      : job.status === "pending" || job.status === "processing"
+                        ? "⏳ รอส่ง/กำลังส่ง"
+                        : job.status === "failed_quota"
+                          ? "⚠️ โควตาเต็ม (429)"
+                          : job.status === "failed_auth"
+                            ? "⚠️ Token ผิด (401)"
+                            : "⚠️ ส่งไม่สำเร็จ"}
+                  </span>
                 </div>
               ))}
             </div>

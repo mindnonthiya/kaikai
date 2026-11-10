@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
+  enqueueLoyaltyPushNotification,
   fetchShopLoyaltyServerCredentials,
-  sendLinePushMessageDetailed,
+  processPendingLoyaltyPushJobs,
   verifyLineLiffAccessToken,
 } from "@/lib/line-messaging";
 import {
@@ -10,6 +11,7 @@ import {
   buildCouponRedeemPlainText,
   formatThaiDateTime,
 } from "@/lib/loyalty";
+import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -25,6 +27,22 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, code: "INVALID_PARAMS", message: "ข้อมูลคูปองส่วนลดไม่ครบถ้วน" },
         { status: 400 },
+      );
+    }
+
+    const rate = checkLoyaltyRateLimit({
+      route: "redeem",
+      ip: resolveClientIp(request),
+      shopSecret,
+    });
+    if (!rate.allowed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "RATE_LIMITED",
+          message: `คำขอถี่เกินไป กรุณารอ ${rate.retryAfterSeconds} วินาทีแล้วลองใหม่`,
+        },
+        { status: 429 },
       );
     }
 
@@ -58,6 +76,7 @@ export async function POST(request: Request) {
           plainText,
           flexMessage,
           pushed: false,
+          queued: false,
           pushReason: "DEMO_MODE",
         },
       });
@@ -76,7 +95,7 @@ export async function POST(request: Request) {
           {
             ok: false,
             code: "LINE_AUTH_REQUIRED",
-            message: "ยืนยันตัวตน LINE ไม่สำเร็จหรือเซสชันหมดอายุ กรุณาเปิดผ่านแอป LINE อีกครั้ง",
+            message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดผ่านแอป LINE อีกครั้ง",
           },
           { status: 401 },
         );
@@ -99,7 +118,7 @@ export async function POST(request: Request) {
         {
           ok: false,
           code: "LINE_AUTH_REQUIRED",
-          message: "ไม่พบข้อมูลยืนยันตัวตนลูกค้า กรุณาเปิดผ่านแอป LINE",
+          message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
         },
         { status: 401 },
       );
@@ -147,28 +166,43 @@ export async function POST(request: Request) {
       claimedAtText,
     });
 
-    const finalCredentials = creds.channelAccessToken
-      ? creds
-      : await fetchShopLoyaltyServerCredentials(supabase, shopSecret, {
-          channelAccessToken: typeof result.channelAccessToken === "string" ? result.channelAccessToken : "",
-          liffId: String(result.liffId ?? ""),
-          notifyMode: String(result.notifyMode ?? "all"),
-        });
-
-    let pushed = false;
+    let queued = false;
     let pushReason = "ALREADY_CLAIMED";
     if (!result.alreadyClaimed) {
-      if (finalCredentials.notifyMode === "off") {
+      if (creds.notifyMode === "off") {
         pushReason = "NOTIFY_MODE_OFF";
+      } else if (!verifiedLineUserId.startsWith("U")) {
+        pushReason = "NOT_LINE_USER_ID";
+      } else if (!creds.channelAccessToken) {
+        pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
       } else {
-        const pushRes = await sendLinePushMessageDetailed(
-          finalCredentials.channelAccessToken,
-          verifiedLineUserId,
-          [flexMessage],
-          plainText,
-        );
-        pushed = pushRes.ok;
-        pushReason = pushRes.reason ?? (pushRes.ok ? "PUSH_REQUEST_ACCEPTED" : "PUSH_FAILED");
+        const enqueueRes = await enqueueLoyaltyPushNotification(supabase, {
+          shopSecret,
+          lineUserId: verifiedLineUserId,
+          eventType: "coupon_redeem",
+          messages: [flexMessage],
+          fallbackPlainText: plainText,
+        });
+        queued = true;
+        pushReason = enqueueRes.queued ? "QUEUED_BACKGROUND" : "DISPATCHED_BACKGROUND";
+
+        after(async () => {
+          try {
+            const bgSupabase = await createSupabaseServerClient();
+            await processPendingLoyaltyPushJobs(
+              bgSupabase,
+              shopSecret,
+              creds.channelAccessToken,
+              {
+                lineUserId: verifiedLineUserId,
+                messages: [flexMessage],
+                fallbackPlainText: plainText,
+              },
+            );
+          } catch {
+            // Background push errors are recorded in loyalty_push_queue
+          }
+        });
       }
     }
 
@@ -181,7 +215,8 @@ export async function POST(request: Request) {
       notification: {
         plainText,
         flexMessage,
-        pushed,
+        pushed: queued,
+        queued,
         pushReason,
       },
     });
