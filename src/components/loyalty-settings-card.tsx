@@ -16,6 +16,7 @@ import {
 import {
   adjustMemberStampsAction,
   regenerateLoyaltyQrTokensAction,
+  retryFailedLoyaltyPushJobsAction,
   saveLoyaltyConfigAction,
   verifyOrRedeemCouponByCodeAction,
   type LoyaltyAdminSnapshot,
@@ -744,9 +745,21 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
 
         {recentPushJobs.length > 0 && (
           <div style={{ marginTop: 18 }}>
-            <h4 style={{ fontSize: "0.95rem", marginBottom: 8 }}>
-              สถานะคิวส่งข้อความแจ้งเตือน LINE OA เบื้องหลังล่าสุด ({recentPushJobs.length} รายการ)
-            </h4>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+              <h4 style={{ fontSize: "0.95rem", margin: 0 }}>
+                สถานะคิวส่งข้อความแจ้งเตือน LINE OA เบื้องหลังล่าสุด ({recentPushJobs.length} รายการ)
+              </h4>
+              {recentPushJobs.some((j) => j.status.startsWith("failed_")) && (
+                <ActionForm
+                  action={retryFailedLoyaltyPushJobsAction}
+                  submitLabel="ส่งรายการที่ล้มเหลวซ้ำทั้งหมด"
+                  pendingLabel="กำลังส่งซ้ำ..."
+                  resetOnSuccess={false}
+                >
+                  <input type="hidden" name="job_id" value="" />
+                </ActionForm>
+              )}
+            </div>
             <div className="loyalty-members-list">
               {recentPushJobs.slice(0, 6).map((job) => (
                 <div key={job.id} className="loyalty-member-row">
@@ -759,21 +772,33 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
                       {job.lastError ? ` · สาเหตุ: ${job.lastError}` : ""}
                     </span>
                   </div>
-                  <span
-                    className={`loyalty-coupon-status ${
-                      job.status === "sent" ? "claimed" : "unclaimed"
-                    }`}
-                  >
-                    {job.status === "sent"
-                      ? "✓ ส่งสำเร็จ"
-                      : job.status === "pending" || job.status === "processing"
-                        ? "⏳ รอส่ง/กำลังส่ง"
-                        : job.status === "failed_quota"
-                          ? "⚠️ โควตาเต็ม (429)"
-                          : job.status === "failed_auth"
-                            ? "⚠️ Token ผิด (401)"
-                            : "⚠️ ส่งไม่สำเร็จ"}
-                  </span>
+                  <div className="loyalty-member-actions">
+                    {job.status.startsWith("failed_") && (
+                      <ActionForm
+                        action={retryFailedLoyaltyPushJobsAction}
+                        submitLabel="ส่งซ้ำ"
+                        pendingLabel="..."
+                        resetOnSuccess={false}
+                      >
+                        <input type="hidden" name="job_id" value={job.id} />
+                      </ActionForm>
+                    )}
+                    <span
+                      className={`loyalty-coupon-status ${
+                        job.status === "sent" ? "claimed" : "unclaimed"
+                      }`}
+                    >
+                      {job.status === "sent"
+                        ? "✓ ส่งสำเร็จ"
+                        : job.status === "pending" || job.status === "processing"
+                          ? "⏳ รอส่ง/กำลังส่ง"
+                          : job.status === "failed_quota"
+                            ? "⚠️ โควตาเต็ม (429)"
+                            : job.status === "failed_auth"
+                              ? "⚠️ Token ผิด (401)"
+                              : "⚠️ ส่งไม่สำเร็จ"}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>

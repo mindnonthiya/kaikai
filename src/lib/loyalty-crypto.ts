@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "crypto";
 import fs from "fs";
 import path from "path";
 
@@ -68,6 +68,40 @@ function resolveLegacyV1Secret(): string {
 
 export function hasLoyaltyServerSecret(): boolean {
   return resolvePrimaryLoyaltySecret().length >= 16;
+}
+
+export function resolveCronSecret(): string {
+  if (process.env.CRON_SECRET !== undefined) {
+    return process.env.CRON_SECRET.trim();
+  }
+  return readEnvFileVar(["CRON_SECRET"]);
+}
+
+/**
+ * Strictly fail-closed verification for /api/loyalty/worker.
+ * If CRON_SECRET is missing or shorter than 16 chars, always rejects external calls.
+ */
+export function verifyCronAuthorization(authHeader: string | null): {
+  ok: boolean;
+  configured: boolean;
+} {
+  const secret = resolveCronSecret();
+  if (!secret || secret.length < 16) {
+    return { ok: false, configured: false };
+  }
+
+  const header = (authHeader ?? "").trim();
+  const expected = `Bearer ${secret}`;
+  const expectedBuf = Buffer.from(expected, "utf8");
+  const actualBuf = Buffer.from(header, "utf8");
+  if (expectedBuf.length !== actualBuf.length) {
+    return { ok: false, configured: true };
+  }
+
+  return {
+    ok: timingSafeEqual(expectedBuf, actualBuf),
+    configured: true,
+  };
 }
 
 function deriveAesKey(rawSecret: string): Buffer {
