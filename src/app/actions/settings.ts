@@ -2264,6 +2264,16 @@ export async function deleteShopAction(form: FormData): Promise<ActionState> {
           });
           await recalculateMenuCosts(supabase);
         }
+        await supabase
+          .from("settings")
+          .delete()
+          .eq("owner_id", user.id)
+          .eq("key", scopedSettingsKey("line_loyalty", targetShopId));
+        await supabase
+          .from("loyalty_members")
+          .delete()
+          .eq("owner_id", user.id)
+          .eq("shop_scope_id", targetShopId);
         await cleanupUnreferencedShopFiles(supabase, receiptPaths, slipPaths, menuImageUrls);
         if (currentActiveShopId === targetShopId) {
           const cookieStore = await cookies();
@@ -2469,6 +2479,7 @@ export async function deleteShopAction(form: FormData): Promise<ActionState> {
         scopedSettingsKey("profile", targetShopId),
         scopedSettingsKey("sales", targetShopId),
         scopedSettingsKey("price_presets", targetShopId),
+        scopedSettingsKey("line_loyalty", targetShopId),
       ]);
     if (delSettingsErr) dbError(delSettingsErr);
 

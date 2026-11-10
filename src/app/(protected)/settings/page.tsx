@@ -6,6 +6,8 @@ import { PresetManager } from "@/components/preset-manager";
 import { ProfileAvatarField } from "@/components/profile-avatar-field";
 import { PwaSettingsCard } from "@/components/pwa-install";
 import { ShopSwitcherCard } from "@/components/shop-switcher-card";
+import { LoyaltySettingsCard } from "@/components/loyalty-settings-card";
+import { fetchLoyaltyAdminData } from "@/app/actions/loyalty";
 import { changePassword, saveProfile, saveSaleSettings, syncHistoricalSalesCosts } from "@/app/actions/settings";
 import { POOLED_MIN_DAYS, formatPercentBps } from "@/lib/analytics";
 import { fetchMenus, fetchPooledRate, fetchPricePresets, fetchProfile, fetchSaleSettings, fetchShops } from "@/lib/data/queries";
@@ -26,6 +28,7 @@ export default async function SettingsPage() {
   const pooled = await fetchPooledRate(saleSettings);
   const ocrProvider = getOcrProvider();
   const activeShopId = shopsData.activeShopId;
+  const loyaltySnapshot = await fetchLoyaltyAdminData(activeShopId, profile.shopName);
 
   return (
     <>
@@ -174,6 +177,12 @@ export default async function SettingsPage() {
             </label>
           </ActionForm>
         </section>
+
+        <LoyaltySettingsCard
+          key={`loyalty-${activeShopId}`}
+          shopName={profile.shopName}
+          snapshot={loyaltySnapshot}
+        />
 
         <section className="panel settings-card">
           <h2>ออเดอร์และต้นทุนย้อนหลัง</h2>

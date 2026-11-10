@@ -4499,3 +4499,1064 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   padding: 6px 12px;
   white-space: nowrap;
 }
+
+/* ============================================================
+   LINE OA Stamp Card Customer Page (/loyalty)
+   Matches GaiTomNamPla 🐔 LINE Stamp Card UI
+   ============================================================ */
+
+.line-stamp-shell {
+  min-height: 100vh;
+  background: #f5f5f7;
+  display: flex;
+  justify-content: center;
+  padding: 0 0 96px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif;
+  color: #111111;
+}
+
+.line-stamp-container {
+  width: 100%;
+  max-width: 480px;
+  background: #ffffff;
+  min-height: 100vh;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+  position: relative;
+}
+
+.line-stamp-hero {
+  width: 100%;
+  height: 196px;
+  background: #FA615B;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.line-stamp-hero-img {
+  width: 100%;
+  height: 196px;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
+}
+
+.line-stamp-card-wrap {
+  padding: 0 18px;
+  margin-top: -54px;
+  position: relative;
+  z-index: 2;
+}
+
+.line-stamp-card {
+  background: #E62134;
+  border-radius: 11px;
+  padding: 0 20px 22px;
+  color: #ffffff;
+  text-align: center;
+  box-shadow: 0 10px 26px rgba(230, 33, 52, 0.25);
+  position: relative;
+}
+
+.line-stamp-avatar-ring {
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  margin: 0 auto;
+  transform: translateY(-38px);
+  margin-bottom: -24px;
+  overflow: hidden;
+  background: #d8bca3;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.line-stamp-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.line-stamp-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.line-stamp-valid {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.line-stamp-headline {
+  margin: 10px 0 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.line-stamp-user-bar {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.line-stamp-edit-name-btn {
+  border: 0;
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.line-stamp-progress-row {
+  width: 100%;
+  margin-top: 16px;
+  padding: 6px 2px;
+  background: transparent;
+  border: 0;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.line-stamp-progress-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.line-stamp-reward-badge {
+  background: #1FC879;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 3px 7px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.line-stamp-progress-text {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #ffffff;
+}
+
+.line-stamp-chevron {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.85);
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+.line-stamp-chevron:not(.open) {
+  transform: rotate(180deg);
+}
+
+.line-stamp-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px 10px;
+  justify-items: center;
+}
+
+.line-stamp-slot {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(168, 12, 26, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.line-stamp-emblem {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transform: rotate(-28deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.25s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+.line-stamp-slot.empty .line-stamp-emblem {
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.line-stamp-slot.filled .line-stamp-emblem {
+  background: #ffffff;
+  border: 2.5px solid #ffffff;
+  color: #E62134;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+
+.line-stamp-emblem-inner {
+  width: 33px;
+  height: 33px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.line-stamp-slot.empty .line-stamp-emblem-inner {
+  border: 1.2px solid rgba(255, 255, 255, 0.15);
+}
+
+.line-stamp-slot.filled .line-stamp-emblem-inner {
+  border: 1.5px solid #E62134;
+}
+
+.line-stamp-word {
+  font-size: 7.5px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 1px 3px;
+  border-top: 1.2px solid currentColor;
+  border-bottom: 1.2px solid currentColor;
+  line-height: 1.05;
+}
+
+.line-stamp-star {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Alert Banner after QR scan */
+.line-stamp-alert {
+  margin: 14px 18px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.line-stamp-alert.info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+}
+
+.line-stamp-alert.success {
+  background: #ecfdf5;
+  border: 1.5px solid #6ee7b7;
+  color: #065f46;
+}
+
+.line-stamp-alert.warning {
+  background: #fffbeb;
+  border: 1.5px solid #fcd34d;
+  color: #92400e;
+}
+
+.line-stamp-alert.error {
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  color: #991b1b;
+}
+
+.line-stamp-alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.line-stamp-alert-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.line-stamp-alert p {
+  margin: 4px 0 0;
+}
+
+.line-stamp-alert-foot {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Unclaimed rewards | Claimed rewards Tabs */
+.line-stamp-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid #eceeef;
+  margin-top: 16px;
+  padding: 0 18px;
+}
+
+.line-stamp-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2.5px solid transparent;
+  padding: 13px 6px 11px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #b5bac1;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.line-stamp-tab.active {
+  color: #111111;
+  border-bottom-color: #111111;
+}
+
+.line-stamp-tab-count {
+  background: #E62134;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.line-stamp-tab-count.muted {
+  background: #9ca3af;
+}
+
+/* Rewards List */
+.line-stamp-rewards-section {
+  padding: 18px 18px 10px;
+}
+
+.line-reward-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 10px 0;
+}
+
+.line-reward-item.unlocked {
+  padding: 12px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  border: 1.5px solid #1FC879;
+  background: #f2fdf8;
+}
+
+.line-reward-item.claimed {
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.line-reward-thumb-wrap {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+  background: #e5dec9;
+}
+
+.line-reward-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.line-reward-thumb.grayscale {
+  filter: grayscale(0.65);
+  opacity: 0.85;
+}
+
+.line-reward-lock-badge {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(58, 52, 44, 0.62);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.line-reward-ready-pill {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: #1FC879;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 99px;
+}
+
+.line-reward-used-pill {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: #4b5563;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 99px;
+}
+
+.line-reward-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.line-reward-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #111111;
+}
+
+.line-reward-required {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #E62134;
+}
+
+.line-reward-code {
+  margin-top: 3px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.line-reward-use-btn {
+  margin-top: 9px;
+  background: #E62134;
+  color: #ffffff;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 4px 12px rgba(230, 33, 52, 0.25);
+}
+
+.line-reward-receipt-btn {
+  margin-top: 8px;
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.line-reward-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13.5px;
+}
+
+/* How this works section */
+.line-stamp-how {
+  padding: 24px 18px 32px;
+}
+
+.line-stamp-how h2 {
+  margin: 0 0 12px;
+  font-size: 16.5px;
+  font-weight: 800;
+  color: #111111;
+}
+
+.line-stamp-rules p {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #6b7280;
+}
+
+.line-stamp-help-link {
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Floating Bottom Scan QR code Button */
+.line-stamp-fab-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.line-stamp-scan-btn {
+  pointer-events: auto;
+  background: #E62134;
+  color: #ffffff;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 26px;
+  font-size: 15px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 8px 22px rgba(230, 33, 52, 0.36);
+}
+
+.line-stamp-scan-btn:active {
+  transform: scale(0.98);
+}
+
+/* Modals for Customer Stamp Card */
+.line-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.62);
+  backdrop-filter: blur(3px);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.line-modal-sheet {
+  width: 100%;
+  max-width: 390px;
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 22px 20px;
+  text-align: center;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
+}
+
+.line-modal-badge {
+  display: inline-block;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 10px;
+}
+
+.line-modal-sheet h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 800;
+  color: #111111;
+}
+
+.line-modal-desc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
+.line-modal-code-box {
+  background: #f9fafb;
+  border: 1.5px dashed #d1d5db;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.line-modal-code-box strong {
+  font-size: 16px;
+  color: #E62134;
+}
+
+.line-modal-input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1.5px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 14px;
+  margin-bottom: 14px;
+  font-family: inherit;
+}
+
+.line-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.line-modal-primary-btn {
+  width: 100%;
+  background: #E62134;
+  color: #ffffff;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-size: 14.5px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.line-modal-secondary-btn {
+  width: 100%;
+  background: #f3f4f6;
+  color: #374151;
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Digital Screenshot Receipt Modal */
+.line-receipt-header {
+  margin-bottom: 14px;
+}
+
+.line-receipt-check {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #1FC879;
+  color: #ffffff;
+  font-size: 28px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 10px;
+}
+
+.line-receipt-status {
+  display: inline-block;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 11.5px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+}
+
+.line-receipt-ticket {
+  background: #fff8f8;
+  border: 2px dashed #E62134;
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 14px;
+  text-align: left;
+}
+
+.line-receipt-reward-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #E62134;
+  text-align: center;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #fecdd3;
+}
+
+.line-receipt-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  color: #374151;
+}
+
+.line-receipt-live-clock {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #fda4af;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #059669;
+}
+
+.line-receipt-instruction {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #111827;
+  margin: 0 0 14px;
+}
+
+/* ============================================================
+   Admin Loyalty Settings & 1–10 Box QR Gallery (/settings)
+   ============================================================ */
+
+.loyalty-admin-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.loyalty-admin-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #b91c1c;
+  background: #fee2e2;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+}
+
+.loyalty-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.loyalty-admin-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.loyalty-admin-banner.warn {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+}
+
+.loyalty-admin-banner.info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+}
+
+.loyalty-admin-banner p {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
+.loyalty-admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.loyalty-line-config-box {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-top: 6px;
+}
+
+.loyalty-line-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.loyalty-setup-guide {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.loyalty-setup-guide ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.loyalty-copy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 12px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+
+.loyalty-copy-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.loyalty-copy-code {
+  display: block;
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--ink);
+  margin-top: 2px;
+}
+
+.loyalty-qr-section,
+.loyalty-members-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.loyalty-qr-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.loyalty-qr-header h3 {
+  margin: 0;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.loyalty-qr-header-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loyalty-qr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
+  gap: 12px;
+}
+
+.loyalty-qr-card {
+  background: #ffffff;
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.loyalty-qr-card-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.loyalty-qr-box-badge {
+  background: #E62134;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.loyalty-qr-point-badge {
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.loyalty-qr-svg-wrap {
+  width: 150px;
+  height: 150px;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.loyalty-qr-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.loyalty-qr-card-actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.loyalty-qr-dl-btn {
+  width: 100%;
+  justify-content: center;
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+
+.loyalty-qr-sub-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.loyalty-qr-sub-actions > * {
+  font-size: 11.5px;
+  padding: 5px 8px;
+  text-align: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.loyalty-qr-rotate-bar {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.loyalty-empty-box {
+  padding: 18px;
+  background: var(--surface-2);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.loyalty-members-list {
+  display: grid;
+  gap: 8px;
+}
+
+.loyalty-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 11px 14px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.loyalty-member-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.loyalty-member-meta,
+.loyalty-member-coupons {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.loyalty-member-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.loyalty-coupon-status {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.loyalty-coupon-status.claimed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.loyalty-coupon-status.unclaimed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
