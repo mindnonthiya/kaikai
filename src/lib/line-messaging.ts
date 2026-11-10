@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
 import {
   decryptLoyaltySecret,
   getLegacyLoyaltyServerKeyHash,
@@ -195,6 +195,33 @@ export interface LinePushResult {
   status?: number;
   reason?: string;
   transient?: boolean;
+  retryKey?: string;
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidLineRetryKey(value?: string | null): boolean {
+  return UUID_REGEX.test(String(value ?? "").trim());
+}
+
+export function deriveFallbackRetryKey(baseKey: string): string {
+  const hash = createHash("sha256").update(`kaikai:line:fallback:${baseKey}`, "utf8").digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+/**
+ * Multi-stage exponential backoff spanning minutes and hours so temporary LINE outages
+ * (> 10 seconds up to several hours) do not exhaust retry attempts immediately:
+ * Attempt 1 -> 1 min (60s)
+ * Attempt 2 -> 5 min (300s)
+ * Attempt 3 -> 15 min (900s)
+ * Attempt 4 -> 1 hour (3600s)
+ * Attempt 5+ -> 3 hours (10800s)
+ */
+export function computePushRetryBackoffSeconds(attempts: number): number {
+  const schedule = [60, 300, 900, 3600, 10800];
+  const index = Math.max(0, Math.min(schedule.length - 1, Math.floor(attempts) - 1));
+  return schedule[index];
 }
 
 export async function sendLinePushMessage(
@@ -202,12 +229,14 @@ export async function sendLinePushMessage(
   toLineUserId: string,
   messages: Array<Record<string, unknown>>,
   fallbackPlainText?: string,
+  retryKey?: string,
 ): Promise<boolean> {
   const res = await sendLinePushMessageDetailed(
     channelAccessToken,
     toLineUserId,
     messages,
     fallbackPlainText,
+    retryKey,
   );
   return res.ok;
 }
@@ -217,18 +246,22 @@ export async function sendLinePushMessageDetailed(
   toLineUserId: string,
   messages: Array<Record<string, unknown>>,
   fallbackPlainText?: string,
+  retryKey?: string,
 ): Promise<LinePushResult> {
   const token = decryptLoyaltySecret(channelAccessToken).trim();
   const to = toLineUserId.trim();
+  const effectiveRetryKey = isValidLineRetryKey(retryKey)
+    ? String(retryKey).trim().toLowerCase()
+    : randomUUID().toLowerCase();
 
   if (!token) {
-    return { ok: false, reason: "MISSING_CHANNEL_ACCESS_TOKEN", transient: false };
+    return { ok: false, reason: "MISSING_CHANNEL_ACCESS_TOKEN", transient: false, retryKey: effectiveRetryKey };
   }
   if (!to.startsWith("U")) {
-    return { ok: false, reason: "NOT_LINE_USER_ID", transient: false };
+    return { ok: false, reason: "NOT_LINE_USER_ID", transient: false, retryKey: effectiveRetryKey };
   }
   if (messages.length === 0) {
-    return { ok: false, reason: "EMPTY_MESSAGES", transient: false };
+    return { ok: false, reason: "EMPTY_MESSAGES", transient: false, retryKey: effectiveRetryKey };
   }
 
   const controller = new AbortController();
@@ -240,6 +273,7 @@ export async function sendLinePushMessageDetailed(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
+        "X-Line-Retry-Key": effectiveRetryKey,
       },
       body: JSON.stringify({
         to,
@@ -248,19 +282,25 @@ export async function sendLinePushMessageDetailed(
       signal: controller.signal,
     });
 
-    if (response.ok) {
-      return { ok: true, status: response.status, reason: "PUSH_REQUEST_ACCEPTED" };
+    // HTTP 200 OK or HTTP 409 Conflict (already accepted with the same X-Line-Retry-Key) both count as delivered!
+    if (response.ok || response.status === 409) {
+      return {
+        ok: true,
+        status: response.status,
+        reason: response.status === 409 ? "ALREADY_ACCEPTED_BY_LINE_409" : "PUSH_REQUEST_ACCEPTED",
+        retryKey: effectiveRetryKey,
+      };
     }
 
     // Do NOT retry plain text when error is 401 (Invalid Token), 403 (Forbidden), or 429 (Quota Exceeded)
     if (response.status === 401) {
-      return { ok: false, status: 401, reason: "LINE_TOKEN_INVALID_401", transient: false };
+      return { ok: false, status: 401, reason: "LINE_TOKEN_INVALID_401", transient: false, retryKey: effectiveRetryKey };
     }
     if (response.status === 403) {
-      return { ok: false, status: 403, reason: "LINE_FORBIDDEN_403", transient: false };
+      return { ok: false, status: 403, reason: "LINE_FORBIDDEN_403", transient: false, retryKey: effectiveRetryKey };
     }
     if (response.status === 429) {
-      return { ok: false, status: 429, reason: "LINE_QUOTA_EXCEEDED_429", transient: false };
+      return { ok: false, status: 429, reason: "LINE_QUOTA_EXCEEDED_429", transient: false, retryKey: effectiveRetryKey };
     }
 
     const errBody = await response.text().catch(() => "");
@@ -269,11 +309,13 @@ export async function sendLinePushMessageDetailed(
       errBody.includes("property, 'to'") || errBody.includes("Failed to send messages");
 
     if (response.status === 400 && !isInvalidRecipient && fallbackPlainText && fallbackPlainText.trim()) {
+      const fallbackRetryKey = deriveFallbackRetryKey(effectiveRetryKey);
       const retryResponse = await fetch("https://api.line.me/v2/bot/message/push", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "X-Line-Retry-Key": fallbackRetryKey,
         },
         body: JSON.stringify({
           to,
@@ -281,8 +323,13 @@ export async function sendLinePushMessageDetailed(
         }),
         signal: controller.signal,
       });
-      if (retryResponse.ok) {
-        return { ok: true, status: retryResponse.status, reason: "PUSH_REQUEST_ACCEPTED" };
+      if (retryResponse.ok || retryResponse.status === 409) {
+        return {
+          ok: true,
+          status: retryResponse.status,
+          reason: retryResponse.status === 409 ? "ALREADY_ACCEPTED_BY_LINE_409" : "PUSH_REQUEST_ACCEPTED",
+          retryKey: fallbackRetryKey,
+        };
       }
     }
 
@@ -292,6 +339,7 @@ export async function sendLinePushMessageDetailed(
         status: 400,
         reason: "LINE_PROVIDER_OR_FRIEND_MISMATCH_400",
         transient: false,
+        retryKey: effectiveRetryKey,
       };
     }
 
@@ -300,6 +348,7 @@ export async function sendLinePushMessageDetailed(
       status: response.status,
       reason: `LINE_API_${response.status}: ${errBody.slice(0, 160)}`,
       transient: response.status >= 500,
+      retryKey: effectiveRetryKey,
     };
   } catch (err) {
     const isAbort = err instanceof Error && err.name === "AbortError";
@@ -307,6 +356,7 @@ export async function sendLinePushMessageDetailed(
       ok: false,
       reason: isAbort ? "LINE_API_TIMEOUT" : err instanceof Error ? err.message : "NETWORK_ERROR",
       transient: true,
+      retryKey: effectiveRetryKey,
     };
   } finally {
     clearTimeout(timeout);
@@ -319,14 +369,19 @@ export async function sendLinePushMessageWithRetry(
   messages: Array<Record<string, unknown>>,
   fallbackPlainText?: string,
   maxAttempts = 2,
+  retryKey?: string,
 ): Promise<LinePushResult> {
-  let lastResult: LinePushResult = { ok: false, reason: "NOT_ATTEMPTED" };
+  const consistentRetryKey = isValidLineRetryKey(retryKey)
+    ? String(retryKey).trim().toLowerCase()
+    : randomUUID().toLowerCase();
+  let lastResult: LinePushResult = { ok: false, reason: "NOT_ATTEMPTED", retryKey: consistentRetryKey };
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     lastResult = await sendLinePushMessageDetailed(
       channelAccessToken,
       toLineUserId,
       messages,
       fallbackPlainText,
+      consistentRetryKey,
     );
     if (lastResult.ok || !lastResult.transient || attempt === maxAttempts) {
       return lastResult;
@@ -558,9 +613,9 @@ export async function processPendingLoyaltyPushJobs(
     lineUserId: string;
     messages: Array<Record<string, unknown>>;
     fallbackPlainText?: string;
+    retryKey?: string;
   },
   trustedOrigin?: string,
-  followUpPass = 0,
 ): Promise<void> {
   const token = decryptLoyaltySecret(channelAccessToken).trim();
   const primaryHash = getLoyaltyServerKeyHash();
@@ -585,6 +640,7 @@ export async function processPendingLoyaltyPushJobs(
         fallbackDirectJob.messages,
         fallbackDirectJob.fallbackPlainText,
         2,
+        fallbackDirectJob.retryKey,
       );
     }
     return;
@@ -592,6 +648,7 @@ export async function processPendingLoyaltyPushJobs(
 
   const jobs = jobsData as Array<{
     id?: string;
+    retryKey?: string;
     lineUserId?: string;
     eventType?: string;
     messages?: unknown;
@@ -600,13 +657,12 @@ export async function processPendingLoyaltyPushJobs(
     maxAttempts?: number;
   }>;
 
-  let scheduledRetryDelaySec = 0;
-
   for (const job of jobs) {
     const jobId = String(job.id ?? "");
+    const retryKey = String(job.retryKey ?? job.id ?? "");
     const toUserId = String(job.lineUserId ?? "");
     const attempts = Number(job.attempts ?? 1);
-    const maxAttempts = Number(job.maxAttempts ?? 3);
+    const maxAttempts = Number(job.maxAttempts ?? 6);
 
     if (!jobId) continue;
 
@@ -631,6 +687,7 @@ export async function processPendingLoyaltyPushJobs(
       hydrated.messages,
       hydrated.fallbackText,
       2,
+      retryKey,
     );
 
     if (pushRes.ok) {
@@ -644,8 +701,6 @@ export async function processPendingLoyaltyPushJobs(
         p_retry_delay_seconds: 0,
       });
     } else if (pushRes.transient && attempts < maxAttempts) {
-      const retrySec = 3;
-      scheduledRetryDelaySec = Math.max(scheduledRetryDelaySec, retrySec);
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
@@ -653,7 +708,7 @@ export async function processPendingLoyaltyPushJobs(
         p_legacy_key_hash: legacyHash,
         p_status: "retry",
         p_error: pushRes.reason ?? "TRANSIENT_ERROR",
-        p_retry_delay_seconds: retrySec,
+        p_retry_delay_seconds: computePushRetryBackoffSeconds(attempts),
       });
     } else {
       await supabase.rpc("complete_loyalty_push_job", {
@@ -666,19 +721,6 @@ export async function processPendingLoyaltyPushJobs(
         p_retry_delay_seconds: 0,
       });
     }
-  }
-
-  // Self-retry in the same background worker without waiting for the next customer scan
-  if (scheduledRetryDelaySec > 0 && followUpPass < 2) {
-    await new Promise((resolve) => setTimeout(resolve, (scheduledRetryDelaySec + 1) * 1000));
-    await processPendingLoyaltyPushJobs(
-      supabase,
-      shopSecret,
-      channelAccessToken,
-      undefined,
-      trustedOrigin,
-      followUpPass + 1,
-    );
   }
 }
 
@@ -714,6 +756,7 @@ export async function processGlobalDueLoyaltyPushJobs(
   const payload = data as {
     jobs?: Array<{
       id?: string;
+      retryKey?: string;
       shopSecret?: string;
       channelAccessToken?: string;
       lineUserId?: string;
@@ -733,11 +776,12 @@ export async function processGlobalDueLoyaltyPushJobs(
 
   for (const job of jobs) {
     const jobId = String(job.id ?? "");
+    const retryKey = String(job.retryKey ?? job.id ?? "");
     const shopSecret = String(job.shopSecret ?? "");
     const token = decryptLoyaltySecret(String(job.channelAccessToken ?? "")).trim();
     const toUserId = String(job.lineUserId ?? "");
     const attempts = Number(job.attempts ?? 1);
-    const maxAttempts = Number(job.maxAttempts ?? 3);
+    const maxAttempts = Number(job.maxAttempts ?? 6);
 
     if (!jobId || !shopSecret) continue;
 
@@ -762,6 +806,7 @@ export async function processGlobalDueLoyaltyPushJobs(
       hydrated.messages,
       hydrated.fallbackText,
       2,
+      retryKey,
     );
 
     if (pushRes.ok) {
@@ -784,7 +829,7 @@ export async function processGlobalDueLoyaltyPushJobs(
         p_legacy_key_hash: legacyHash,
         p_status: "retry",
         p_error: pushRes.reason ?? "TRANSIENT_ERROR",
-        p_retry_delay_seconds: attempts * 15,
+        p_retry_delay_seconds: computePushRetryBackoffSeconds(attempts),
       });
     } else {
       failed += 1;
@@ -793,7 +838,9 @@ export async function processGlobalDueLoyaltyPushJobs(
         p_shop_secret: shopSecret,
         p_server_key_hash: primaryHash,
         p_legacy_key_hash: legacyHash,
-        p_status: classifyPushFailureStatus(pushRes.reason),
+        p_status: "failed_auth" === classifyPushFailureStatus(pushRes.reason)
+          ? "failed_auth"
+          : classifyPushFailureStatus(pushRes.reason),
         p_error: pushRes.reason ?? "PUSH_FAILED",
         p_retry_delay_seconds: 0,
       });

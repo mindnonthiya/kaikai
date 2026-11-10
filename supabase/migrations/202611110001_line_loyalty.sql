@@ -72,14 +72,25 @@ create table if not exists public.loyalty_push_queue (
   status text not null default 'pending' check (
     status in ('pending', 'processing', 'sent', 'failed_auth', 'failed_quota', 'failed_recipient', 'failed_network')
   ),
+  retry_key uuid not null default gen_random_uuid(),
   attempts integer not null default 0,
-  max_attempts integer not null default 3,
+  max_attempts integer not null default 6,
   last_error text,
   next_retry_at timestamptz not null default now(),
   sent_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.loyalty_push_queue
+  add column if not exists retry_key uuid not null default gen_random_uuid();
+
+alter table public.loyalty_push_queue
+  alter column max_attempts set default 6;
+
+update public.loyalty_push_queue
+set max_attempts = 6
+where max_attempts < 6;
 
 create index if not exists loyalty_push_queue_pending_idx
   on public.loyalty_push_queue(shop_secret, status, next_retry_at asc)
@@ -155,6 +166,7 @@ drop function if exists public.complete_loyalty_push_job(uuid, text, text, text,
 drop function if exists public.run_loyalty_housekeeping(uuid);
 drop function if exists public.admin_adjust_loyalty_stamps(text, uuid, integer);
 drop function if exists public.admin_redeem_coupon_by_code(text, text);
+drop function if exists public.admin_retry_failed_loyalty_push_jobs(text, uuid);
 
 -- 0. Dedicated Daily & Opportunistic Housekeeping RPC
 --    Prunes loyalty_push_queue older than 14 days and loyalty_logs older than 180 days,
@@ -641,7 +653,7 @@ begin
       '🐔 ' || v_card_title || E'\nสะสมแต้มสำเร็จ +' || p_points::text || ' แต้ม (แต้มปัจจุบัน ' || v_new_stamps::text || ' / ' || v_stamps_per_reward::text || ' แต้ม)',
       'pending',
       0,
-      3,
+      6,
       v_now
     )
     returning id into v_push_job_id;
@@ -858,7 +870,7 @@ begin
         '🎉 ใช้คูปองส่วนลดสำเร็จ #' || v_coupon.code || ' (' || v_coupon.title || ')',
         'pending',
         0,
-        3,
+        6,
         v_now
       )
       returning id into v_push_job_id;
@@ -1033,10 +1045,31 @@ begin
     return jsonb_build_object('ok', false);
   end if;
 
-  v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
-  if v_stored_hash <> '' and v_stored_hash <> trim(coalesce(p_server_key_hash, ''))
-     and v_stored_hash <> trim(coalesce(p_legacy_key_hash, '')) then
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
     return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY');
+  end if;
+
+  v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
+  -- Strictly fail-closed: reject immediately if stored serverKeyHash is empty or does not match
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
+    return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY');
+  end if;
+
+  if left(trim(coalesce(p_line_user_id, '')), 1) <> 'U'
+     or length(trim(coalesce(p_line_user_id, ''))) > 64 then
+    return jsonb_build_object('ok', false, 'code', 'INVALID_LINE_USER_ID');
+  end if;
+
+  if octet_length(coalesce(p_messages, '[]'::jsonb)::text) > 24576
+     or length(coalesce(p_fallback_text, '')) > 2000 then
+    return jsonb_build_object('ok', false, 'code', 'PAYLOAD_TOO_LARGE');
   end if;
 
   v_shop_scope_id := coalesce(
@@ -1075,7 +1108,7 @@ begin
     p_fallback_text,
     'pending',
     0,
-    3,
+    6,
     now()
   )
   returning id into v_job_id;
@@ -1102,6 +1135,10 @@ declare
   v_stored_hash text;
   v_jobs jsonb := '[]'::jsonb;
 begin
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return '[]'::jsonb;
+  end if;
+
   select s.owner_id, s.value
     into v_owner_id, v_config
   from public.settings s
@@ -1114,8 +1151,15 @@ begin
   end if;
 
   v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
-  if v_stored_hash <> '' and v_stored_hash <> trim(coalesce(p_server_key_hash, ''))
-     and v_stored_hash <> trim(coalesce(p_legacy_key_hash, '')) then
+  -- Strictly fail-closed: reject immediately if stored serverKeyHash is empty or does not match
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
     return '[]'::jsonb;
   end if;
 
@@ -1139,11 +1183,12 @@ begin
         updated_at = now()
     from due
     where q.id = due.id
-    returning q.id, q.line_user_id, q.event_type, q.messages, q.fallback_text, q.attempts, q.max_attempts
+    returning q.id, q.retry_key, q.line_user_id, q.event_type, q.messages, q.fallback_text, q.attempts, q.max_attempts
   )
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'id', c.id,
+      'retryKey', coalesce(c.retry_key, c.id)::text,
       'lineUserId', c.line_user_id,
       'eventType', c.event_type,
       'messages', c.messages,
@@ -1177,6 +1222,10 @@ declare
   v_config jsonb;
   v_stored_hash text;
 begin
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY');
+  end if;
+
   select s.owner_id, s.value
     into v_owner_id, v_config
   from public.settings s
@@ -1189,8 +1238,15 @@ begin
   end if;
 
   v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
-  if v_stored_hash <> '' and v_stored_hash <> trim(coalesce(p_server_key_hash, ''))
-     and v_stored_hash <> trim(coalesce(p_legacy_key_hash, '')) then
+  -- Strictly fail-closed: reject immediately if stored serverKeyHash is empty or does not match
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
     return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY');
   end if;
 
@@ -1204,8 +1260,8 @@ begin
   elsif p_status = 'retry' then
     update public.loyalty_push_queue
     set status = case when attempts < max_attempts then 'pending' else 'failed_network' end,
-        last_error = p_error,
-        next_retry_at = now() + (greatest(1, coalesce(p_retry_delay_seconds, 2)) || ' seconds')::interval,
+        last_error = left(coalesce(p_error, ''), 500),
+        next_retry_at = now() + (greatest(1, coalesce(p_retry_delay_seconds, 60)) || ' seconds')::interval,
         updated_at = now()
     where id = p_job_id and shop_secret = trim(p_shop_secret);
   else
@@ -1214,7 +1270,7 @@ begin
           when p_status in ('failed_auth', 'failed_quota', 'failed_recipient', 'failed_network') then p_status
           else 'failed_network'
         end,
-        last_error = p_error,
+        last_error = left(coalesce(p_error, ''), 500),
         updated_at = now()
     where id = p_job_id and shop_secret = trim(p_shop_secret);
   end if;
@@ -1259,7 +1315,7 @@ begin
         trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_server_key_hash)
         or (
           p_legacy_key_hash is not null
-          and trim(p_legacy_key_hash) <> ''
+          and length(trim(p_legacy_key_hash)) >= 32
           and trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_legacy_key_hash)
         )
       )
@@ -1290,6 +1346,7 @@ begin
     where q.id = due.id
     returning
       q.id,
+      q.retry_key,
       q.shop_secret,
       due.encrypted_access_token,
       q.line_user_id,
@@ -1302,6 +1359,7 @@ begin
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'id', c.id,
+      'retryKey', coalesce(c.retry_key, c.id)::text,
       'shopSecret', c.shop_secret,
       'channelAccessToken', c.encrypted_access_token,
       'lineUserId', c.line_user_id,
@@ -1516,6 +1574,46 @@ begin
   );
 end;
 $$;
+
+-- 8. Authenticated Shop Owner RPC: Reset Permanently Failed Push Jobs for Manual Re-Send
+create or replace function public.admin_retry_failed_loyalty_push_jobs(
+  p_shop_scope_id text,
+  p_job_id uuid default null
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_shop text := coalesce(nullif(trim(p_shop_scope_id), ''), 'default');
+  v_reset_count integer := 0;
+begin
+  if v_user_id is null then
+    return jsonb_build_object('ok', false, 'message', 'กรุณาเข้าสู่ระบบก่อนสั่งส่งข้อความซ้ำ');
+  end if;
+
+  update public.loyalty_push_queue
+  set status = 'pending',
+      attempts = 0,
+      max_attempts = greatest(max_attempts, 6),
+      next_retry_at = now(),
+      updated_at = now()
+  where owner_id = v_user_id
+    and shop_scope_id = v_shop
+    and (p_job_id is null or id = p_job_id)
+    and status in ('failed_network', 'failed_quota', 'failed_auth', 'failed_recipient');
+  get diagnostics v_reset_count = row_count;
+
+  return jsonb_build_object(
+    'ok', true,
+    'resetCount', v_reset_count
+  );
+end;
+$$;
+
+revoke all on function public.admin_retry_failed_loyalty_push_jobs(text, uuid) from public;
+grant execute on function public.admin_retry_failed_loyalty_push_jobs(text, uuid) to authenticated;
 
 revoke all on function public.get_loyalty_card_state(text, text, text, text) from public;
 grant execute on function public.get_loyalty_card_state(text, text, text, text) to anon, authenticated;

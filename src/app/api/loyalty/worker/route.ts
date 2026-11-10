@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { processGlobalDueLoyaltyPushJobs } from "@/lib/line-messaging";
-import { hasLoyaltyServerSecret } from "@/lib/loyalty-crypto";
+import { hasLoyaltyServerSecret, verifyCronAuthorization } from "@/lib/loyalty-crypto";
 import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -20,16 +20,23 @@ async function handleWorkerRequest(request: Request) {
     );
   }
 
-  // Optional CRON_SECRET verification when CRON_SECRET is set in environment
-  const cronSecret = (process.env.CRON_SECRET ?? "").trim();
-  if (cronSecret) {
-    const authHeader = (request.headers.get("authorization") ?? "").trim();
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json(
-        { ok: false, code: "UNAUTHORIZED_CRON" },
-        { status: 401 },
-      );
-    }
+  // Strictly fail-closed: NEVER allow external access unless CRON_SECRET is configured and matches
+  const cronAuth = verifyCronAuthorization(request.headers.get("authorization"));
+  if (!cronAuth.configured) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "CRON_SECRET_NOT_CONFIGURED",
+        message: "ต้องตั้งค่า CRON_SECRET ใน Environment Variables ก่อนเรียกใช้งาน Worker",
+      },
+      { status: 503 },
+    );
+  }
+  if (!cronAuth.ok) {
+    return NextResponse.json(
+      { ok: false, code: "UNAUTHORIZED_CRON" },
+      { status: 401 },
+    );
   }
 
   if (!hasSupabaseEnv) {

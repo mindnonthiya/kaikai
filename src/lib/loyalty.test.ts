@@ -1,7 +1,11 @@
 import { createHmac } from "crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  computePushRetryBackoffSeconds,
+  deriveFallbackRetryKey,
   extractLineChannelIdFromLiffId,
+  isValidLineRetryKey,
+  sendLinePushMessageDetailed,
   verifyLineWebhookSignature,
 } from "@/lib/line-messaging";
 import {
@@ -27,6 +31,8 @@ import {
   hasLoyaltyServerSecret,
   isCurrentVersionEncryptedSecret,
   isEncryptedLoyaltySecret,
+  resolveCronSecret,
+  verifyCronAuthorization,
 } from "@/lib/loyalty-crypto";
 import { generateQrMatrix, qrMatrixToSvgPath } from "@/lib/qr-code";
 import { checkLoyaltyRateLimit } from "@/lib/rate-limit";
@@ -239,5 +245,50 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     expect(shouldSendStampPushNotification("reward_only", 0)).toBe(false);
     expect(shouldSendStampPushNotification("reward_only", 1)).toBe(true);
     expect(shouldSendStampPushNotification("off", 1)).toBe(false);
+  });
+
+  it("enforces fail-closed CRON_SECRET verification and multi-hour retry backoff with X-Line-Retry-Key idempotency", async () => {
+    const cronSecret = resolveCronSecret();
+    expect(cronSecret.length).toBeGreaterThanOrEqual(16);
+    expect(verifyCronAuthorization(null)).toEqual({ ok: false, configured: true });
+    expect(verifyCronAuthorization("Bearer wrong_secret")).toEqual({ ok: false, configured: true });
+    expect(verifyCronAuthorization(`Bearer ${cronSecret}`)).toEqual({ ok: true, configured: true });
+
+    // Multi-stage backoff schedule (1m -> 5m -> 15m -> 1h -> 3h)
+    expect(computePushRetryBackoffSeconds(1)).toBe(60);
+    expect(computePushRetryBackoffSeconds(2)).toBe(300);
+    expect(computePushRetryBackoffSeconds(3)).toBe(900);
+    expect(computePushRetryBackoffSeconds(4)).toBe(3600);
+    expect(computePushRetryBackoffSeconds(5)).toBe(10800);
+
+    const jobRetryKey = "550e8400-e29b-41d4-a716-446655440000";
+    expect(isValidLineRetryKey(jobRetryKey)).toBe(true);
+    expect(isValidLineRetryKey(deriveFallbackRetryKey(jobRetryKey))).toBe(true);
+
+    // Verify X-Line-Retry-Key header is sent and HTTP 409 is treated as already accepted (ok: true)
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "The retry key is already processed" }), {
+        status: 409,
+      }),
+    );
+
+    const pushRes = await sendLinePushMessageDetailed(
+      "sample_access_token",
+      "U1234567890abcdef1234567890abcdef",
+      [{ type: "text", text: "ทดสอบ" }],
+      undefined,
+      jobRetryKey,
+    );
+
+    expect(pushRes.ok).toBe(true);
+    expect(pushRes.status).toBe(409);
+    expect(pushRes.reason).toBe("ALREADY_ACCEPTED_BY_LINE_409");
+    expect(pushRes.retryKey).toBe(jobRetryKey);
+
+    const calledHeaders = (fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(calledHeaders?.["X-Line-Retry-Key"]).toBe(jobRetryKey);
+    fetchSpy.mockRestore();
   });
 });

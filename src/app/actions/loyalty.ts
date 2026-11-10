@@ -659,3 +659,68 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
     };
   });
 }
+
+export async function retryFailedLoyaltyPushJobsAction(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user, shopId }) => {
+    const rawJobId = String(form.get("job_id") ?? "").trim();
+    const jobId = rawJobId || null;
+
+    const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
+    const { data: settingRow } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("owner_id", user.id)
+      .eq("key", settingKey)
+      .maybeSingle();
+
+    const config = normalizeLoyaltyConfig(settingRow?.value);
+    const decryptedAccessToken = decryptLoyaltySecret(config.channelAccessToken);
+
+    if (!decryptedAccessToken) {
+      throw new InputError("กรุณากรอกและบันทึก Channel Access Token ของ LINE OA ก่อนสั่งส่งข้อความซ้ำ");
+    }
+
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_retry_failed_loyalty_push_jobs", {
+      p_shop_scope_id: shopId,
+      p_job_id: jobId,
+    });
+
+    if (rpcErr && !isMissingRpcError(rpcErr)) {
+      dbError(rpcErr);
+    }
+
+    // Fallback direct update if the new RPC hasn't been migrated yet
+    if (rpcErr && isMissingRpcError(rpcErr)) {
+      let query = supabase
+        .from("loyalty_push_queue")
+        .update({
+          status: "pending",
+          attempts: 0,
+          max_attempts: 6,
+          next_retry_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId)
+        .in("status", ["failed_network", "failed_quota", "failed_auth", "failed_recipient"]);
+
+      if (jobId) {
+        query = query.eq("id", jobId);
+      }
+      await query;
+    }
+
+    await processPendingLoyaltyPushJobs(supabase, config.shopSecret, decryptedAccessToken);
+
+    const resetCount = Number((rpcData as Record<string, unknown> | null)?.resetCount ?? 1);
+    invalidateQueryCache();
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        resetCount > 0
+          ? `สั่งส่งข้อความแจ้งเตือน LINE ซ้ำเรียบร้อยแล้ว (${resetCount} รายการ)`
+          : "สั่งประมวลผลคิวแจ้งเตือน LINE OA ซ้ำเรียบร้อยแล้ว",
+    };
+  });
+}
