@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { sendLinePushMessageDetailed } from "@/lib/line-messaging";
+import {
+  fetchShopLoyaltyServerCredentials,
+  sendLinePushMessageDetailed,
+  verifyLineLiffAccessToken,
+} from "@/lib/line-messaging";
 import {
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
@@ -13,10 +17,11 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const shopSecret = String(body.shopSecret ?? "").trim();
     const couponId = String(body.couponId ?? "").trim();
-    const lineUserId = String(body.lineUserId ?? "").trim();
-    const displayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
+    const liffAccessToken = String(body.liffAccessToken ?? "").trim();
+    const clientLineUserId = String(body.lineUserId ?? "").trim();
+    const clientDisplayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
 
-    if (!shopSecret || !couponId || !lineUserId) {
+    if (!shopSecret || !couponId) {
       return NextResponse.json(
         { ok: false, code: "INVALID_PARAMS", message: "ข้อมูลคูปองส่วนลดไม่ครบถ้วน" },
         { status: 400 },
@@ -30,14 +35,14 @@ export async function POST(request: Request) {
         cardTitle: "GaiTomNamPla 🐔",
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         couponCode: "GT-DEMO01",
-        displayName,
+        displayName: clientDisplayName,
         claimedAtText,
       });
       const plainText = buildCouponRedeemPlainText({
         cardTitle: "GaiTomNamPla 🐔",
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         couponCode: "GT-DEMO01",
-        displayName,
+        displayName: clientDisplayName,
         claimedAtText,
       });
       return NextResponse.json({
@@ -48,7 +53,7 @@ export async function POST(request: Request) {
         title: "ลด 50% เมนูหลัก 1 กล่อง",
         claimedAt: nowIso,
         claimedAtFormatted: claimedAtText,
-        displayName,
+        displayName: clientDisplayName,
         notification: {
           plainText,
           flexMessage,
@@ -59,11 +64,52 @@ export async function POST(request: Request) {
     }
 
     const supabase = await createSupabaseServerClient();
+    const creds = await fetchShopLoyaltyServerCredentials(supabase, shopSecret);
+
+    let verifiedLineUserId = "";
+    let verifiedDisplayName = clientDisplayName;
+
+    if (liffAccessToken) {
+      const verification = await verifyLineLiffAccessToken(liffAccessToken, creds.liffId);
+      if (!verification.ok) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "LINE_AUTH_REQUIRED",
+            message: "ยืนยันตัวตน LINE ไม่สำเร็จหรือเซสชันหมดอายุ กรุณาเปิดผ่านแอป LINE อีกครั้ง",
+          },
+          { status: 401 },
+        );
+      }
+      verifiedLineUserId = verification.userId;
+      verifiedDisplayName = verification.displayName;
+    } else if (creds.liffId) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "LINE_AUTH_REQUIRED",
+          message: "กรุณาเปิดบัตรสะสมแต้มผ่านแอป LINE เพื่อยืนยันตัวตนก่อนใช้คูปอง",
+        },
+        { status: 401 },
+      );
+    } else if (clientLineUserId && !clientLineUserId.startsWith("U")) {
+      verifiedLineUserId = clientLineUserId;
+    } else {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "LINE_AUTH_REQUIRED",
+          message: "ไม่พบข้อมูลยืนยันตัวตนลูกค้า กรุณาเปิดผ่านแอป LINE",
+        },
+        { status: 401 },
+      );
+    }
+
     const { data, error } = await supabase.rpc("redeem_loyalty_coupon", {
       p_shop_secret: shopSecret,
       p_coupon_id: couponId,
-      p_line_user_id: lineUserId,
-      p_display_name: displayName,
+      p_line_user_id: verifiedLineUserId,
+      p_display_name: verifiedDisplayName,
     });
 
     if (error) {
@@ -78,12 +124,12 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status: 404 });
     }
 
-    const cardTitle = String(result.cardTitle ?? "GaiTomNamPla 🐔");
-    const rewardTitle = String(result.title ?? "ลด 50% เมนูหลัก 1 กล่อง");
+    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔");
+    const rewardTitle = String(result.title ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
     const couponCode = String(result.code ?? "GT-COUPON");
     const claimedAt = String(result.claimedAt ?? new Date().toISOString());
     const claimedAtText = formatThaiDateTime(claimedAt);
-    const resolvedName = String(result.displayName ?? displayName);
+    const resolvedName = String(result.displayName ?? verifiedDisplayName);
 
     const flexMessage = buildCouponRedeemFlexMessage({
       cardTitle,
@@ -101,18 +147,29 @@ export async function POST(request: Request) {
       claimedAtText,
     });
 
-    const channelAccessToken = String(result.channelAccessToken ?? "").trim();
+    const finalCredentials = creds.channelAccessToken
+      ? creds
+      : await fetchShopLoyaltyServerCredentials(supabase, shopSecret, {
+          channelAccessToken: typeof result.channelAccessToken === "string" ? result.channelAccessToken : "",
+          liffId: String(result.liffId ?? ""),
+          notifyMode: String(result.notifyMode ?? "all"),
+        });
+
     let pushed = false;
     let pushReason = "ALREADY_CLAIMED";
     if (!result.alreadyClaimed) {
-      const pushRes = await sendLinePushMessageDetailed(
-        channelAccessToken,
-        lineUserId,
-        [flexMessage],
-        plainText,
-      );
-      pushed = pushRes.ok;
-      pushReason = pushRes.reason ?? "SENT";
+      if (finalCredentials.notifyMode === "off") {
+        pushReason = "NOTIFY_MODE_OFF";
+      } else {
+        const pushRes = await sendLinePushMessageDetailed(
+          finalCredentials.channelAccessToken,
+          verifiedLineUserId,
+          [flexMessage],
+          plainText,
+        );
+        pushed = pushRes.ok;
+        pushReason = pushRes.reason ?? (pushRes.ok ? "PUSH_REQUEST_ACCEPTED" : "PUSH_FAILED");
+      }
     }
 
     const safeResult = { ...result };

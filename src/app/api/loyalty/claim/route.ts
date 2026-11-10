@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { sendLinePushMessageDetailed } from "@/lib/line-messaging";
 import {
+  fetchShopLoyaltyServerCredentials,
+  sendLinePushMessageDetailed,
+  verifyLineLiffAccessToken,
+} from "@/lib/line-messaging";
+import {
+  type LoyaltyNotifyMode,
   buildLoyaltyCardUrl,
   buildStampAwardFlexMessage,
   buildStampAwardPlainText,
   formatValidTillDate,
+  resolveTrustedAppOrigin,
+  shouldSendStampPushNotification,
 } from "@/lib/loyalty";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -15,27 +22,27 @@ export async function POST(request: Request) {
     const shopSecret = String(body.shopSecret ?? "").trim();
     const points = Math.round(Number(body.points ?? 0));
     const token = String(body.token ?? "").trim();
-    const lineUserId = String(body.lineUserId ?? "").trim();
-    const displayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
-    const pictureUrl = body.pictureUrl ? String(body.pictureUrl).trim() : null;
-    const clientLiffId = String(body.liffId ?? "").trim();
+    const liffAccessToken = String(body.liffAccessToken ?? "").trim();
+    const clientLineUserId = String(body.lineUserId ?? "").trim();
+    const clientDisplayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
+    const clientPictureUrl = body.pictureUrl ? String(body.pictureUrl).trim() : null;
 
-    if (!shopSecret || !token || !lineUserId || points < 1 || points > 10) {
+    if (!shopSecret || !token || points < 1 || points > 10) {
       return NextResponse.json(
         { ok: false, code: "INVALID_PARAMS", message: "ข้อมูลคิวอาร์โค้ดสะสมแต้มไม่ครบถ้วนหรือไม่ถูกต้อง" },
         { status: 400 },
       );
     }
 
-    const requestOrigin = new URL(request.url).origin;
+    const trustedOrigin = resolveTrustedAppOrigin(request.url);
 
     if (!hasSupabaseEnv) {
       const validTill = formatValidTillDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
-      const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, clientLiffId);
+      const cardUrl = buildLoyaltyCardUrl(trustedOrigin, shopSecret, "");
       const flexMessage = buildStampAwardFlexMessage({
         cardTitle: "GaiTomNamPla 🐔",
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
-        displayName,
+        displayName: clientDisplayName,
         pointsAdded: points,
         newStamps: points % 10,
         stampsPerReward: 10,
@@ -46,7 +53,7 @@ export async function POST(request: Request) {
       const plainText = buildStampAwardPlainText({
         cardTitle: "GaiTomNamPla 🐔",
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
-        displayName,
+        displayName: clientDisplayName,
         pointsAdded: points,
         newStamps: points % 10,
         stampsPerReward: 10,
@@ -72,13 +79,61 @@ export async function POST(request: Request) {
     }
 
     const supabase = await createSupabaseServerClient();
+
+    // Fetch shop's server-side config & encrypted credentials first
+    const creds = await fetchShopLoyaltyServerCredentials(supabase, shopSecret);
+
+    // Server-side verification of LINE identity
+    let verifiedLineUserId = "";
+    let verifiedDisplayName = clientDisplayName;
+    let verifiedPictureUrl = clientPictureUrl;
+
+    if (liffAccessToken) {
+      const verification = await verifyLineLiffAccessToken(liffAccessToken, creds.liffId);
+      if (!verification.ok) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "LINE_AUTH_REQUIRED",
+            message: "ยืนยันตัวตน LINE ไม่สำเร็จหรือเซสชันหมดอายุ กรุณาเปิดสแกนผ่านแอป LINE อีกครั้ง",
+          },
+          { status: 401 },
+        );
+      }
+      verifiedLineUserId = verification.userId;
+      verifiedDisplayName = verification.displayName;
+      verifiedPictureUrl = verification.pictureUrl;
+    } else if (creds.liffId) {
+      // When the shop has configured LIFF ID, strictly require verified LINE token before awarding stamps
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "LINE_AUTH_REQUIRED",
+          message: "กรุณาสแกนคิวอาร์โค้ดผ่านกล้อง LINE หรือเข้าสู่ระบบ LINE ก่อนรับแต้มสะสม",
+        },
+        { status: 401 },
+      );
+    } else if (clientLineUserId && !clientLineUserId.startsWith("U")) {
+      // Only allow browser preview ID ('web_...') when the shop has NOT configured LIFF ID yet
+      verifiedLineUserId = clientLineUserId;
+    } else {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "LINE_AUTH_REQUIRED",
+          message: "ไม่พบข้อมูลยืนยันตัวตนลูกค้า กรุณาเปิดผ่านแอป LINE",
+        },
+        { status: 401 },
+      );
+    }
+
     const { data, error } = await supabase.rpc("claim_loyalty_stamps", {
       p_shop_secret: shopSecret,
       p_points: points,
       p_token: token,
-      p_line_user_id: lineUserId,
-      p_display_name: displayName,
-      p_picture_url: pictureUrl,
+      p_line_user_id: verifiedLineUserId,
+      p_display_name: verifiedDisplayName,
+      p_picture_url: verifiedPictureUrl,
     });
 
     if (error) {
@@ -104,20 +159,27 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status });
     }
 
-    const cardTitle = String(result.cardTitle ?? "GaiTomNamPla 🐔");
-    const rewardTitle = String(result.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
+    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔");
+    const rewardTitle = String(result.rewardTitle ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
     const pointsAdded = Number(result.pointsAdded ?? points);
     const newStamps = Number(result.newStamps ?? 0);
     const stampsPerReward = Number(result.stampsPerReward ?? 10);
     const rewardsUnlocked = Number(result.rewardsUnlocked ?? 0);
     const expiresAt = result.expiresAt ? String(result.expiresAt) : null;
     const validTill = formatValidTillDate(expiresAt);
-    const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, clientLiffId);
+
+    // Strictly use LIFF ID from database config and trusted server origin (never from client body)
+    const authoritativeLiffId = String(result.liffId ?? creds.liffId ?? "").trim();
+    const rawNotifyMode = String(result.notifyMode ?? creds.notifyMode ?? "all").trim();
+    const notifyMode: LoyaltyNotifyMode =
+      rawNotifyMode === "reward_only" || rawNotifyMode === "off" ? rawNotifyMode : "all";
+
+    const cardUrl = buildLoyaltyCardUrl(trustedOrigin, shopSecret, authoritativeLiffId);
 
     const flexMessage = buildStampAwardFlexMessage({
       cardTitle,
       rewardTitle,
-      displayName: String(result.displayName ?? displayName),
+      displayName: String(result.displayName ?? verifiedDisplayName),
       pointsAdded,
       newStamps,
       stampsPerReward,
@@ -129,7 +191,7 @@ export async function POST(request: Request) {
     const plainText = buildStampAwardPlainText({
       cardTitle,
       rewardTitle,
-      displayName: String(result.displayName ?? displayName),
+      displayName: String(result.displayName ?? verifiedDisplayName),
       pointsAdded,
       newStamps,
       stampsPerReward,
@@ -137,17 +199,40 @@ export async function POST(request: Request) {
       validTill,
     });
 
-    const channelAccessToken = String(result.channelAccessToken ?? "").trim();
-    const pushRes = await sendLinePushMessageDetailed(
-      channelAccessToken,
-      lineUserId,
-      [flexMessage],
-      plainText,
-    );
+    // Resolve channelAccessToken from server credentials (or legacy RPC fallback if SQL wasn't re-run yet)
+    const finalCredentials = creds.channelAccessToken
+      ? creds
+      : await fetchShopLoyaltyServerCredentials(supabase, shopSecret, {
+          channelAccessToken: typeof result.channelAccessToken === "string" ? result.channelAccessToken : "",
+          liffId: authoritativeLiffId,
+          notifyMode,
+        });
 
-    // Never leak channelAccessToken in public response
+    let pushed = false;
+    let pushReason = "SKIPPED";
+
+    if (!shouldSendStampPushNotification(notifyMode, rewardsUnlocked)) {
+      pushReason = notifyMode === "off" ? "NOTIFY_MODE_OFF" : "NOTIFY_MODE_REWARD_ONLY";
+    } else {
+      const pushRes = await sendLinePushMessageDetailed(
+        finalCredentials.channelAccessToken,
+        verifiedLineUserId,
+        [flexMessage],
+        plainText,
+      );
+      pushed = pushRes.ok;
+      pushReason = pushRes.reason ?? (pushRes.ok ? "PUSH_REQUEST_ACCEPTED" : "PUSH_FAILED");
+    }
+
     const safeResult = { ...result };
     delete safeResult.channelAccessToken;
+
+    if (safeResult.member && typeof safeResult.member === "object") {
+      safeResult.member = {
+        ...(safeResult.member as Record<string, unknown>),
+        validTillFormatted: validTill,
+      };
+    }
 
     return NextResponse.json({
       ...safeResult,
@@ -155,8 +240,8 @@ export async function POST(request: Request) {
       notification: {
         plainText,
         flexMessage,
-        pushed: pushRes.ok,
-        pushReason: pushRes.reason ?? "SENT",
+        pushed,
+        pushReason,
       },
     });
   } catch (err) {

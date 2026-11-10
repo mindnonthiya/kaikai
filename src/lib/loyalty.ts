@@ -18,6 +18,8 @@ export const DEFAULT_LOYALTY_RULES_TEXT = [
   "- ส่วนลดไม่สามารถแลกหรือเปลี่ยนเป็นเงินสดได้",
 ].join("\n");
 
+export type LoyaltyNotifyMode = "all" | "reward_only" | "off";
+
 export interface LoyaltyConfig {
   enabled: boolean;
   shopSecret: string;
@@ -32,8 +34,55 @@ export interface LoyaltyConfig {
   rulesText: string;
   liffId: string;
   botBasicId: string;
+  notifyMode: LoyaltyNotifyMode;
   channelSecret: string;
   channelAccessToken: string;
+  serverKeyHash?: string;
+}
+
+export function isValidLiffId(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  return /^[0-9]{8,14}-[A-Za-z0-9_-]{6,36}$/.test(trimmed);
+}
+
+export function resolveTrustedAppOrigin(fallbackRequestUrl?: string): string {
+  const configured = (
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ??
+    process.env.VERCEL_URL ??
+    ""
+  ).trim();
+  if (configured) {
+    const withProtocol = /^https?:\/\//i.test(configured)
+      ? configured
+      : `https://${configured}`;
+    try {
+      return new URL(withProtocol).origin;
+    } catch {
+      // Fallback below
+    }
+  }
+  if (fallbackRequestUrl) {
+    try {
+      const parsed = new URL(fallbackRequestUrl);
+      if (parsed.protocol === "https:" || parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+        return parsed.origin;
+      }
+    } catch {
+      // Ignore invalid fallback URL
+    }
+  }
+  return "https://kaikai.vercel.app";
+}
+
+export function shouldSendStampPushNotification(
+  notifyMode: LoyaltyNotifyMode,
+  rewardsUnlocked: number,
+): boolean {
+  if (notifyMode === "off") return false;
+  if (notifyMode === "reward_only") return rewardsUnlocked > 0;
+  return true;
 }
 
 export interface LoyaltyCouponRecord {
@@ -143,6 +192,10 @@ export function normalizeLoyaltyConfig(
       ? fallbackShopName.trim()
       : DEFAULT_LOYALTY_CARD_TITLE;
 
+  const rawNotifyMode = typeof obj.notifyMode === "string" ? obj.notifyMode.trim() : "";
+  const notifyMode: LoyaltyNotifyMode =
+    rawNotifyMode === "reward_only" || rawNotifyMode === "off" ? rawNotifyMode : "all";
+
   return {
     enabled: Boolean(obj.enabled),
     shopSecret,
@@ -169,9 +222,13 @@ export function normalizeLoyaltyConfig(
         : DEFAULT_LOYALTY_RULES_TEXT,
     liffId: typeof obj.liffId === "string" ? obj.liffId.trim() : "",
     botBasicId: typeof obj.botBasicId === "string" ? obj.botBasicId.trim() : "",
+    notifyMode,
     channelSecret: typeof obj.channelSecret === "string" ? obj.channelSecret.trim() : "",
     channelAccessToken:
       typeof obj.channelAccessToken === "string" ? obj.channelAccessToken.trim() : "",
+    ...(typeof obj.serverKeyHash === "string" && obj.serverKeyHash.trim()
+      ? { serverKeyHash: obj.serverKeyHash.trim() }
+      : {}),
   };
 }
 

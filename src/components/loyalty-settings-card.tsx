@@ -17,6 +17,7 @@ import {
   adjustMemberStampsAction,
   regenerateLoyaltyQrTokensAction,
   saveLoyaltyConfigAction,
+  verifyOrRedeemCouponByCodeAction,
   type LoyaltyAdminSnapshot,
 } from "@/app/actions/loyalty";
 import { ActionForm } from "@/components/action-form";
@@ -396,13 +397,16 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
             <div className="loyalty-setup-guide">
               <ol>
                 <li>
-                  เข้าไปที่ <a href="https://developers.line.biz/console/" target="_blank" rel="noreferrer">LINE Developers Console</a> เลือก Provider ของร้าน แล้วสร้าง Channel แบบ <strong>LINE Login</strong> (สำหรับสร้าง LIFF เปิดหน้าบัตรสะสมแต้ม)
+                  เข้าไปที่ <a href="https://developers.line.biz/console/" target="_blank" rel="noreferrer">LINE Developers Console</a> โดยตรวจสอบว่าทั้ง <strong>Messaging API Channel</strong> (ของ LINE OA ร้าน) และ <strong>LINE Login Channel</strong> (สำหรับ LIFF) อยู่ภายใต้ <strong>Provider เดียวกัน</strong> เพื่อให้รหัสลูกค้า (<code>userId</code>) ตรงกัน
                 </li>
                 <li>
-                  ในแท็บ <strong>LIFF</strong> กด Add ตั้งขนาดเป็น <strong>Full</strong>, ใส่ <strong>Endpoint URL</strong> เป็นลิงก์ด้านล่างนี้ และติ๊กเปิด Scope: <code>profile</code>, <code>openid</code> และ <strong><code>chat_message.write</code></strong> (สำคัญมาก! ตัวนี้ทำให้เมื่อลูกค้าสแกน QR แล้วข้อความแจ้งแต้มจะถูกส่งเข้าห้องแชทร้านทันทีแบบฟรี 100% ไม่เสียโควตาข้อความรายเดือน)
+                  ใน Channel <strong>LINE Login</strong> แท็บ Basic settings ให้ผูก <strong>Linked OA</strong> เข้ากับ LINE OA ของร้าน และในแท็บ <strong>LIFF</strong> กด Add ตั้งขนาดเป็น <strong>Full</strong>, ใส่ <strong>Endpoint URL</strong> ด้านล่าง, เลือก Scope เฉพาะ <code>profile</code> และ <code>openid</code> และตั้งค่า <strong>Add friend option</strong> เป็น <strong><code>On (Normal)</code></strong> (เพื่อให้ลูกค้าที่ยังไม่เป็นเพื่อนกดเพิ่มเพื่อน OA ตอนเปิดบัตรได้ทันที)
                 </li>
                 <li>
-                  คัดลอกรหัส <strong>LIFF ID</strong> (เช่น <code>2006xxxxxx-xxxxxxxx</code>) มาวางในช่อง LIFF ID ด้านล่างแล้วกดบันทึก จากนั้นดาวน์โหลดรูป QR Code ทั้ง 1–10 กล่องไปใช้งานได้เลย!
+                  ใน Channel <strong>Messaging API</strong> แท็บ Messaging API คัดลอก <strong>Channel access token (long-lived)</strong> มาใส่ในช่องด้านล่าง (ระบบจะเข้ารหัส AES-256-GCM เก็บไว้อย่างปลอดภัย หากเคยออก Token ก่อนอัปเดต SQL แนะนำให้กด Reissue ออก Token ใหม่ 1 ครั้ง)
+                </li>
+                <li>
+                  <strong>เรื่องโควตาข้อความ LINE OA:</strong> การส่งข้อความทักหาลูกค้าอัตโนมัติ (Push Message) จะนับรวมในโควตาข้อความรายเดือนของ LINE OA (แพ็กเกจฟรีได้ 300 ข้อความ/เดือน) สามารถเลือกโหมดประหยัดโควตาด้านล่างได้ ส่วนการตอบกลับเมื่อลูกค้าพิมพ์ <code>เช็คแต้ม</code> ผ่าน Webhook (Reply Message) ส่งฟรีไม่เสียโควตา
                 </li>
               </ol>
             </div>
@@ -483,13 +487,28 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
             </label>
 
             <label>
-              Messaging API Channel Access Token (สำคัญ — เพื่อให้ LINE OA ทักแจ้งแต้มหาลูกค้าอัตโนมัติ)
+              Messaging API Channel Access Token (เข้ารหัส AES-256-GCM บนเซิร์ฟเวอร์)
               <input
                 name="channel_access_token"
                 type="password"
                 defaultValue={config.channelAccessToken}
                 placeholder="วาง Channel access token (long-lived) ของ LINE OA"
               />
+            </label>
+
+            <label style={{ gridColumn: "1 / -1" }}>
+              โหมดการส่งข้อความแจ้งเตือนเข้าแชท LINE OA (จัดการโควตาข้อความรายเดือน)
+              <select name="notify_mode" defaultValue={config.notifyMode || "all"}>
+                <option value="all">
+                  แจ้งเตือนทุกครั้งที่สแกนรับแต้ม + ตอนใช้คูปอง (ใช้โควตา Push 1 ข้อความ/การสแกน)
+                </option>
+                <option value="reward_only">
+                  ประหยัดโควตา 10 เท่า — แจ้งเตือนเฉพาะตอนสะสมครบรับคูปองส่วนลด + ตอนกดใช้คูปอง
+                </option>
+                <option value="off">
+                  ปิดการส่ง Push อัตโนมัติ (ลูกค้าดูแต้มบนหน้าบัตร + พิมพ์ “เช็คแต้ม” ฟรีผ่าน Webhook)
+                </option>
+              </select>
             </label>
           </div>
         </div>
@@ -659,14 +678,39 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
           </div>
         )}
 
+        <div style={{ marginTop: 22, paddingTop: 16, borderTop: "1px dashed rgba(120, 95, 70, 0.25)" }}>
+          <h4 style={{ fontSize: "0.95rem", marginBottom: 6 }}>
+            <RefreshCw size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
+            ตรวจสอบ / ยืนยันการตัดสิทธิ์คูปองส่วนลดหน้าร้าน (#GT-XXXXXX)
+          </h4>
+          <p className="field-hint" style={{ marginBottom: 10 }}>
+            เมื่อลูกค้าส่งแคปหน้าจอหรือแจ้งรหัสคูปองในแชท ร้านค้าสามารถกรอกรหัสคูปองด้านล่าง (หรือกดปุ่มยืนยันในตาราง) เพื่อตรวจสอบและตัดสิทธิ์คูปองได้ทันที ป้องกันการนำภาพแคปเก่ามาใช้ซ้ำ
+          </p>
+          <ActionForm
+            action={verifyOrRedeemCouponByCodeAction}
+            submitLabel="ตรวจสอบ & ยืนยันใช้คูปอง"
+            pendingLabel="กำลังตรวจสอบ..."
+            resetOnSuccess={true}
+            className="loyalty-coupon-verify-form"
+          >
+            <input
+              type="text"
+              name="coupon_code"
+              placeholder="กรอกรหัสคูปอง เช่น GT-8899AA หรือ #GT-8899AA"
+              maxLength={24}
+              style={{ maxWidth: 320 }}
+              required
+            />
+          </ActionForm>
+        </div>
+
         {recentCoupons.length > 0 && (
-          <div style={{ marginTop: 18 }}>
+          <div style={{ marginTop: 16 }}>
             <h4 style={{ fontSize: "0.95rem", marginBottom: 8 }}>
-              <RefreshCw size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
               ประวัติคูปองส่วนลดล่าสุด ({recentCoupons.length} รายการ)
             </h4>
             <div className="loyalty-members-list">
-              {recentCoupons.slice(0, 10).map((c) => (
+              {recentCoupons.slice(0, 12).map((c) => (
                 <div key={c.id} className="loyalty-member-row">
                   <div className="loyalty-member-info">
                     <strong>
@@ -677,9 +721,21 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
                       {c.claimedAt ? ` · กดใช้สิทธิ์เมื่อ ${formatThaiDateTime(c.claimedAt)}` : ""}
                     </span>
                   </div>
-                  <span className={`loyalty-coupon-status ${c.status}`}>
-                    {c.status === "claimed" ? "✓ ใช้สิทธิ์แล้ว" : "ยังไม่ใช้สิทธิ์"}
-                  </span>
+                  <div className="loyalty-member-actions">
+                    {c.status === "unclaimed" && (
+                      <ActionForm
+                        action={verifyOrRedeemCouponByCodeAction}
+                        submitLabel="ร้านกดตัดสิทธิ์"
+                        pendingLabel="..."
+                        resetOnSuccess={false}
+                      >
+                        <input type="hidden" name="coupon_code" value={c.code} />
+                      </ActionForm>
+                    )}
+                    <span className={`loyalty-coupon-status ${c.status}`}>
+                      {c.status === "claimed" ? "✓ ใช้สิทธิ์แล้ว" : "ยังไม่ใช้สิทธิ์"}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>

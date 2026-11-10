@@ -21,9 +21,27 @@ interface LiffSdk {
   isLoggedIn: () => boolean;
   login: (config?: { redirectUri?: string }) => void;
   getProfile: () => Promise<LiffProfile>;
+  getAccessToken?: () => string | null;
+  getIDToken?: () => string | null;
   getContext?: () => { type?: string } | null;
   sendMessages: (messages: Array<Record<string, unknown>>) => Promise<void>;
   scanCodeV2?: () => Promise<{ value: string | null }>;
+}
+
+function getActiveLiffAccessToken(): string {
+  if (typeof window === "undefined" || !window.liff) return "";
+  try {
+    return window.liff.getAccessToken?.()?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function isRecentlyClaimedWithinFiveMinutes(claimedAtIso?: string | null): boolean {
+  if (!claimedAtIso) return false;
+  const ts = new Date(claimedAtIso).getTime();
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts <= 5 * 60 * 1000;
 }
 
 declare global {
@@ -171,6 +189,7 @@ export function LoyaltyStampCardClient({
     claimedAtFormatted: string;
     displayName: string;
     chatNotified: boolean;
+    isFreshRedemption: boolean;
   } | null>(null);
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [manualQrInput, setManualQrInput] = useState("");
@@ -181,9 +200,12 @@ export function LoyaltyStampCardClient({
 
   const hasProcessedInitialQr = useRef(false);
 
-  // Live clock for the screenshot receipt modal so shop owner knows it's a real screen
+  // Live clock ONLY for freshly redeemed coupons (within 5 minutes) to prevent replay of old screenshots
   useEffect(() => {
-    if (!receiptCoupon) return;
+    if (!receiptCoupon || !receiptCoupon.isFreshRedemption) {
+      setLiveClock("");
+      return;
+    }
     const updateClock = () => {
       setLiveClock(formatThaiDateTime(new Date()));
     };
@@ -193,12 +215,18 @@ export function LoyaltyStampCardClient({
   }, [receiptCoupon]);
 
   const fetchCardState = useCallback(
-    async (resolvedShopSecret: string, userProfile: { userId: string; displayName: string; pictureUrl: string | null }) => {
+    async (
+      resolvedShopSecret: string,
+      userProfile: { userId: string; displayName: string; pictureUrl: string | null },
+      liffAccessTokenOverride?: string,
+    ) => {
+      const liffAccessToken = liffAccessTokenOverride ?? getActiveLiffAccessToken();
       const response = await fetch("/api/loyalty/state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shopSecret: resolvedShopSecret,
+          liffAccessToken,
           lineUserId: userProfile.userId,
           displayName: userProfile.displayName,
           pictureUrl: userProfile.pictureUrl,
@@ -261,10 +289,10 @@ export function LoyaltyStampCardClient({
       points: number,
       token: string,
       userProfile: { userId: string; displayName: string; pictureUrl: string | null },
-      currentLiffId = "",
     ) => {
       setClaiming(true);
       try {
+        const liffAccessToken = getActiveLiffAccessToken();
         const response = await fetch("/api/loyalty/claim", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -272,11 +300,10 @@ export function LoyaltyStampCardClient({
             shopSecret: targetShopSecret,
             points,
             token,
+            liffAccessToken,
             lineUserId: userProfile.userId,
             displayName: userProfile.displayName,
             pictureUrl: userProfile.pictureUrl,
-            liffId: currentLiffId,
-            sendPush: true,
           }),
         });
         const data = (await response.json()) as Record<string, unknown>;
@@ -313,7 +340,38 @@ export function LoyaltyStampCardClient({
           pushReason: notification?.pushReason,
         });
 
-        await fetchCardState(targetShopSecret, userProfile);
+        // Apply returned member and coupons state in a single round-trip if available
+        if (data.member && typeof data.member === "object" && Array.isArray(data.coupons)) {
+          const mem = data.member as Record<string, unknown>;
+          const rawCoupons = data.coupons as Array<Record<string, unknown>>;
+          setMember((prev) => ({
+            lineUserId: String(mem.lineUserId ?? prev.lineUserId),
+            displayName: String(mem.displayName ?? prev.displayName),
+            pictureUrl: mem.pictureUrl ? String(mem.pictureUrl) : prev.pictureUrl,
+            stamps: Math.max(0, Number(mem.stamps ?? newStamps)),
+            lifetimeStamps: Math.max(0, Number(mem.lifetimeStamps ?? prev.lifetimeStamps)),
+            expiresAt: mem.expiresAt ? String(mem.expiresAt) : prev.expiresAt,
+            validTillFormatted: String(
+              mem.validTillFormatted ??
+                data.validTillFormatted ??
+                formatValidTillDate(mem.expiresAt ? String(mem.expiresAt) : null),
+            ),
+            lastStampedAt: mem.lastStampedAt ? String(mem.lastStampedAt) : prev.lastStampedAt,
+            expiredReset: Boolean(mem.expiredReset),
+          }));
+          setCoupons(
+            rawCoupons.map((c) => ({
+              id: String(c.id),
+              code: String(c.code ?? ""),
+              title: String(c.title ?? config.rewardTitle),
+              status: c.status === "claimed" ? "claimed" : "unclaimed",
+              issuedAt: String(c.issuedAt ?? new Date().toISOString()),
+              claimedAt: c.claimedAt ? String(c.claimedAt) : null,
+            })),
+          );
+        } else {
+          await fetchCardState(targetShopSecret, userProfile, liffAccessToken);
+        }
 
         // Clean QR token from browser URL so refreshing the page doesn't trigger cooldown warning
         if (typeof window !== "undefined") {
@@ -334,7 +392,7 @@ export function LoyaltyStampCardClient({
         setClaiming(false);
       }
     },
-    [fetchCardState],
+    [config.rewardTitle, fetchCardState],
   );
 
   // Initialize URL params, LIFF SDK (if configured), card state, and auto-claim QR if present
@@ -482,7 +540,7 @@ export function LoyaltyStampCardClient({
             // Ignore
           }
         }
-        await executeStampClaim(resolvedShopSecret, resolvedPoints, resolvedToken, userProfile, effectiveLiffId);
+        await executeStampClaim(resolvedShopSecret, resolvedPoints, resolvedToken, userProfile);
       }
 
       if (!cancelled) {
@@ -578,15 +636,16 @@ export function LoyaltyStampCardClient({
     setRedeemingCouponId(coupon.id);
 
     try {
+      const liffAccessToken = getActiveLiffAccessToken();
       const response = await fetch("/api/loyalty/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shopSecret,
           couponId: coupon.id,
+          liffAccessToken,
           lineUserId: member.lineUserId || getOrCreateBrowserUserId(),
           displayName: member.displayName || getSavedDisplayName(),
-          sendPush: true,
         }),
       });
       const data = (await response.json()) as Record<string, unknown>;
@@ -605,11 +664,29 @@ export function LoyaltyStampCardClient({
         | undefined;
       const chatNotified = Boolean(notification?.pushed);
 
-      await fetchCardState(shopSecret, {
-        userId: member.lineUserId || getOrCreateBrowserUserId(),
-        displayName: member.displayName || getSavedDisplayName(),
-        pictureUrl: member.pictureUrl,
-      });
+      if (Array.isArray(data.coupons)) {
+        const rawCoupons = data.coupons as Array<Record<string, unknown>>;
+        setCoupons(
+          rawCoupons.map((c) => ({
+            id: String(c.id),
+            code: String(c.code ?? ""),
+            title: String(c.title ?? config.rewardTitle),
+            status: c.status === "claimed" ? "claimed" : "unclaimed",
+            issuedAt: String(c.issuedAt ?? new Date().toISOString()),
+            claimedAt: c.claimedAt ? String(c.claimedAt) : null,
+          })),
+        );
+      } else {
+        await fetchCardState(
+          shopSecret,
+          {
+            userId: member.lineUserId || getOrCreateBrowserUserId(),
+            displayName: member.displayName || getSavedDisplayName(),
+            pictureUrl: member.pictureUrl,
+          },
+          liffAccessToken,
+        );
+      }
 
       setConfirmRedeemCoupon(null);
       setActiveTab("claimed");
@@ -619,6 +696,7 @@ export function LoyaltyStampCardClient({
         claimedAtFormatted: String(data.claimedAtFormatted ?? formatThaiDateTime(new Date())),
         displayName: String(data.displayName ?? member.displayName),
         chatNotified,
+        isFreshRedemption: !data.alreadyClaimed,
       });
     } finally {
       setRedeemingCouponId(null);
@@ -768,7 +846,27 @@ export function LoyaltyStampCardClient({
               <div className="line-stamp-alert-foot">
                 {claimBanner.chatNotified ? (
                   <span className="line-stamp-chat-ok">
-                    ✓ {config.cardTitle} ส่งข้อความแจ้งเตือนแต้มไปที่แชท LINE ของคุณแล้ว
+                    ✓ ส่งคำขอแจ้งเตือนไปยัง LINE OA ({config.cardTitle}) แล้ว (หากเพิ่มเพื่อนกับร้านไว้จะได้รับข้อความในแชท)
+                  </span>
+                ) : claimBanner.pushReason === "NOTIFY_MODE_REWARD_ONLY" ? (
+                  <span className="line-stamp-chat-hint">
+                    ℹ️ บันทึกแต้มบนบัตรเรียบร้อยแล้ว (ร้านตั้งค่าส่งข้อความแจ้งเตือนใน LINE เฉพาะเมื่อสะสมครบรับคูปองส่วนลด)
+                  </span>
+                ) : claimBanner.pushReason === "NOTIFY_MODE_OFF" ? (
+                  <span className="line-stamp-chat-hint">
+                    ✓ บันทึกแต้มบนบัตรสะสมแต้มเรียบร้อยแล้ว
+                  </span>
+                ) : claimBanner.pushReason === "LINE_QUOTA_EXCEEDED_429" ? (
+                  <span className="line-stamp-chat-hint">
+                    ⚠️ โควตาข้อความแจ้งเตือน LINE OA รายเดือนของร้านเต็มแล้ว (แต่แต้มของคุณถูกบันทึกบนบัตรเรียบร้อย)
+                  </span>
+                ) : claimBanner.pushReason === "LINE_TOKEN_INVALID_401" ? (
+                  <span className="line-stamp-chat-hint">
+                    ⚠️ Channel Access Token ของร้านหมดอายุหรือไม่ถูกต้อง (กรุณาออก Token ใหม่ในหน้าตั้งค่าร้าน)
+                  </span>
+                ) : claimBanner.pushReason === "LINE_PROVIDER_OR_FRIEND_MISMATCH_400" ? (
+                  <span className="line-stamp-chat-hint">
+                    ⚠️ ไม่สามารถส่งแจ้งเตือนเข้าแชทได้ (กรุณาตรวจสอบว่า LINE Login และ Messaging API อยู่ภายใต้ Provider เดียวกัน)
                   </span>
                 ) : claimBanner.pushReason === "MISSING_CHANNEL_ACCESS_TOKEN" ? (
                   <span className="line-stamp-chat-hint">
@@ -899,10 +997,13 @@ export function LoyaltyStampCardClient({
                         claimedAtFormatted: formatThaiDateTime(coupon.claimedAt),
                         displayName: member.displayName,
                         chatNotified: false,
+                        isFreshRedemption: isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt),
                       })
                     }
                   >
-                    ดูใบยืนยันคูปอง (สำหรับแคปส่งร้าน)
+                    {isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt)
+                      ? "ดูใบยืนยันคูปอง (สำหรับแคปส่งร้าน)"
+                      : "ดูรายละเอียดประวัติการใช้สิทธิ์"}
                   </button>
                 </div>
               </div>
@@ -986,9 +1087,22 @@ export function LoyaltyStampCardClient({
       {receiptCoupon && (
         <div className="line-modal-backdrop" onClick={() => setReceiptCoupon(null)}>
           <div className="line-modal-sheet receipt" onClick={(e) => e.stopPropagation()}>
-            <div className="line-receipt-header">
-              <div className="line-receipt-check">✓</div>
-              <span className="line-receipt-status">ตัดสิทธิ์คูปองสำเร็จ (CLAIM CONFIRMED)</span>
+            <div
+              className="line-receipt-header"
+              style={
+                receiptCoupon.isFreshRedemption
+                  ? undefined
+                  : { background: "#4b5563" }
+              }
+            >
+              <div className="line-receipt-check">
+                {receiptCoupon.isFreshRedemption ? "✓" : "⏱"}
+              </div>
+              <span className="line-receipt-status">
+                {receiptCoupon.isFreshRedemption
+                  ? "ตัดสิทธิ์คูปองสำเร็จ (CLAIM CONFIRMED)"
+                  : "ประวัติคูปองที่ใช้สิทธิ์ไปแล้ว (USED HISTORY)"}
+              </span>
               <h3>{config.cardTitle}</h3>
             </div>
 
@@ -1006,15 +1120,32 @@ export function LoyaltyStampCardClient({
                 <span>เวลาที่กดใช้สิทธิ์</span>
                 <strong>{receiptCoupon.claimedAtFormatted}</strong>
               </div>
-              <div className="line-receipt-live-clock">
-                <span>เวลาปัจจุบัน: {liveClock}</span>
-              </div>
+              {receiptCoupon.isFreshRedemption ? (
+                <div className="line-receipt-live-clock">
+                  <span>เวลาปัจจุบัน: {liveClock}</span>
+                </div>
+              ) : (
+                <div
+                  className="line-receipt-live-clock"
+                  style={{ background: "#fef2f2", color: "#991b1b", borderColor: "#fecaca" }}
+                >
+                  <span>คูปองใบนี้ถูกใช้สิทธิ์ไปแล้วเมื่อ {receiptCoupon.claimedAtFormatted} (ไม่สามารถใช้ซ้ำได้)</span>
+                </div>
+              )}
             </div>
 
-            <p className="line-receipt-instruction">
-              📸 <strong>แคปหน้าจอนี้ส่งในแชท LINE ร้านได้เลย!</strong>
-              {receiptCoupon.chatNotified ? " (ระบบได้ส่งข้อความแจ้งเตือนเข้าแชทร้านให้อัตโนมัติแล้วเช่นกัน)" : ""}
-            </p>
+            {receiptCoupon.isFreshRedemption ? (
+              <p className="line-receipt-instruction">
+                📸 <strong>แคปหน้าจอนี้ส่งในแชท LINE ร้านได้เลย!</strong>
+                {receiptCoupon.chatNotified
+                  ? " (ระบบได้ส่งคำขอแจ้งเตือนเข้าแชท LINE ให้อัตโนมัติแล้วเช่นกัน)"
+                  : ""}
+              </p>
+            ) : (
+              <p className="line-receipt-instruction">
+                ℹ️ หน้าต่างนี้แสดงประวัติคูปองที่เคยใช้สิทธิ์ไปแล้ว (ทางร้านสามารถตรวจสอบรหัส <strong>#{receiptCoupon.code}</strong> ในระบบหลังร้านได้)
+              </p>
+            )}
 
             <button
               type="button"

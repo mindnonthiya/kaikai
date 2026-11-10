@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { sendLineReplyMessage, verifyLineWebhookSignature } from "@/lib/line-messaging";
+import {
+  fetchShopLoyaltyServerCredentials,
+  sendLineReplyMessage,
+  verifyLineWebhookSignature,
+} from "@/lib/line-messaging";
 import {
   buildLoyaltyCardUrl,
   buildStampAwardFlexMessage,
   formatValidTillDate,
+  resolveTrustedAppOrigin,
 } from "@/lib/loyalty";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -34,28 +39,18 @@ export async function POST(request: Request) {
     const webhookSecret = (url.searchParams.get("w") ?? url.searchParams.get("secret") ?? "").trim();
     const rawBody = await request.text();
 
-    if (!rawBody) {
-      return NextResponse.json({ ok: true });
-    }
-
-    if (!hasSupabaseEnv || !webhookSecret) {
+    if (!rawBody || !hasSupabaseEnv || !webhookSecret) {
       return NextResponse.json({ ok: true });
     }
 
     const supabase = await createSupabaseServerClient();
-    const { data: ctxData, error: ctxErr } = await supabase.rpc("get_loyalty_webhook_context", {
-      p_webhook_secret: webhookSecret,
-    });
+    const creds = await fetchShopLoyaltyServerCredentials(supabase, webhookSecret);
 
-    if (ctxErr || !ctxData || !(ctxData as Record<string, unknown>).ok) {
+    if (!creds.ok || !creds.enabled) {
       return NextResponse.json({ ok: true });
     }
 
-    const ctx = ctxData as Record<string, unknown>;
-    const shopSecret = String(ctx.shopSecret ?? "").trim();
-    const channelSecret = String(ctx.channelSecret ?? "").trim();
-    const channelAccessToken = String(ctx.channelAccessToken ?? "").trim();
-    const liffId = String(ctx.liffId ?? "").trim();
+    const { shopSecret, channelSecret, channelAccessToken, liffId } = creds;
 
     if (channelSecret) {
       const signature = request.headers.get("x-line-signature");
@@ -72,8 +67,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    const requestOrigin = url.origin;
-    const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, liffId);
+    const trustedOrigin = resolveTrustedAppOrigin(request.url);
+    const cardUrl = buildLoyaltyCardUrl(trustedOrigin, shopSecret, liffId);
 
     for (const event of events) {
       if (event.type !== "message" || event.message?.type !== "text") continue;
@@ -100,8 +95,8 @@ export async function POST(request: Request) {
         if (claim.ok) {
           const validTill = formatValidTillDate(claim.expiresAt ? String(claim.expiresAt) : null);
           const flex = buildStampAwardFlexMessage({
-            cardTitle: String(claim.cardTitle ?? ctx.cardTitle ?? "GaiTomNamPla 🐔"),
-            rewardTitle: String(claim.rewardTitle ?? ctx.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
+            cardTitle: String(claim.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔"),
+            rewardTitle: String(claim.rewardTitle ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
             displayName: String(claim.displayName ?? "ลูกค้า LINE"),
             pointsAdded: Number(claim.pointsAdded ?? points),
             newStamps: Number(claim.newStamps ?? 0),
