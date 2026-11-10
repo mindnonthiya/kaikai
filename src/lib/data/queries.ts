@@ -9,7 +9,7 @@ import {
   ACTIVE_SHOP_COOKIE,
   DEFAULT_SHOP_ID,
   SHOPS_REGISTRY_SETTINGS_KEY,
-  decodeShopText,
+  matchesPurchaseShop,
   matchesSaleShop,
   matchesShopText,
   normalizeShopId,
@@ -84,7 +84,7 @@ export const getActiveShopState = cache(async (): Promise<{ shopId: string; inve
   } catch {
     return { shopId: DEFAULT_SHOP_ID, inventoryShopId: DEFAULT_SHOP_ID };
   }
-  if (rawCookieShop === DEFAULT_SHOP_ID || !hasSupabaseEnv) {
+  if (!hasSupabaseEnv) {
     return { shopId: DEFAULT_SHOP_ID, inventoryShopId: DEFAULT_SHOP_ID };
   }
   try {
@@ -96,15 +96,15 @@ export const getActiveShopState = cache(async (): Promise<{ shopId: string; inve
       .maybeSingle();
     const rawVal = (data?.value ?? {}) as Row;
     const list = Array.isArray(rawVal.shops) ? (rawVal.shops as Row[]) : [];
-    const exists = list.some((s) => normalizeShopId(str(s.id)) === rawCookieShop);
-    if (!exists) {
-      return { shopId: DEFAULT_SHOP_ID, inventoryShopId: DEFAULT_SHOP_ID };
-    }
+    const exists =
+      rawCookieShop === DEFAULT_SHOP_ID ||
+      list.some((s) => normalizeShopId(str(s.id)) === rawCookieShop);
+    const effectiveShopId = exists ? rawCookieShop : DEFAULT_SHOP_ID;
     const inventoryShopId = resolveInventoryShopId(
-      rawCookieShop,
+      effectiveShopId,
       list as Array<{ id?: string | null; sharedIngredientsFromShopId?: string | null; shared_ingredients_from_shop_id?: string | null }>,
     );
-    return { shopId: rawCookieShop, inventoryShopId };
+    return { shopId: effectiveShopId, inventoryShopId };
   } catch {
     return { shopId: DEFAULT_SHOP_ID, inventoryShopId: DEFAULT_SHOP_ID };
   }
@@ -169,6 +169,43 @@ const SALE_COLUMNS_WITH_TIP = "id,sale_number,sold_at,status,payment_status,cust
 const SALE_COLUMNS_LEGACY = "id,sale_number,sold_at,status,payment_status,customer_name,notes,fulfillment,product_revenue_satang,discount_satang,delivery_charged_satang,payment_fee_satang,packaging_cost_satang,net_revenue_satang,cogs_satang,gross_profit_satang,sale_items(menu_id,menu_name_snapshot,menu_category_snapshot,quantity,line_revenue_satang,line_cost_satang,packaging_cost_satang),payments(method,amount_satang),slip_uploads(storage_path)";
 
 let cachedHasTipColumn: boolean | null = null;
+let cachedHasScopeColumns: boolean | null = null;
+
+function isMissingScopeColumnError(err: unknown): boolean {
+  const msg =
+    err instanceof QueryError
+      ? `${err.originalMessage ?? ""} ${err.message}`
+      : err instanceof Error
+      ? err.message
+      : String(err ?? "");
+  const code = err instanceof QueryError ? err.code : undefined;
+  return (
+    (code === "42703" || code === "PGRST204" || msg.includes("does not exist")) &&
+    (msg.includes("shop_scope_id") ||
+      msg.includes("catalog_scope_id") ||
+      msg.includes("purchase_shop_scope_id"))
+  );
+}
+
+async function withScopeFallback<T>(
+  scopedFn: () => Promise<T>,
+  legacyFn: () => Promise<T>,
+): Promise<T> {
+  if (cachedHasScopeColumns === false) {
+    return legacyFn();
+  }
+  try {
+    const res = await scopedFn();
+    cachedHasScopeColumns = true;
+    return res;
+  } catch (err) {
+    if (isMissingScopeColumnError(err)) {
+      cachedHasScopeColumns = false;
+      return legacyFn();
+    }
+    throw err;
+  }
+}
 
 function mapSale(row: Row): SaleRecord {
   const productRev = num(row.product_revenue_satang);
@@ -220,9 +257,17 @@ export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> 
   const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
 
   const querySales = (cols: string) =>
-    fetchAll("ข้อมูลการขาย", (from, to) =>
-      supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
-        .order("sold_at", { ascending: false }).range(from, to));
+    withScopeFallback(
+      () =>
+        fetchAll("ข้อมูลการขาย", (from, to) =>
+          supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
+            .eq("shop_scope_id", shopId)
+            .order("sold_at", { ascending: false }).range(from, to)),
+      () =>
+        fetchAll("ข้อมูลการขาย", (from, to) =>
+          supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
+            .order("sold_at", { ascending: false }).range(from, to)),
+    );
 
   if (cachedHasTipColumn === false) {
     const data = await querySales(SALE_COLUMNS_LEGACY);
@@ -265,9 +310,17 @@ function mapExpense(row: Row): ExpenseRecord {
 export async function fetchExpenses(start: Date, end: Date): Promise<ExpenseRecord[]> {
   if (!hasSupabaseEnv) return [];
   const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
-  const data = await fetchAll("ค่าใช้จ่าย", (from, to) =>
-    supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
-      .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to));
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("ค่าใช้จ่าย", (from, to) =>
+        supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
+          .eq("shop_scope_id", shopId)
+          .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to)),
+    () =>
+      fetchAll("ค่าใช้จ่าย", (from, to) =>
+        supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
+          .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to)),
+  );
   return data.filter((row) => matchesShopText(str(row.description), shopId)).map(mapExpense);
 }
 
@@ -336,15 +389,23 @@ export function mapMenu(row: Row, yieldOverride?: number): MenuRecord {
 export const fetchMenus = cache(async (): Promise<MenuRecord[]> => {
   if (!hasSupabaseEnv) return [];
   const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
-  const cacheKey = `${userId}:menus`;
+  const cacheKey = `${userId}:menus:${shopId}`;
   const cached = getCached<MenuRecord[]>(cacheKey);
   if (cached) return cached;
 
   const supabase = await createClient();
   const [data, menuYields] = await Promise.all([
-    fetchAll("เมนู", (from, to) =>
-      supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
-        .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to)),
+    withScopeFallback(
+      () =>
+        fetchAll("เมนู", (from, to) =>
+          supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
+            .eq("shop_scope_id", shopId)
+            .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to)),
+      () =>
+        fetchAll("เมนู", (from, to) =>
+          supabase.from("menus").select("id,name,category,image_path,selling_price_satang,packaging_cost_satang,current_cost_satang,is_available,cost_calculated_at")
+            .order("category", { ascending: false }).order("selling_price_satang").order("name").range(from, to)),
+    ),
     fetchMenuYields(),
   ]);
   const res = data
@@ -361,10 +422,19 @@ export const fetchIngredients = cache(async (): Promise<IngredientRecord[]> => {
   if (cached) return cached;
 
   const supabase = await createClient();
-  const data = await fetchAll("วัตถุดิบ", (from, to) =>
-    supabase.from("ingredients")
-      .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto,yield_updated_at,price_per_purchase_unit_satang,weighted_unit_cost_satang,is_active")
-      .order("costing", { ascending: false }).order("name").range(from, to));
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("วัตถุดิบ", (from, to) =>
+        supabase.from("ingredients")
+          .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto,yield_updated_at,price_per_purchase_unit_satang,weighted_unit_cost_satang,is_active")
+          .eq("catalog_scope_id", inventoryShopId)
+          .order("costing", { ascending: false }).order("name").range(from, to)),
+    () =>
+      fetchAll("วัตถุดิบ", (from, to) =>
+        supabase.from("ingredients")
+          .select("id,name,category,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto,yield_updated_at,price_per_purchase_unit_satang,weighted_unit_cost_satang,is_active")
+          .order("costing", { ascending: false }).order("name").range(from, to)),
+  );
   const res = data
     .filter((row) => matchesShopText(str(row.name), inventoryShopId))
     .map((row) => ({
@@ -384,8 +454,16 @@ export const fetchPackaging = cache(async (): Promise<PackagingRecord[]> => {
   if (cached) return cached;
 
   const supabase = await createClient();
-  const data = await fetchAll("บรรจุภัณฑ์", (from, to) =>
-    supabase.from("packaging_items").select("id,name,unit,unit_cost_satang,is_active,per_order").order("name").range(from, to));
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("บรรจุภัณฑ์", (from, to) =>
+        supabase.from("packaging_items").select("id,name,unit,unit_cost_satang,is_active,per_order")
+          .eq("catalog_scope_id", inventoryShopId).order("name").range(from, to)),
+    () =>
+      fetchAll("บรรจุภัณฑ์", (from, to) =>
+        supabase.from("packaging_items").select("id,name,unit,unit_cost_satang,is_active,per_order")
+          .order("name").range(from, to)),
+  );
   const res = data
     .filter((row) => matchesShopText(str(row.name), inventoryShopId))
     .map((row) => ({
@@ -398,23 +476,44 @@ export const fetchPackaging = cache(async (): Promise<PackagingRecord[]> => {
 /** All packaging purchases for the active shop's catalog, newest first. */
 export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, inventoryShopId] = await Promise.all([createClient(), getActiveInventoryShopId()]);
-  const data = await fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
-    supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items(name,unit)")
-      .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to));
+  const [supabase, shopId, inventoryShopId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getActiveInventoryShopId(),
+  ]);
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
+        supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items!inner(name,unit,catalog_scope_id)")
+          .eq("purchase_shop_scope_id", shopId)
+          .eq("packaging_items.catalog_scope_id", inventoryShopId)
+          .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
+    () =>
+      fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
+        supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items(name,unit)")
+          .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
+  );
   return data
-    .filter((row) => matchesShopText(str(one(row.packaging_items)?.name), inventoryShopId))
+    .filter((row) => {
+      const itemName = str(one(row.packaging_items)?.name);
+      return (
+        matchesShopText(itemName, inventoryShopId) &&
+        matchesPurchaseShop({ vendor: row.vendor, ingredientName: itemName }, shopId)
+      );
+    })
     .map((row) => {
       const item = one(row.packaging_items);
+      const cleanVendor = stripShopPrefix(strOrNull(row.vendor)).trim();
       return {
         id: str(row.id), packagingItemId: str(row.packaging_item_id), itemName: stripShopPrefix(str(item?.name)), unit: str(item?.unit),
         purchasedAt: str(row.purchased_at), price: num(row.price_satang), packQuantity: num(row.pack_quantity), packCount: num(row.pack_count) || 1,
-        vendor: strOrNull(row.vendor), expenseId: strOrNull(row.expense_id),
+        vendor: cleanVendor || null, expenseId: strOrNull(row.expense_id),
       };
     });
 }
 
-const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients(name,costing)";
+const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients!inner(name,costing,catalog_scope_id)";
+const PURCHASE_COLUMNS_LEGACY = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients(name,costing)";
 
 function mapPurchase(row: Row): PurchaseRecord {
   const ingredient = one(row.ingredients);
@@ -429,25 +528,54 @@ function mapPurchase(row: Row): PurchaseRecord {
 
 export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, inventoryShopId] = await Promise.all([createClient(), getActiveInventoryShopId()]);
-  const { data, error } = await supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
-    .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).limit(Math.max(limit * 4, 100));
-  if (error) fail("ประวัติการซื้อ", error);
-  return rows(data)
-    .filter((row) => matchesShopText(str(one(row.ingredients)?.name), inventoryShopId))
+  const [supabase, shopId, inventoryShopId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getActiveInventoryShopId(),
+  ]);
+  const rawRows = await withScopeFallback(
+    async () => {
+      const { data, error } = await supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
+        .eq("purchase_shop_scope_id", shopId)
+        .eq("ingredients.catalog_scope_id", inventoryShopId)
+        .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).limit(limit);
+      if (error) fail("ประวัติการซื้อ", error);
+      return rows(data);
+    },
+    () =>
+      fetchAll("ประวัติการซื้อ", (from, to) =>
+        supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS_LEGACY)
+          .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
+  );
+  return rawRows
+    .filter((row) => {
+      const ingredientName = str(one(row.ingredients)?.name);
+      return (
+        matchesShopText(ingredientName, inventoryShopId) &&
+        matchesPurchaseShop({ vendor: row.vendor, ingredientName }, shopId)
+      );
+    })
     .slice(0, limit)
     .map(mapPurchase);
 }
 
-/** Ingredient purchases with purchased_at in [start, end), newest first, scoped to the active shop's catalog. */
+/** Ingredient purchases with purchased_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchIngredientPurchases(start: Date, end: Date): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, inventoryShopId] = await Promise.all([createClient(), getActiveInventoryShopId()]);
-  const data = await fetchAll("การซื้อวัตถุดิบ", (from, to) =>
-    supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
-      .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to));
+  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+        supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
+          .eq("purchase_shop_scope_id", shopId)
+          .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to)),
+    () =>
+      fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+        supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS_LEGACY)
+          .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to)),
+  );
   return data
-    .filter((row) => matchesShopText(str(one(row.ingredients)?.name), inventoryShopId))
+    .filter((row) => matchesPurchaseShop({ vendor: row.vendor, ingredientName: one(row.ingredients)?.name }, shopId))
     .map(mapPurchase);
 }
 
@@ -457,10 +585,25 @@ export type LatestPurchase = { purchasedAt: string; price: number; quantity: num
 export async function fetchLatestPurchases(): Promise<Map<string, LatestPurchase>> {
   const latest = new Map<string, LatestPurchase>();
   if (!hasSupabaseEnv) return latest;
-  const supabase = await createClient();
-  const data = await fetchAll("ประวัติการซื้อ", (from, to) =>
-    supabase.from("ingredient_purchases").select("ingredient_id,purchased_at,price_satang,purchased_quantity")
-      .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to));
+  const [supabase, shopId, inventoryShopId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getActiveInventoryShopId(),
+  ]);
+  const data = await withScopeFallback(
+    () =>
+      fetchAll("ประวัติการซื้อ", (from, to) =>
+        supabase.from("ingredient_purchases")
+          .select("ingredient_id,purchased_at,price_satang,purchased_quantity,ingredients!inner(catalog_scope_id)")
+          .eq("purchase_shop_scope_id", shopId)
+          .eq("ingredients.catalog_scope_id", inventoryShopId)
+          .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
+    () =>
+      fetchAll("ประวัติการซื้อ", (from, to) =>
+        supabase.from("ingredient_purchases")
+          .select("ingredient_id,purchased_at,price_satang,purchased_quantity")
+          .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
+  );
   for (const row of data) {
     if (latest.has(str(row.ingredient_id))) continue;
     latest.set(str(row.ingredient_id), {
@@ -496,7 +639,7 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
   };
   if (!hasSupabaseEnv) return fallback;
   const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
-  const cacheKey = `${userId}:settings:sales`;
+  const cacheKey = `${userId}:settings:sales:${shopId}`;
   const cached = getCached<SaleSettings>(cacheKey);
   if (cached) return cached;
 
@@ -530,7 +673,7 @@ export const fetchSaleSettings = cache(async (): Promise<SaleSettings> => {
 export const fetchPricePresets = cache(async (): Promise<PricePreset[]> => {
   if (!hasSupabaseEnv) return [];
   const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
-  const cacheKey = `${userId}:settings:presets`;
+  const cacheKey = `${userId}:settings:presets:${shopId}`;
   const cached = getCached<PricePreset[]>(cacheKey);
   if (cached) return cached;
 
@@ -571,32 +714,67 @@ export type PooledRate = ReturnType<typeof pooledIngredientBps> & { pooledPurcha
  * over the last 30 days (or since the first pooled purchase of the active shop, if more recent).
  */
 export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<PooledRate> => {
-  const initialBps = (settings ?? (await fetchSaleSettings())).initialPooledBps;
-  const empty = { pooledPurchases: 0, foodRevenue: 0, historyDays: 0, initialBps };
+  let initialBps = (settings ?? (await fetchSaleSettings())).initialPooledBps;
+  let empty = { pooledPurchases: 0, foodRevenue: 0, historyDays: 0, initialBps };
   if (!hasSupabaseEnv) return { ...pooledIngredientBps(empty), ...empty };
 
-  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
-  const cacheKey = `${userId}:pooled_rate`;
+  const [userId, inventoryShopId, shopsData] = await Promise.all([
+    getRequestUserId(),
+    getActiveInventoryShopId(),
+    fetchShops(),
+  ]);
+  const supabase = await createClient();
+  if (shopsData.activeShopId !== inventoryShopId) {
+    const { data: catalogSetting, error: catalogSettingError } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", scopedSettingsKey(SALE_SETTINGS_KEY, inventoryShopId))
+      .maybeSingle();
+    if (catalogSettingError) fail("การตั้งค่าต้นทุนคลังร่วม", catalogSettingError);
+    const catalogInitialBps = Number((catalogSetting?.value as Row | null)?.initial_pooled_bps);
+    if (Number.isSafeInteger(catalogInitialBps) && catalogInitialBps >= 0 && catalogInitialBps <= 10_000) {
+      initialBps = catalogInitialBps;
+      empty = { ...empty, initialBps };
+    }
+  }
+  const cacheKey = `${userId}:pooled_rate:${inventoryShopId}:${initialBps}`;
   const cached = getCached<PooledRate>(cacheKey);
   if (cached) return cached;
 
-  const supabase = await createClient();
-  const now = Date.now();
-  const allPooledPurchases = await fetchAll("การซื้อวัตถุดิบ", (from, to) =>
-    supabase.from("ingredient_purchases")
-      .select("purchased_at,price_satang,vendor,ingredients!inner(name,costing)")
-      .eq("ingredients.costing", "pooled")
-      .lte("purchased_at", new Date(now).toISOString())
-      .order("purchased_at", { ascending: true })
-      .range(from, to),
+  const catalogShopIds = Array.from(
+    new Set([
+      inventoryShopId,
+      ...shopsData.shops
+        .filter((s) => resolveInventoryShopId(s.id, shopsData.shops) === inventoryShopId)
+        .map((s) => s.id),
+    ]),
   );
-  const shopPurchases = allPooledPurchases.filter((r) => {
-    const rawVendor = str(r.vendor);
-    if (rawVendor.startsWith("[s:")) {
-      return decodeShopText(rawVendor).shopId === shopId;
-    }
-    return matchesShopText(str(one(r.ingredients)?.name), shopId);
-  });
+
+  const now = Date.now();
+  const allPooledPurchases = await withScopeFallback(
+    () =>
+      fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+        supabase.from("ingredient_purchases")
+          .select("purchased_at,price_satang,vendor,ingredients!inner(name,costing,catalog_scope_id)")
+          .eq("ingredients.costing", "pooled")
+          .eq("ingredients.catalog_scope_id", inventoryShopId)
+          .lte("purchased_at", new Date(now).toISOString())
+          .order("purchased_at", { ascending: true })
+          .range(from, to),
+      ),
+    () =>
+      fetchAll("การซื้อวัตถุดิบ", (from, to) =>
+        supabase.from("ingredient_purchases")
+          .select("purchased_at,price_satang,vendor,ingredients!inner(name,costing)")
+          .eq("ingredients.costing", "pooled")
+          .lte("purchased_at", new Date(now).toISOString())
+          .order("purchased_at", { ascending: true })
+          .range(from, to),
+      ),
+  );
+  const shopPurchases = allPooledPurchases.filter((r) =>
+    matchesShopText(str(one(r.ingredients)?.name), inventoryShopId),
+  );
   const firstAt = shopPurchases[0]?.purchased_at;
   if (!firstAt) return setCached(cacheKey, { ...pooledIngredientBps(empty), ...empty }, 60_000);
 
@@ -604,17 +782,31 @@ export const fetchPooledRate = cache(async (settings?: SaleSettings): Promise<Po
   const startIso = start.toISOString();
   const windowPurchases = shopPurchases.filter((r) => str(r.purchased_at) >= startIso);
 
-  const rawSales = await fetchAll("ข้อมูลการขาย", (from, to) =>
-    supabase.from("sale_items")
-      .select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at,notes)")
-      .eq("sales.status", "confirmed")
-      .gte("sales.sold_at", startIso)
-      .lte("sales.sold_at", new Date(now).toISOString())
-      .order("id")
-      .range(from, to),
+  const rawSales = await withScopeFallback(
+    () =>
+      fetchAll("ข้อมูลการขาย", (from, to) =>
+        supabase.from("sale_items")
+          .select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at,notes,shop_scope_id)")
+          .eq("sales.status", "confirmed")
+          .in("sales.shop_scope_id", catalogShopIds)
+          .gte("sales.sold_at", startIso)
+          .lte("sales.sold_at", new Date(now).toISOString())
+          .order("id")
+          .range(from, to),
+      ),
+    () =>
+      fetchAll("ข้อมูลการขาย", (from, to) =>
+        supabase.from("sale_items")
+          .select("id,menu_id,menu_name_snapshot,menu_category_snapshot,line_revenue_satang,sales!inner(status,sold_at,notes)")
+          .eq("sales.status", "confirmed")
+          .gte("sales.sold_at", startIso)
+          .lte("sales.sold_at", new Date(now).toISOString())
+          .order("id")
+          .range(from, to),
+      ),
   );
   const shopSales = rawSales.filter((r) =>
-    matchesSaleShop({ notes: one(r.sales)?.notes, sale_items: [r] }, shopId),
+    catalogShopIds.some((sid) => matchesSaleShop({ notes: one(r.sales)?.notes, sale_items: [r] }, sid)),
   );
 
   const input = {

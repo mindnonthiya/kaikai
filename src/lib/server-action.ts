@@ -48,25 +48,27 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { error: "หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่" };
 
-    let shopId = rawShopId;
-    let inventoryShopId = rawShopId;
-    if (rawShopId !== DEFAULT_SHOP_ID) {
-      const { data: regRow } = await supabase
-        .from("settings")
-        .select("value")
-        .eq("owner_id", user.id)
-        .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
-        .maybeSingle();
-      const rawShops = Array.isArray((regRow?.value as { shops?: unknown[] } | null)?.shops)
-        ? ((regRow?.value as {
-            shops: Array<{ id: string; sharedIngredientsFromShopId?: string | null }>;
-          }).shops)
-        : [];
-      shopId = rawShops.some((s) => s && normalizeShopId(s.id) === rawShopId)
+    const { data: regRow, error: regError } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("owner_id", user.id)
+      .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
+      .maybeSingle();
+    if (regError) dbError(regError);
+    const rawShops = Array.isArray((regRow?.value as { shops?: unknown[] } | null)?.shops)
+      ? ((regRow?.value as {
+          shops: Array<{
+            id: string;
+            sharedIngredientsFromShopId?: string | null;
+            shared_ingredients_from_shop_id?: string | null;
+          }>;
+        }).shops)
+      : [];
+    const shopId =
+      rawShopId === DEFAULT_SHOP_ID || rawShops.some((s) => s && normalizeShopId(s.id) === rawShopId)
         ? rawShopId
         : DEFAULT_SHOP_ID;
-      inventoryShopId = resolveInventoryShopId(shopId, rawShops);
-    }
+    const inventoryShopId = resolveInventoryShopId(shopId, rawShops);
 
     return (await fn({ supabase, user, shopId, inventoryShopId })) ?? { ok: true };
   } catch (error) {
@@ -78,7 +80,7 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
 
 /** PostgREST / Postgres codes for "table or column does not exist" — the database is missing a migration. */
 export const SCHEMA_OUTDATED_CODES = new Set(["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"]);
-export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน รวมถึง 202611010001_order_cost_consistency.sql ใน SQL Editor";
+export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รันทั้งหมด รวมถึงชุด 202611100001–202611100004 ใน SQL Editor";
 
 /** Converts a Postgres/PostgREST error into a Thai message. */
 export function dbError(error: { code?: string; message: string }, context?: { unique?: string; foreignKey?: string }): never {

@@ -121,7 +121,7 @@ export function ShopSwitcherCard({
   function handleDelete(shop: ShopSummary) {
     if (shop.id === DEFAULT_SHOP_ID || isPending) return;
     const confirmed = window.confirm(
-      `ยืนยันการลบร้าน “${shop.shopName}” หรือไม่?\n\nข้อมูลเมนู วัตถุดิบ ออเดอร์ และรายจ่ายทั้งหมดของร้าน “${shop.shopName}” จะถูกลบอย่างถาวร (ข้อมูลของร้านอื่นจะไม่ถูกกระทบ)`,
+      `ยืนยันการลบร้าน “${shop.shopName}” หรือไม่?\n\nข้อมูลเมนู ออเดอร์ และรายจ่ายทั้งหมดของร้าน “${shop.shopName}” จะถูกลบอย่างถาวร หากร้านนี้เป็นเจ้าของคลังร่วม ระบบจะโอนคลังให้สาขาที่เชื่อมอยู่และคำนวณต้นทุนใหม่โดยอัตโนมัติ`,
     );
     if (!confirmed) return;
 
@@ -224,6 +224,24 @@ export function ShopSwitcherCard({
                       ? ` · ${shop.displayName}`
                       : ""}
                   </span>
+
+                  {isPrimary && shops.length > 1 && (() => {
+                    const linkedBranches = shops.filter(
+                      (s) => s.id !== DEFAULT_SHOP_ID && resolveInventoryShopId(s.id, shops) === DEFAULT_SHOP_ID,
+                    );
+                    return (
+                      <div className="shop-sharing-inline">
+                        <span className="shop-sharing-label">
+                          <Link2 size={12} />
+                          <span>
+                            {linkedBranches.length > 0
+                              ? `คลังวัตถุดิบหลัก · เชื่อมกับ ${linkedBranches.map((b) => `“${b.shopName}”`).join(", ")}`
+                              : "คลังวัตถุดิบหลัก (ยังไม่มีร้านสาขาเชื่อมใช้ร่วมกัน)"}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {!isPrimary && (
                     <div

@@ -15,7 +15,7 @@ import {
 import { PwaDrawerInstallButton } from "./pwa-install";
 import { DEFAULT_UNIT_LABEL, UNIT_LABEL_OPTIONS } from "@/lib/data/types";
 import { hasSupabaseEnv } from "@/lib/env";
-import { DEFAULT_SHOP_ID, type ShopSummary } from "@/lib/shop-scope";
+import { DEFAULT_SHOP_ID, resolveInventoryShopId, type ShopSummary } from "@/lib/shop-scope";
 import { createClient } from "@/lib/supabase/client";
 
 export function AppShell({
@@ -652,6 +652,28 @@ export function AppShell({
                           </small>
                         </div>
                       </label>
+
+                      {shareMode === "shared" &&
+                        normalizedShops.filter(
+                          (s) => resolveInventoryShopId(s.id, normalizedShops) === s.id,
+                        ).length > 1 && (
+                          <div className="shop-share-target-row">
+                            <span className="muted-hint">เลือกคลังวัตถุดิบที่ต้องการเชื่อม:</span>
+                            <select
+                              className="shop-sharing-select"
+                              value={shareTargetShopId}
+                              onChange={(e) => setShareTargetShopId(e.target.value)}
+                            >
+                              {normalizedShops
+                                .filter((s) => resolveInventoryShopId(s.id, normalizedShops) === s.id)
+                                .map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    คลังของร้าน “{s.shopName}”
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        )}
                     </div>
 
                     {shareMode === "isolated" && (

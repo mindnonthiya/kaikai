@@ -57,6 +57,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
   const dependentShops = shopsData.shops.filter(
     (s) => s.id !== shopsData.activeShopId && s.sharedIngredientsFromShopId === shopsData.activeShopId,
   );
+  const catalogSharedWithOtherShops = Boolean(sharedSourceShop || dependentShops.length > 0);
 
   const menusPerIngredient = new Map<string, Set<string>>();
   const menusPerPackaging = new Map<string, Set<string>>();
@@ -205,6 +206,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                 const deleteConfirmNotes = [
                   usedInMenus > 0 ? `ผูกอยู่ในสูตร ${usedInMenus} เมนู (ระบบจะถอดออกจากสูตรและคำนวณต้นทุนเมนูใหม่ให้อัตโนมัติ)` : null,
                   last ? "รวมถึงลบประวัติการซื้อของวัตถุดิบนี้" : null,
+                  catalogSharedWithOtherShops ? "รายการนี้อยู่ในคลังร่วม การลบจะกระทบทุกสาขาที่เชื่อมคลังนี้" : null,
                 ].filter(Boolean).join(" · ");
 
                 return <tr key={i.id} className={!i.isActive ? "row-muted" : undefined}>
@@ -314,6 +316,7 @@ export default async function IngredientsPage({ searchParams }: { searchParams: 
                 const deleteConfirmNotes = [
                   usedInMenus > 0 ? `ผูกอยู่ในสูตร ${usedInMenus} เมนู (ระบบจะถอดออกจากสูตรและคำนวณต้นทุนเมนูใหม่ให้อัตโนมัติ)` : null,
                   last ? "รวมถึงลบประวัติการซื้อของบรรจุภัณฑ์นี้" : null,
+                  catalogSharedWithOtherShops ? "รายการนี้อยู่ในคลังร่วม การลบจะกระทบทุกสาขาที่เชื่อมคลังนี้" : null,
                 ].filter(Boolean).join(" · ");
 
                 return <tr key={p.id} className={!p.isActive ? "row-muted" : undefined}>

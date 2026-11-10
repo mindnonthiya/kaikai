@@ -4,6 +4,7 @@ import {
   decodeShopText,
   encodeSaleNotesForShop,
   encodeShopText,
+  matchesPurchaseShop,
   matchesSaleShop,
   matchesShopText,
   normalizeShopId,
@@ -76,7 +77,17 @@ describe("shop-scope helpers", () => {
     expect(resolveInventoryShopId("s_b", shops)).toBe("default");
     expect(resolveInventoryShopId("s_c", shops)).toBe("default");
     expect(resolveInventoryShopId("s_isolated", shops)).toBe("s_isolated");
-    expect(resolveInventoryShopId("s_cycle1", shops)).toBe("s_cycle2");
+    expect(resolveInventoryShopId("s_cycle1", shops)).toBe("s_cycle1");
+    expect(resolveInventoryShopId("s_cycle2", shops)).toBe("s_cycle1");
     expect(resolveInventoryShopId("s_missing", shops)).toBe("s_missing");
+  });
+
+  it("matches ingredient purchase rows to the purchasing shop even when catalog is shared", () => {
+    expect(matchesPurchaseShop({ vendor: "แม็คโคร", ingredientName: "ไข่ไก่" }, "default")).toBe(true);
+    expect(matchesPurchaseShop({ vendor: "แม็คโคร", ingredientName: "ไข่ไก่" }, "s_2")).toBe(false);
+    expect(matchesPurchaseShop({ vendor: "[s:s_2]แม็คโคร", ingredientName: "ไข่ไก่" }, "s_2")).toBe(true);
+    expect(matchesPurchaseShop({ vendor: "[s:s_2]", ingredientName: "ไข่ไก่" }, "s_2")).toBe(true);
+    expect(matchesPurchaseShop({ vendor: "[s:s_2]แม็คโคร", ingredientName: "ไข่ไก่" }, "default")).toBe(false);
+    expect(matchesPurchaseShop({ vendor: null, ingredientName: "[s:s_2]ไข่ไก่" }, "s_2")).toBe(true);
   });
 });
