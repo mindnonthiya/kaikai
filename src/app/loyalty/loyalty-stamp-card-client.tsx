@@ -21,6 +21,7 @@ interface LiffSdk {
   isLoggedIn: () => boolean;
   login: (config?: { redirectUri?: string }) => void;
   getProfile: () => Promise<LiffProfile>;
+  getContext?: () => { type?: string } | null;
   sendMessages: (messages: Array<Record<string, unknown>>) => Promise<void>;
   scanCodeV2?: () => Promise<{ value: string | null }>;
 }
@@ -62,6 +63,7 @@ interface ClaimBannerState {
   pointsAdded?: number;
   rewardsUnlocked?: number;
   chatNotified?: boolean;
+  plainText?: string;
 }
 
 export interface LoyaltyStampCardClientProps {
@@ -294,7 +296,10 @@ export function LoyaltyStampCardClient({
     ) => {
       setClaiming(true);
       try {
-        const inLineClient = Boolean(window.liff && window.liff.isInClient());
+        const ctxType = window.liff?.getContext?.()?.type;
+        const canSendViaLiffChat = Boolean(
+          window.liff && window.liff.isInClient() && (ctxType === "utou" || ctxType === "room" || ctxType === "group"),
+        );
         const response = await fetch("/api/loyalty/claim", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -305,7 +310,7 @@ export function LoyaltyStampCardClient({
             lineUserId: userProfile.userId,
             displayName: userProfile.displayName,
             pictureUrl: userProfile.pictureUrl,
-            sendPush: !inLineClient,
+            sendPush: !canSendViaLiffChat,
           }),
         });
         const data = (await response.json()) as Record<string, unknown>;
@@ -339,6 +344,7 @@ export function LoyaltyStampCardClient({
           pointsAdded,
           rewardsUnlocked,
           chatNotified,
+          plainText: notification?.plainText,
         });
 
         await fetchCardState(targetShopSecret, userProfile);
@@ -410,6 +416,18 @@ export function LoyaltyStampCardClient({
             await liff.init({ liffId: effectiveLiffId });
             const inClient = liff.isInClient();
             setIsInLineClient(inClient);
+
+            // If opened inside the LINE app via a direct web URL instead of liff.line.me, upgrade to LIFF URL automatically
+            if (
+              !inClient &&
+              typeof navigator !== "undefined" &&
+              /Line\//i.test(navigator.userAgent) &&
+              typeof window !== "undefined" &&
+              !window.location.search.includes("liff.state")
+            ) {
+              window.location.replace(`https://liff.line.me/${effectiveLiffId}${window.location.search}`);
+              return;
+            }
 
             if (liff.isLoggedIn()) {
               const profile = await liff.getProfile();
@@ -527,7 +545,10 @@ export function LoyaltyStampCardClient({
     setRedeemingCouponId(coupon.id);
 
     try {
-      const inLineClient = Boolean(window.liff && window.liff.isInClient());
+      const ctxType = window.liff?.getContext?.()?.type;
+      const canSendViaLiffChat = Boolean(
+        window.liff && window.liff.isInClient() && (ctxType === "utou" || ctxType === "room" || ctxType === "group"),
+      );
       const response = await fetch("/api/loyalty/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -536,7 +557,7 @@ export function LoyaltyStampCardClient({
           couponId: coupon.id,
           lineUserId: member.lineUserId || getOrCreateBrowserUserId(),
           displayName: member.displayName || getSavedDisplayName(),
-          sendPush: !inLineClient,
+          sendPush: !canSendViaLiffChat,
         }),
       });
       const data = (await response.json()) as Record<string, unknown>;
@@ -721,9 +742,34 @@ export function LoyaltyStampCardClient({
                     ✓ ส่งข้อความแจ้งเตือนแต้มเข้าแชท LINE ร้านอัตโนมัติแล้ว
                   </span>
                 ) : (
-                  <span className="line-stamp-chat-hint">
-                    💡 คุณสามารถแคปหน้าจอนี้ส่งในแชท LINE ร้าน หรือกดปุ่มด้านล่างเพื่อคัดลอกข้อความแจ้งแต้ม
-                  </span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+                    <span className="line-stamp-chat-hint">
+                      💡 กดปุ่มด้านล่างเพื่อส่งแจ้งแต้มเข้าห้องแชทร้าน หรือแคปหน้าจอนี้ส่งในแชทได้เลย
+                    </span>
+                    {claimBanner.plainText && (
+                      <a
+                        href={
+                          config.botBasicId
+                            ? `https://line.me/R/oaMessage/${encodeURIComponent(config.botBasicId.startsWith("@") ? config.botBasicId : `@${config.botBasicId}`)}/?${encodeURIComponent(claimBanner.plainText)}`
+                            : `https://line.me/R/msg/text/?${encodeURIComponent(claimBanner.plainText)}`
+                        }
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "#06C755",
+                          color: "#ffffff",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          padding: "8px 14px",
+                          borderRadius: 999,
+                          textDecoration: "none",
+                        }}
+                      >
+                        💬 ส่งข้อความแจ้งแต้มเข้าแชท LINE ร้าน
+                      </a>
+                    )}
+                  </div>
                 )}
               </div>
             )}
