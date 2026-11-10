@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { sendLinePushMessage } from "@/lib/line-messaging";
+import { sendLinePushMessageDetailed } from "@/lib/line-messaging";
 import {
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
@@ -15,7 +15,6 @@ export async function POST(request: Request) {
     const couponId = String(body.couponId ?? "").trim();
     const lineUserId = String(body.lineUserId ?? "").trim();
     const displayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
-    const sendPush = Boolean(body.sendPush);
 
     if (!shopSecret || !couponId || !lineUserId) {
       return NextResponse.json(
@@ -54,6 +53,7 @@ export async function POST(request: Request) {
           plainText,
           flexMessage,
           pushed: false,
+          pushReason: "DEMO_MODE",
         },
       });
     }
@@ -103,8 +103,16 @@ export async function POST(request: Request) {
 
     const channelAccessToken = String(result.channelAccessToken ?? "").trim();
     let pushed = false;
-    if (sendPush && channelAccessToken && !result.alreadyClaimed) {
-      pushed = await sendLinePushMessage(channelAccessToken, lineUserId, [flexMessage]);
+    let pushReason = "ALREADY_CLAIMED";
+    if (!result.alreadyClaimed) {
+      const pushRes = await sendLinePushMessageDetailed(
+        channelAccessToken,
+        lineUserId,
+        [flexMessage],
+        plainText,
+      );
+      pushed = pushRes.ok;
+      pushReason = pushRes.reason ?? "SENT";
     }
 
     const safeResult = { ...result };
@@ -117,6 +125,7 @@ export async function POST(request: Request) {
         plainText,
         flexMessage,
         pushed,
+        pushReason,
       },
     });
   } catch (err) {

@@ -63,7 +63,7 @@ interface ClaimBannerState {
   pointsAdded?: number;
   rewardsUnlocked?: number;
   chatNotified?: boolean;
-  plainText?: string;
+  pushReason?: string;
 }
 
 export interface LoyaltyStampCardClientProps {
@@ -192,38 +192,6 @@ export function LoyaltyStampCardClient({
     return () => window.clearInterval(timer);
   }, [receiptCoupon]);
 
-  const sendLineChatNotification = useCallback(
-    async (notification?: { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean }): Promise<boolean> => {
-      if (!notification) return false;
-      if (notification.pushed) return true;
-      try {
-        if (window.liff && window.liff.isInClient()) {
-          if (notification.flexMessage) {
-            try {
-              await window.liff.sendMessages([notification.flexMessage]);
-              return true;
-            } catch {
-              // Fallback to plain text if Flex message fails
-            }
-          }
-          if (notification.plainText) {
-            await window.liff.sendMessages([
-              {
-                type: "text",
-                text: notification.plainText,
-              },
-            ]);
-            return true;
-          }
-        }
-      } catch {
-        // Ignore sendMessages permission error if user hasn't granted chat_message.write
-      }
-      return false;
-    },
-    [],
-  );
-
   const fetchCardState = useCallback(
     async (resolvedShopSecret: string, userProfile: { userId: string; displayName: string; pictureUrl: string | null }) => {
       const response = await fetch("/api/loyalty/state", {
@@ -293,13 +261,10 @@ export function LoyaltyStampCardClient({
       points: number,
       token: string,
       userProfile: { userId: string; displayName: string; pictureUrl: string | null },
+      currentLiffId = "",
     ) => {
       setClaiming(true);
       try {
-        const ctxType = window.liff?.getContext?.()?.type;
-        const canSendViaLiffChat = Boolean(
-          window.liff && window.liff.isInClient() && (ctxType === "utou" || ctxType === "room" || ctxType === "group"),
-        );
         const response = await fetch("/api/loyalty/claim", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -310,7 +275,8 @@ export function LoyaltyStampCardClient({
             lineUserId: userProfile.userId,
             displayName: userProfile.displayName,
             pictureUrl: userProfile.pictureUrl,
-            sendPush: !canSendViaLiffChat,
+            liffId: currentLiffId,
+            sendPush: true,
           }),
         });
         const data = (await response.json()) as Record<string, unknown>;
@@ -330,9 +296,9 @@ export function LoyaltyStampCardClient({
         const rewardsUnlocked = Number(data.rewardsUnlocked ?? 0);
 
         const notification = data.notification as
-          | { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean }
+          | { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean; pushReason?: string }
           | undefined;
-        const chatNotified = await sendLineChatNotification(notification);
+        const chatNotified = Boolean(notification?.pushed);
 
         setClaimBanner({
           type: "success",
@@ -344,7 +310,7 @@ export function LoyaltyStampCardClient({
           pointsAdded,
           rewardsUnlocked,
           chatNotified,
-          plainText: notification?.plainText,
+          pushReason: notification?.pushReason,
         });
 
         await fetchCardState(targetShopSecret, userProfile);
@@ -368,7 +334,7 @@ export function LoyaltyStampCardClient({
         setClaiming(false);
       }
     },
-    [fetchCardState, sendLineChatNotification],
+    [fetchCardState],
   );
 
   // Initialize URL params, LIFF SDK (if configured), card state, and auto-claim QR if present
@@ -382,9 +348,31 @@ export function LoyaltyStampCardClient({
           ? parseLoyaltyQueryParams(new URL(window.location.href).searchParams)
           : { shopSecret: initialShopSecret, points: initialPoints, token: initialToken };
 
-      const resolvedShopSecret = parsedFromUrl.shopSecret || initialShopSecret;
-      const resolvedPoints = parsedFromUrl.points ?? initialPoints;
-      const resolvedToken = parsedFromUrl.token || initialToken;
+      let resolvedShopSecret = parsedFromUrl.shopSecret || initialShopSecret;
+      let resolvedPoints = parsedFromUrl.points ?? initialPoints;
+      let resolvedToken = parsedFromUrl.token || initialToken;
+
+      // Restore pending QR claim from sessionStorage if returning from LINE Login redirect
+      if (typeof window !== "undefined") {
+        try {
+          const savedRaw = window.sessionStorage.getItem("kaikai_pending_qr_claim_v1");
+          if (savedRaw) {
+            const saved = JSON.parse(savedRaw) as {
+              shopSecret?: string;
+              points?: number | null;
+              token?: string;
+              savedAt?: number;
+            };
+            if (saved && (!saved.savedAt || Date.now() - saved.savedAt < 5 * 60 * 1000)) {
+              if (!resolvedShopSecret && saved.shopSecret) resolvedShopSecret = saved.shopSecret;
+              if (!resolvedPoints && saved.points) resolvedPoints = saved.points;
+              if (!resolvedToken && saved.token) resolvedToken = saved.token;
+            }
+          }
+        } catch {
+          // Ignore sessionStorage error
+        }
+      }
 
       if (resolvedShopSecret) {
         setShopSecret(resolvedShopSecret);
@@ -396,7 +384,23 @@ export function LoyaltyStampCardClient({
         return;
       }
 
-      // First fetch shop config with browser fallback ID so we know if shop configured a liffId
+      // Save pending QR claim before any LINE redirect so p and t are never lost
+      if (typeof window !== "undefined" && resolvedPoints && resolvedToken) {
+        try {
+          window.sessionStorage.setItem(
+            "kaikai_pending_qr_claim_v1",
+            JSON.stringify({
+              shopSecret: resolvedShopSecret,
+              points: resolvedPoints,
+              token: resolvedToken,
+              savedAt: Date.now(),
+            }),
+          );
+        } catch {
+          // Ignore sessionStorage error
+        }
+      }
+
       const fallbackUserId = getOrCreateBrowserUserId();
       const fallbackName = getSavedDisplayName();
       let userProfile = {
@@ -405,7 +409,12 @@ export function LoyaltyStampCardClient({
         pictureUrl: null as string | null,
       };
 
-      const initialState = await fetchCardState(resolvedShopSecret, userProfile);
+      // Fetch shop config first (without creating a guest member row yet) to check if liffId is configured
+      const initialState = await fetchCardState(resolvedShopSecret, {
+        userId: "",
+        displayName: fallbackName,
+        pictureUrl: null,
+      });
       if (cancelled) return;
 
       const effectiveLiffId = initialLiffId || initialState?.config.liffId || "";
@@ -423,9 +432,16 @@ export function LoyaltyStampCardClient({
               typeof navigator !== "undefined" &&
               /Line\//i.test(navigator.userAgent) &&
               typeof window !== "undefined" &&
-              !window.location.search.includes("liff.state")
+              !window.location.search.includes("liff.state") &&
+              !window.location.search.includes("code=")
             ) {
-              window.location.replace(`https://liff.line.me/${effectiveLiffId}${window.location.search}`);
+              const targetParams = new URLSearchParams();
+              targetParams.set("s", resolvedShopSecret);
+              if (resolvedPoints && resolvedToken) {
+                targetParams.set("p", String(resolvedPoints));
+                targetParams.set("t", resolvedToken);
+              }
+              window.location.replace(`https://liff.line.me/${effectiveLiffId}?${targetParams.toString()}`);
               return;
             }
 
@@ -437,19 +453,36 @@ export function LoyaltyStampCardClient({
                 pictureUrl: profile.pictureUrl ?? null,
               };
               await fetchCardState(resolvedShopSecret, userProfile);
-            } else if (inClient) {
-              liff.login({ redirectUri: window.location.href });
+            } else {
+              // Redirect to LINE Login so we always get the customer's real LINE userId (U...) for OA Push notifications
+              const redirectUrl = new URL(window.location.href);
+              redirectUrl.searchParams.set("s", resolvedShopSecret);
+              if (resolvedPoints && resolvedToken) {
+                redirectUrl.searchParams.set("p", String(resolvedPoints));
+                redirectUrl.searchParams.set("t", resolvedToken);
+              }
+              liff.login({ redirectUri: redirectUrl.toString() });
               return;
             }
           } catch {
             // Continue smoothly with browser device ID if LIFF init fails or domain doesn't match yet
+            await fetchCardState(resolvedShopSecret, userProfile);
           }
         }
+      } else {
+        await fetchCardState(resolvedShopSecret, userProfile);
       }
 
       if (!cancelled && !hasProcessedInitialQr.current && resolvedPoints && resolvedToken) {
         hasProcessedInitialQr.current = true;
-        await executeStampClaim(resolvedShopSecret, resolvedPoints, resolvedToken, userProfile);
+        if (typeof window !== "undefined") {
+          try {
+            window.sessionStorage.removeItem("kaikai_pending_qr_claim_v1");
+          } catch {
+            // Ignore
+          }
+        }
+        await executeStampClaim(resolvedShopSecret, resolvedPoints, resolvedToken, userProfile, effectiveLiffId);
       }
 
       if (!cancelled) {
@@ -545,10 +578,6 @@ export function LoyaltyStampCardClient({
     setRedeemingCouponId(coupon.id);
 
     try {
-      const ctxType = window.liff?.getContext?.()?.type;
-      const canSendViaLiffChat = Boolean(
-        window.liff && window.liff.isInClient() && (ctxType === "utou" || ctxType === "room" || ctxType === "group"),
-      );
       const response = await fetch("/api/loyalty/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -557,7 +586,7 @@ export function LoyaltyStampCardClient({
           couponId: coupon.id,
           lineUserId: member.lineUserId || getOrCreateBrowserUserId(),
           displayName: member.displayName || getSavedDisplayName(),
-          sendPush: !canSendViaLiffChat,
+          sendPush: true,
         }),
       });
       const data = (await response.json()) as Record<string, unknown>;
@@ -574,7 +603,7 @@ export function LoyaltyStampCardClient({
       const notification = data.notification as
         | { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean }
         | undefined;
-      const chatNotified = await sendLineChatNotification(notification);
+      const chatNotified = Boolean(notification?.pushed);
 
       await fetchCardState(shopSecret, {
         userId: member.lineUserId || getOrCreateBrowserUserId(),
@@ -739,38 +768,17 @@ export function LoyaltyStampCardClient({
               <div className="line-stamp-alert-foot">
                 {claimBanner.chatNotified ? (
                   <span className="line-stamp-chat-ok">
-                    ✓ ส่งข้อความแจ้งเตือนแต้มเข้าแชท LINE ร้านอัตโนมัติแล้ว
+                    ✓ {config.cardTitle} ส่งข้อความแจ้งเตือนแต้มไปที่แชท LINE ของคุณแล้ว
                   </span>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                    <span className="line-stamp-chat-hint">
-                      💡 กดปุ่มด้านล่างเพื่อส่งแจ้งแต้มเข้าห้องแชทร้าน หรือแคปหน้าจอนี้ส่งในแชทได้เลย
-                    </span>
-                    {claimBanner.plainText && (
-                      <a
-                        href={
-                          config.botBasicId
-                            ? `https://line.me/R/oaMessage/${encodeURIComponent(config.botBasicId.startsWith("@") ? config.botBasicId : `@${config.botBasicId}`)}/?${encodeURIComponent(claimBanner.plainText)}`
-                            : `https://line.me/R/msg/text/?${encodeURIComponent(claimBanner.plainText)}`
-                        }
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "#06C755",
-                          color: "#ffffff",
-                          fontWeight: 800,
-                          fontSize: 13,
-                          padding: "8px 14px",
-                          borderRadius: 999,
-                          textDecoration: "none",
-                        }}
-                      >
-                        💬 ส่งข้อความแจ้งแต้มเข้าแชท LINE ร้าน
-                      </a>
-                    )}
-                  </div>
-                )}
+                ) : claimBanner.pushReason === "MISSING_CHANNEL_ACCESS_TOKEN" ? (
+                  <span className="line-stamp-chat-hint">
+                    ℹ️ สำหรับร้านค้า: กรุณาใส่ Messaging API Channel Access Token ในหน้าตั้งค่า เพื่อให้ LINE OA ทักแจ้งแต้มหาลูกค้าอัตโนมัติ
+                  </span>
+                ) : claimBanner.pushReason === "NOT_LINE_USER_ID" ? (
+                  <span className="line-stamp-chat-hint">
+                    ℹ️ กรุณาสแกนผ่านลิงก์ LIFF ในแอป LINE เพื่อให้ LINE OA ทักแจ้งเตือนแต้มในแชทอัตโนมัติ
+                  </span>
+                ) : null}
               </div>
             )}
           </div>

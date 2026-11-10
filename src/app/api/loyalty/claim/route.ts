@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { sendLinePushMessage } from "@/lib/line-messaging";
+import { sendLinePushMessageDetailed } from "@/lib/line-messaging";
 import {
   buildLoyaltyCardUrl,
   buildStampAwardFlexMessage,
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const lineUserId = String(body.lineUserId ?? "").trim();
     const displayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
     const pictureUrl = body.pictureUrl ? String(body.pictureUrl).trim() : null;
-    const sendPush = Boolean(body.sendPush);
+    const clientLiffId = String(body.liffId ?? "").trim();
 
     if (!shopSecret || !token || !lineUserId || points < 1 || points > 10) {
       return NextResponse.json(
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
     if (!hasSupabaseEnv) {
       const validTill = formatValidTillDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
-      const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, "");
+      const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, clientLiffId);
       const flexMessage = buildStampAwardFlexMessage({
         cardTitle: "GaiTomNamPla 🐔",
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
           plainText,
           flexMessage,
           pushed: false,
+          pushReason: "DEMO_MODE",
         },
       });
     }
@@ -111,7 +112,7 @@ export async function POST(request: Request) {
     const rewardsUnlocked = Number(result.rewardsUnlocked ?? 0);
     const expiresAt = result.expiresAt ? String(result.expiresAt) : null;
     const validTill = formatValidTillDate(expiresAt);
-    const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, "");
+    const cardUrl = buildLoyaltyCardUrl(requestOrigin, shopSecret, clientLiffId);
 
     const flexMessage = buildStampAwardFlexMessage({
       cardTitle,
@@ -137,10 +138,12 @@ export async function POST(request: Request) {
     });
 
     const channelAccessToken = String(result.channelAccessToken ?? "").trim();
-    let pushed = false;
-    if (sendPush && channelAccessToken) {
-      pushed = await sendLinePushMessage(channelAccessToken, lineUserId, [flexMessage]);
-    }
+    const pushRes = await sendLinePushMessageDetailed(
+      channelAccessToken,
+      lineUserId,
+      [flexMessage],
+      plainText,
+    );
 
     // Never leak channelAccessToken in public response
     const safeResult = { ...result };
@@ -152,7 +155,8 @@ export async function POST(request: Request) {
       notification: {
         plainText,
         flexMessage,
-        pushed,
+        pushed: pushRes.ok,
+        pushReason: pushRes.reason ?? "SENT",
       },
     });
   } catch (err) {

@@ -483,12 +483,12 @@ export function LoyaltySettingsCard({ shopName, snapshot }: LoyaltySettingsCardP
             </label>
 
             <label>
-              Messaging API Channel Access Token (ทางเลือกเสริม)
+              Messaging API Channel Access Token (สำคัญ — เพื่อให้ LINE OA ทักแจ้งแต้มหาลูกค้าอัตโนมัติ)
               <input
                 name="channel_access_token"
                 type="password"
                 defaultValue={config.channelAccessToken}
-                placeholder="ใส่เมื่อต้องการให้บอทตอบกลับคำว่า เช็คแต้ม"
+                placeholder="วาง Channel access token (long-lived) ของ LINE OA"
               />
             </label>
           </div>
