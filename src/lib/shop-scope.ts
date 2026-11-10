@@ -12,6 +12,11 @@ export type ShopSummary = {
   avatarUrl: string | null;
   unitLabel: string;
   createdAt: string;
+  /**
+   * Optional shop ID whose ingredient & packaging catalog this shop shares.
+   * When null/undefined, this shop uses its own isolated ingredient & packaging catalog.
+   */
+  sharedIngredientsFromShopId?: string | null;
 };
 
 export function normalizeShopId(raw?: string | null): string {
@@ -19,6 +24,43 @@ export function normalizeShopId(raw?: string | null): string {
   const trimmed = raw.trim();
   if (!trimmed || trimmed === DEFAULT_SHOP_ID) return DEFAULT_SHOP_ID;
   return SHOP_ID_PATTERN.test(trimmed) ? trimmed : DEFAULT_SHOP_ID;
+}
+
+/**
+ * Resolves the canonical shop ID that owns the ingredients & packaging catalog for `shopId`.
+ * Safely handles chained links (C -> B -> A resolves to A), circular links, and missing target shops.
+ */
+export function resolveInventoryShopId(
+  shopId: string | null | undefined,
+  shops: ReadonlyArray<{
+    id?: string | null;
+    sharedIngredientsFromShopId?: string | null;
+    shared_ingredients_from_shop_id?: string | null;
+  }>,
+): string {
+  let curr = normalizeShopId(shopId);
+  if (curr !== DEFAULT_SHOP_ID && !shops.some((s) => s && normalizeShopId(s.id) === curr)) {
+    return DEFAULT_SHOP_ID;
+  }
+  const path = [curr];
+  const visited = new Map<string, number>([[curr, 0]]);
+  while (true) {
+    const entry = shops.find((s) => s && normalizeShopId(s.id) === curr);
+    const rawTarget = entry?.sharedIngredientsFromShopId ?? entry?.shared_ingredients_from_shop_id;
+    if (!rawTarget) return curr;
+    const next = normalizeShopId(rawTarget);
+    const cycleStart = visited.get(next);
+    if (cycleStart !== undefined) {
+      // Corrupt/legacy registries can contain a cycle. Resolve every member of the
+      // same cycle to one deterministic catalog instead of returning a different
+      // answer depending on the starting shop.
+      return [...path.slice(cycleStart)].sort((a, b) => a.localeCompare(b))[0] ?? curr;
+    }
+    if (next !== DEFAULT_SHOP_ID && !shops.some((s) => s && normalizeShopId(s.id) === next)) return curr;
+    visited.set(next, path.length);
+    path.push(next);
+    curr = next;
+  }
 }
 
 export function shopPrefix(shopId?: string | null): string {
@@ -85,6 +127,23 @@ export function matchesSaleShop(
     }
   }
   return target === DEFAULT_SHOP_ID;
+}
+
+/**
+ * Checks whether an ingredient_purchases row belongs to `activeShopId` for shop-specific expense/purchase reporting.
+ * Uses the `[s:<shopId>]` prefix on `vendor` when present, falling back to the ingredient name's shop prefix.
+ */
+export function matchesPurchaseShop(
+  row: { vendor?: unknown; ingredientName?: unknown },
+  activeShopId?: string | null,
+): boolean {
+  const target = normalizeShopId(activeShopId);
+  const rawVendor = typeof row.vendor === "string" ? row.vendor : "";
+  if (rawVendor.startsWith("[s:")) {
+    return decodeShopText(rawVendor).shopId === target;
+  }
+  const rawIngName = typeof row.ingredientName === "string" ? row.ingredientName : "";
+  return matchesShopText(rawIngName, target);
 }
 
 /** Reads active shop ID from browser document.cookie for client components. */

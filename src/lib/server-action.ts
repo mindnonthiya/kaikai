@@ -4,14 +4,29 @@ import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { DEMO_MODE_MESSAGE, type ActionState } from "@/lib/action-state";
 import { hasSupabaseEnv } from "@/lib/env";
 import { bahtToSatang } from "@/lib/money";
-import { ACTIVE_SHOP_COOKIE, DEFAULT_SHOP_ID, normalizeShopId } from "@/lib/shop-scope";
+import {
+  ACTIVE_SHOP_COOKIE,
+  DEFAULT_SHOP_ID,
+  SHOPS_REGISTRY_SETTINGS_KEY,
+  normalizeShopId,
+  resolveInventoryShopId,
+} from "@/lib/shop-scope";
 import { createClient } from "@/lib/supabase/server";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 
 /** Thrown for user-facing validation problems; the message is shown as-is. */
 export class InputError extends Error {}
 
-export type Context = { supabase: SupabaseClient; user: User; shopId: string };
+export type Context = {
+  supabase: SupabaseClient;
+  user: User;
+  shopId: string;
+  /**
+   * Canonical shop ID that owns the ingredients & packaging catalog for `shopId`.
+   * Equals `shopId` when isolated, or the linked target shop ID when sharing ingredients.
+   */
+  inventoryShopId: string;
+};
 
 export async function getServerActiveShopId(): Promise<string> {
   try {
@@ -29,10 +44,33 @@ export async function getServerActiveShopId(): Promise<string> {
 export async function runAction(fn: (ctx: Context) => Promise<ActionState | void>): Promise<ActionState> {
   if (!hasSupabaseEnv) return { error: DEMO_MODE_MESSAGE };
   try {
-    const [supabase, shopId] = await Promise.all([createClient(), getServerActiveShopId()]);
+    const [supabase, rawShopId] = await Promise.all([createClient(), getServerActiveShopId()]);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { error: "หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่" };
-    return (await fn({ supabase, user, shopId })) ?? { ok: true };
+
+    const { data: regRow, error: regError } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("owner_id", user.id)
+      .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
+      .maybeSingle();
+    if (regError) dbError(regError);
+    const rawShops = Array.isArray((regRow?.value as { shops?: unknown[] } | null)?.shops)
+      ? ((regRow?.value as {
+          shops: Array<{
+            id: string;
+            sharedIngredientsFromShopId?: string | null;
+            shared_ingredients_from_shop_id?: string | null;
+          }>;
+        }).shops)
+      : [];
+    const shopId =
+      rawShopId === DEFAULT_SHOP_ID || rawShops.some((s) => s && normalizeShopId(s.id) === rawShopId)
+        ? rawShopId
+        : DEFAULT_SHOP_ID;
+    const inventoryShopId = resolveInventoryShopId(shopId, rawShops);
+
+    return (await fn({ supabase, user, shopId, inventoryShopId })) ?? { ok: true };
   } catch (error) {
     if (error instanceof InputError) return { error: error.message };
     console.error(error);
@@ -42,7 +80,7 @@ export async function runAction(fn: (ctx: Context) => Promise<ActionState | void
 
 /** PostgREST / Postgres codes for "table or column does not exist" — the database is missing a migration. */
 export const SCHEMA_OUTDATED_CODES = new Set(["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"]);
-export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รัน รวมถึง 202611010001_order_cost_consistency.sql ใน SQL Editor";
+export const SCHEMA_OUTDATED_MESSAGE = "ฐานข้อมูลยังไม่ได้อัปเดต — กรุณารันไฟล์ใน supabase/migrations ที่ยังไม่ได้รันทั้งหมด รวมถึงชุด 202611100001–202611100004 ใน SQL Editor";
 
 /** Converts a Postgres/PostgREST error into a Thai message. */
 export function dbError(error: { code?: string; message: string }, context?: { unique?: string; foreignKey?: string }): never {

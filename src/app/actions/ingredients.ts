@@ -9,7 +9,17 @@ import { MENU_YIELDS_SETTINGS_KEY, PACKAGING_DEFAULTS_SETTINGS_KEY, invalidateQu
 import { INGREDIENT_COSTING_LABELS, type ExpenseKind, type IngredientCosting, type PaymentMethod } from "@/lib/data/types";
 import { menusUsing, recalculateMenuCosts } from "@/lib/menu-cost";
 import { formatBaht, formatUnitCost } from "@/lib/money";
-import { decodeShopText, encodeShopText, stripShopPrefix } from "@/lib/shop-scope";
+import {
+  DEFAULT_SHOP_ID,
+  SHOPS_REGISTRY_SETTINGS_KEY,
+  type ShopSummary,
+  decodeShopText,
+  encodeShopText,
+  matchesPurchaseShop,
+  matchesShopText,
+  resolveInventoryShopId,
+  stripShopPrefix,
+} from "@/lib/shop-scope";
 import { InputError, amountOrZero, dateField, dbError, id, money, oneOf, optionalText, quantity, runAction, text } from "@/lib/server-action";
 import { bangkokDayKey, fromBangkokDateInput } from "@/lib/time";
 
@@ -39,6 +49,55 @@ function yieldAutoField(form: FormData) {
   return form.get("yield_auto") === "true" || form.get("yield_auto") === "on";
 }
 
+function encodePurchaseVendorForShop(vendor: string | null, shopId: string): string | null {
+  if (shopId === DEFAULT_SHOP_ID) return vendor;
+  return encodeShopText(vendor ?? "", shopId);
+}
+
+async function insertIngredientPurchasesWithExpenseLinks(
+  supabase: SupabaseClient,
+  pairs: Array<{ purchase: Row; expense: Row }>,
+) {
+  if (pairs.length === 0) return { expenseIds: [] as string[], purchaseIds: [] as string[] };
+
+  const expensesPayload = pairs.map((p) => ({ ...p.expense, id: String(p.expense.id ?? crypto.randomUUID()) }));
+  const expenseIds = expensesPayload.map((row) => row.id);
+  const { error: expErr } = await supabase
+    .from("expenses")
+    .insert(expensesPayload);
+  if (expErr) dbError(expErr);
+
+  const purchasesWithExpenseId = pairs.map((p, idx) => ({
+    ...p.purchase,
+    id: String(p.purchase.id ?? crypto.randomUUID()),
+    expense_id: expenseIds[idx] ?? null,
+  }));
+  const purchaseIds = purchasesWithExpenseId.map((row) => row.id);
+
+  let { error: purErr } = await supabase.from("ingredient_purchases").insert(purchasesWithExpenseId);
+  if (
+    purErr &&
+    (purErr.code === "42703" || purErr.code === "PGRST204" || String(purErr.message ?? "").includes("expense_id"))
+  ) {
+    const fallback = await supabase
+      .from("ingredient_purchases")
+      .insert(purchasesWithExpenseId.map((row) => {
+        const withoutExpenseId: Row = { ...row };
+        delete withoutExpenseId.expense_id;
+        return withoutExpenseId;
+      }));
+    purErr = fallback.error;
+  }
+
+  if (purErr) {
+    if (expenseIds.length > 0) {
+      await supabase.from("expenses").delete().in("id", expenseIds);
+    }
+    dbError(purErr);
+  }
+  return { expenseIds, purchaseIds };
+}
+
 const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value * 1_000_000) / 1_000_000 : 0);
 
 /**
@@ -48,7 +107,7 @@ const roundCost = (value: number) => (Number.isFinite(value) ? Math.round(value 
  * pooled: recorded by amount only when bought and costed as a % of food sales.
  */
 export async function createIngredient(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user, shopId }) => {
+  return runAction(async ({ supabase, user, inventoryShopId }) => {
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
     const costing = oneOf(form, "costing", ["per_unit", "pooled"] as const, "วิธีคิดต้นทุน");
 
@@ -70,7 +129,7 @@ export async function createIngredient(form: FormData): Promise<ActionState> {
 
     const insertPayload: Row = {
       owner_id: user.id,
-      name: encodeShopText(name, shopId),
+      name: encodeShopText(name, inventoryShopId),
       costing,
       category: INGREDIENT_COSTING_LABELS[costing],
       purchase_unit: purchaseUnit,
@@ -114,25 +173,34 @@ export async function createIngredient(form: FormData): Promise<ActionState> {
  * Does not create any purchase or expense records.
  */
 export async function updateIngredient(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, shopId }) => {
+  return runAction(async ({ supabase, inventoryShopId }) => {
     const ingredientId = id(form);
     const name = text(form, "name", "ชื่อวัตถุดิบ", { max: 120 });
-    const { data, error: readError } = await supabase.from("ingredients")
-      .select("costing,purchase_unit,base_unit,units_per_purchase_unit,price_per_purchase_unit_satang")
-      .eq("id", ingredientId).single();
+    const { data, error: readError } = await supabase
+      .from("ingredients")
+      .select("name,costing,purchase_unit,base_unit,units_per_purchase_unit,price_per_purchase_unit_satang")
+      .eq("id", ingredientId)
+      .single();
     if (readError) dbError(readError);
     const current = data as Row;
+    if (!matchesShopText(String(current.name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
+    const oldDecoded = decodeShopText(String(current.name ?? ""));
+    const targetCatalogShopId = current.name ? oldDecoded.shopId : inventoryShopId;
+    const cleanOldName = oldDecoded.text;
     const now = new Date().toISOString();
-    let update: Row = { name: encodeShopText(name, shopId), updated_at: now };
+    let update: Row = { name: encodeShopText(name, targetCatalogShopId), updated_at: now };
     if (current.costing !== "pooled") {
       const units = quantity(form, "units_per_purchase_unit", "จำนวนต่อหน่วยที่ซื้อ")!;
       const rawPurchaseUnit = optionalText(form, "purchase_unit", "หน่วยที่ซื้อ", 30);
       const rawBaseUnit = optionalText(form, "base_unit", "หน่วยที่ใช้ในสูตร", 30);
       const effectivePurchaseUnit = rawPurchaseUnit || String(current.purchase_unit ?? "กก.");
       const rawPriceInput = String(form.get("price_per_purchase_unit") ?? "").trim();
-      const pricePerPurchaseUnit = rawPriceInput !== ""
-        ? money(form, "price_per_purchase_unit", `ราคาต่อ${effectivePurchaseUnit}`)
-        : Number(current.price_per_purchase_unit_satang);
+      const pricePerPurchaseUnit =
+        rawPriceInput !== ""
+          ? money(form, "price_per_purchase_unit", `ราคาต่อ${effectivePurchaseUnit}`)
+          : Number(current.price_per_purchase_unit_satang);
 
       update = {
         ...update,
@@ -155,6 +223,26 @@ export async function updateIngredient(form: FormData): Promise<ActionState> {
       error = fallback.error;
     }
     if (error) dbError(error, { unique: `มีวัตถุดิบชื่อ “${name}” อยู่แล้ว` });
+
+    // Keep linked expense descriptions in sync when the ingredient is renamed
+    if (cleanOldName && cleanOldName !== name) {
+      const [{ data: expRows }, { data: regRow }] = await Promise.all([
+        supabase.from("expenses").select("id, description").eq("category", "วัตถุดิบ"),
+        supabase.from("settings").select("value").eq("key", SHOPS_REGISTRY_SETTINGS_KEY).maybeSingle(),
+      ]);
+      const rawShops = ((regRow?.value as { shops?: ShopSummary[] } | null)?.shops ?? []) as ShopSummary[];
+      for (const exp of (expRows ?? []) as Array<{ id: unknown; description: unknown }>) {
+        const expDecoded = decodeShopText(String(exp.description ?? ""));
+        const expInvShopId = resolveInventoryShopId(expDecoded.shopId, rawShops);
+        if (expInvShopId !== targetCatalogShopId && expDecoded.shopId !== targetCatalogShopId) continue;
+        if (expDecoded.text === `ซื้อ${cleanOldName}` || expDecoded.text.startsWith(`ซื้อ${cleanOldName} `)) {
+          const suffix = expDecoded.text.slice(`ซื้อ${cleanOldName}`.length);
+          const nextDesc = encodeShopText(`ซื้อ${name}${suffix}`, expDecoded.shopId);
+          await supabase.from("expenses").update({ description: nextDesc, updated_at: now }).eq("id", String(exp.id));
+        }
+      }
+    }
+
     await recalculateMenuCosts(supabase, await menusUsing(supabase, "ingredient_id", ingredientId));
     revalidateCosts();
     return { ok: true, message: "บันทึกแล้ว และคำนวณต้นทุนเมนูใหม่" };
@@ -234,11 +322,13 @@ async function refreshPerUnitCost(supabase: SupabaseClient, ingredient: PerUnitI
 /**
  * Records several ingredient purchases at once.
  * Per-unit rows: `qty_<id>` × `unit_price_<id>`. Pooled rows: `amount_<id>` (฿).
+ * Note: Unit cost updates apply to the shared ingredient catalog, while the expense bill is booked to the active `shopId`.
  */
 export async function recordIngredientPurchases(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId, inventoryShopId }) => {
     const purchasedAt = dateField(form, "purchased_at", "วันที่ซื้อ").toISOString();
     const vendor = optionalText(form, "vendor", "ร้านค้า", 120);
+    const encodedPurchaseVendor = encodePurchaseVendorForShop(vendor, shopId);
     const receiptPath = optionalText(form, "receipt_path", "สลิป", 300);
     const notesText = optionalText(form, "notes", "หมายเหตุ", 300);
     const rawMethod = String(form.get("payment_method") ?? "transfer");
@@ -248,29 +338,31 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       .select("id,name,costing,base_unit,purchase_unit,units_per_purchase_unit,yield_auto").eq("is_active", true);
     if (error) dbError(error);
 
-    const rows: Row[] = [];
+    const pairs: Array<{ purchase: Row; expense: Row }> = [];
     const perUnit: PerUnitIngredient[] = [];
-    const expensesToInsert: Row[] = [];
     for (const r of data as Row[]) {
       const ingredientId = String(r.id), rawName = String(r.name);
-      const { shopId: itemShopId, text: name } = decodeShopText(rawName);
+      if (!matchesShopText(rawName, inventoryShopId)) continue;
+      const { text: name } = decodeShopText(rawName);
       const costing = String(r.costing) as IngredientCosting;
       if (costing === "pooled") {
         const amount = money(form, `amount_${ingredientId}`, `ราคา${name}`);
         if (amount > 0) {
-          rows.push({
-            owner_id: user.id,
-            ingredient_id: ingredientId,
-            purchased_at: purchasedAt,
-            price_satang: amount,
-            vendor,
-            ...(receiptPath ? { receipt_path: receiptPath } : {}),
-          });
-          expensesToInsert.push({
-            owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
-            description: encodeShopText(`ซื้อ${name}`, itemShopId), payee: vendor, payment_method: paymentMethod,
-            ...(receiptPath ? { receipt_path: receiptPath } : {}),
-            ...(notesText ? { notes: notesText } : {}),
+          pairs.push({
+            purchase: {
+              owner_id: user.id,
+              ingredient_id: ingredientId,
+              purchased_at: purchasedAt,
+              price_satang: amount,
+              vendor: encodedPurchaseVendor,
+              ...(receiptPath ? { receipt_path: receiptPath } : {}),
+            },
+            expense: {
+              owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: amount,
+              description: encodeShopText(`ซื้อ${name}`, shopId), payee: vendor, payment_method: paymentMethod,
+              ...(receiptPath ? { receipt_path: receiptPath } : {}),
+              ...(notesText ? { notes: notesText } : {}),
+            },
           });
         }
         continue;
@@ -280,34 +372,31 @@ export async function recordIngredientPurchases(form: FormData): Promise<ActionS
       const unitPrice = money(form, `unit_price_${ingredientId}`, `ราคาต่อ${r.purchase_unit ?? "หน่วย"}ของ${name}`, { required: true, positive: true });
       const unit = String(r.purchase_unit ?? r.base_unit);
       const priceSatang = Math.round(qty * unitPrice);
-      rows.push({
-        owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: priceSatang,
-        purchased_quantity: qty, usable_quantity: qty, purchase_unit: unit, vendor,
-        ...(receiptPath ? { receipt_path: receiptPath } : {}),
-      });
-      expensesToInsert.push({
-        owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
-        description: encodeShopText(`ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, itemShopId), payee: vendor, payment_method: paymentMethod,
-        ...(receiptPath ? { receipt_path: receiptPath } : {}),
-        ...(notesText ? { notes: notesText } : {}),
+      pairs.push({
+        purchase: {
+          owner_id: user.id, ingredient_id: ingredientId, purchased_at: purchasedAt, price_satang: priceSatang,
+          purchased_quantity: qty, usable_quantity: qty, purchase_unit: unit, vendor: encodedPurchaseVendor,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
+        },
+        expense: {
+          owner_id: user.id, spent_at: purchasedAt, category: "วัตถุดิบ", kind: "direct", amount_satang: priceSatang,
+          description: encodeShopText(`ซื้อ${name} ${qty.toLocaleString("th-TH")} ${unit}`, shopId), payee: vendor, payment_method: paymentMethod,
+          ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          ...(notesText ? { notes: notesText } : {}),
+        },
       });
       perUnit.push({
         id: ingredientId, name, base_unit: String(r.base_unit), purchase_unit: unit,
         units_per_purchase_unit: Number(r.units_per_purchase_unit), yield_auto: Boolean(r.yield_auto),
       });
     }
-    if (!rows.length) throw new InputError("กรอกอย่างน้อย 1 รายการ");
-    const { error: insertError } = await supabase.from("ingredient_purchases").insert(rows);
-    if (insertError) dbError(insertError);
-    if (expensesToInsert.length) {
-      const { error: expenseError } = await supabase.from("expenses").insert(expensesToInsert);
-      if (expenseError) dbError(expenseError);
-    }
+    if (!pairs.length) throw new InputError("กรอกอย่างน้อย 1 รายการ");
+    await insertIngredientPurchasesWithExpenseLinks(supabase, pairs);
 
     const notes: string[] = [];
     for (const ingredient of perUnit) notes.push(await refreshPerUnitCost(supabase, ingredient));
     revalidateCosts();
-    return { ok: true, message: [`บันทึกการซื้อ ${rows.length} รายการแล้ว · ลงในรายการค่าใช้จ่ายแล้ว`, ...notes].join(" · ") };
+    return { ok: true, message: [`บันทึกการซื้อ ${pairs.length} รายการแล้ว · ลงในรายการค่าใช้จ่ายแล้ว`, ...notes].join(" · ") };
   });
 }
 
@@ -322,6 +411,38 @@ type PackPurchase = {
   paymentMethod?: PaymentMethod;
   notes?: string | null;
 };
+
+async function refreshPackagingCost(supabase: SupabaseClient, packagingItemId: string) {
+  const purchases = await readCostRows((from, to) =>
+    supabase
+      .from("packaging_purchases")
+      .select("id,price_satang,pack_quantity")
+      .eq("packaging_item_id", packagingItemId)
+      .order("id")
+      .range(from, to),
+  );
+  let totalPrice = 0;
+  let totalPieces = 0;
+  for (const p of purchases as Row[]) {
+    totalPrice += Number(p.price_satang);
+    totalPieces += Number(p.pack_quantity);
+  }
+  const unitCost = totalPieces > 0 ? roundCost(totalPrice / totalPieces) : 0;
+  let { error: updateError } = await supabase
+    .from("packaging_items")
+    .update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() })
+    .eq("id", packagingItemId);
+  if (updateError && updateError.code === "22P02" && updateError.message.includes("bigint")) {
+    const fallback = await supabase
+      .from("packaging_items")
+      .update({ unit_cost_satang: Math.round(unitCost), updated_at: new Date().toISOString() })
+      .eq("id", packagingItemId);
+    updateError = fallback.error;
+  }
+  if (updateError) dbError(updateError);
+  await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", packagingItemId));
+  return unitCost;
+}
 
 const PACKAGING_EXPENSE_CATEGORY = "บรรจุภัณฑ์";
 
@@ -373,46 +494,69 @@ async function savePackagingDefaultConfig(
  * Saves an actual packaging purchase and sets the item's cost per piece = Σ price ÷ Σ pieces of all its purchases.
  * Items not counted per order (e.g. bags) are booked as an operating expense (deducted from profit).
  * Items counted per order (e.g. boxes, spoons) are booked as a direct expense (already in menu cost, not deducted twice).
+ * Note: The expense row is booked to `activeShopId` (the shop recording the purchase).
  */
-async function recordPackagingPurchase(supabase: SupabaseClient, ownerId: string, item: PackagingItem, purchase: PackPurchase) {
+async function recordPackagingPurchase(
+  supabase: SupabaseClient,
+  ownerId: string,
+  item: PackagingItem,
+  purchase: PackPurchase,
+  activeShopId: string,
+) {
   let expenseId: string | null = null;
-  const { shopId: itemShopId, text: cleanName } = decodeShopText(item.name);
+  const purchaseId = crypto.randomUUID();
+  const { text: cleanName } = decodeShopText(item.name);
   if (purchase.price > 0) {
     const packs = purchase.packCount > 1 ? `${purchase.packCount.toLocaleString("th-TH")} แพ็ก (${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit})` : `${purchase.packQuantity.toLocaleString("th-TH")} ${item.unit}`;
-    const { data, error } = await supabase.from("expenses").insert({
+    expenseId = crypto.randomUUID();
+    const { error } = await supabase.from("expenses").insert({
+      id: expenseId,
       owner_id: ownerId, spent_at: purchase.purchasedAt.toISOString(), category: PACKAGING_EXPENSE_CATEGORY,
       kind: item.per_order ? "direct" : "operating",
       amount_satang: purchase.price,
-      description: encodeShopText(`ซื้อ${cleanName} ${packs}`, itemShopId),
+      description: encodeShopText(`ซื้อ${cleanName} ${packs}`, activeShopId),
       payee: purchase.vendor,
       payment_method: purchase.paymentMethod ?? "transfer",
       ...(purchase.receiptPath ? { receipt_path: purchase.receiptPath } : {}),
       ...(purchase.notes ? { notes: purchase.notes } : {}),
-    }).select("id").single();
+    });
     if (error) dbError(error);
-    expenseId = String((data as Row).id);
   }
-  const { error } = await supabase.from("packaging_purchases").insert({
-    owner_id: ownerId, packaging_item_id: item.id, purchased_at: purchase.purchasedAt.toISOString(), price_satang: purchase.price,
-    pack_quantity: purchase.packQuantity, pack_count: purchase.packCount, vendor: purchase.vendor, expense_id: expenseId,
-  });
+  const packPurchasePayload: Row = {
+    id: purchaseId,
+    owner_id: ownerId,
+    packaging_item_id: item.id,
+    purchased_at: purchase.purchasedAt.toISOString(),
+    price_satang: purchase.price,
+    pack_quantity: purchase.packQuantity,
+    pack_count: purchase.packCount,
+    vendor: encodePurchaseVendorForShop(purchase.vendor, activeShopId),
+    expense_id: expenseId,
+  };
+  let { error } = await supabase.from("packaging_purchases").insert(packPurchasePayload);
+  if (
+    error &&
+    (error.code === "42703" || error.code === "PGRST204" || String(error.message ?? "").includes("expense_id"))
+  ) {
+    const withoutExpenseId: Row = { ...packPurchasePayload };
+    delete withoutExpenseId.expense_id;
+    const fallback = await supabase.from("packaging_purchases").insert(withoutExpenseId);
+    error = fallback.error;
+  }
   if (error) {
     if (expenseId) await supabase.from("expenses").delete().eq("id", expenseId);
     dbError(error);
   }
 
-  const purchases = await readCostRows((from, to) => supabase.from("packaging_purchases").select("id,price_satang,pack_quantity").eq("packaging_item_id", item.id).order("id").range(from, to));
-  let totalPrice = 0, totalPieces = 0;
-  for (const p of purchases as Row[]) { totalPrice += Number(p.price_satang); totalPieces += Number(p.pack_quantity); }
-  const unitCost = totalPieces > 0 ? roundCost(totalPrice / totalPieces) : 0;
-  let { error: updateError } = await supabase.from("packaging_items").update({ unit_cost_satang: unitCost, updated_at: new Date().toISOString() }).eq("id", item.id);
-  if (updateError && updateError.code === "22P02" && updateError.message.includes("bigint")) {
-    const fallback = await supabase.from("packaging_items").update({ unit_cost_satang: Math.round(unitCost), updated_at: new Date().toISOString() }).eq("id", item.id);
-    updateError = fallback.error;
+  try {
+    const unitCost = await refreshPackagingCost(supabase, item.id);
+    return { unitCost, expenseId, purchaseId, packagingItemId: item.id };
+  } catch (costError) {
+    await supabase.from("packaging_purchases").delete().eq("id", purchaseId);
+    if (expenseId) await supabase.from("expenses").delete().eq("id", expenseId);
+    await refreshPackagingCost(supabase, item.id).catch(() => undefined);
+    throw costError;
   }
-  if (updateError) dbError(updateError);
-  await recalculateMenuCosts(supabase, await menusUsing(supabase, "packaging_item_id", item.id));
-  return unitCost;
 }
 
 const perPiece = (unitCost: number, unit: string) => `ตก${unit}ละ ${formatUnitCost(unitCost)}`;
@@ -422,9 +566,9 @@ const perPiece = (unitCost: number, unit: string) => `ตก${unit}ละ ${form
  * When pack price & pieces per pack are given, sets the item's initial unit cost and remembers the pack default for future restocks.
  */
 export async function createPackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user, shopId }) => {
+  return runAction(async ({ supabase, user, inventoryShopId }) => {
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
-    const encodedName = encodeShopText(name, shopId);
+    const encodedName = encodeShopText(name, inventoryShopId);
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
     const packDefault = optionalPackDefaultFields(form);
@@ -466,10 +610,21 @@ export async function createPackaging(form: FormData): Promise<ActionState> {
 }
 
 export async function updatePackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user, shopId }) => {
+  return runAction(async ({ supabase, user, inventoryShopId }) => {
     const packagingId = id(form);
     const name = text(form, "name", "ชื่อบรรจุภัณฑ์", { max: 120 });
-    const encodedName = encodeShopText(name, shopId);
+    const { data: currentPack } = await supabase
+      .from("packaging_items")
+      .select("name")
+      .eq("id", packagingId)
+      .maybeSingle();
+    if (!currentPack || !matchesShopText(String((currentPack as Row).name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
+    const targetCatalogShopId = currentPack?.name
+      ? decodeShopText(String((currentPack as Row).name)).shopId
+      : inventoryShopId;
+    const encodedName = encodeShopText(name, targetCatalogShopId);
     const unit = text(form, "unit", "หน่วย", { max: 30 });
     const perOrder = perOrderField(form);
     const hasPrice = String(form.get("pack_price") ?? "").trim() !== "";
@@ -508,7 +663,7 @@ export async function updatePackaging(form: FormData): Promise<ActionState> {
  * Each row: `packs_<id>` = number of packs (0 = skip), `price_<id>` = price per pack, `qty_<id>` = pieces per pack.
  */
 export async function restockPackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId, inventoryShopId }) => {
     const purchasedAt = dateField(form, "purchased_at", "วันที่ซื้อ");
     const vendor = optionalText(form, "vendor", "ร้านค้า", 120);
     const receiptPath = optionalText(form, "receipt_path", "สลิป", 300);
@@ -520,6 +675,7 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
     if (error) dbError(error);
     const rows: Array<{ item: PackagingItem; purchase: PackPurchase }> = [];
     for (const item of data as PackagingItem[]) {
+      if (!matchesShopText(item.name, inventoryShopId)) continue;
       const cleanName = stripShopPrefix(item.name);
       const packs = amountOrZero(form, `packs_${item.id}`, `จำนวนแพ็กของ${cleanName}`);
       if (!packs) continue;
@@ -542,9 +698,22 @@ export async function restockPackaging(form: FormData): Promise<ActionState> {
     }
     if (!rows.length) throw new InputError("เลือกจำนวนแพ็กอย่างน้อย 1 รายการ");
     let total = 0;
-    for (const { item, purchase } of rows) {
-      await recordPackagingPurchase(supabase, user.id, item, purchase);
-      total += purchase.price;
+    const saved: Array<{ expenseId: string | null; purchaseId: string; packagingItemId: string }> = [];
+    try {
+      for (const { item, purchase } of rows) {
+        const result = await recordPackagingPurchase(supabase, user.id, item, purchase, shopId);
+        saved.push(result);
+        total += purchase.price;
+      }
+    } catch (error) {
+      const purchaseIds = saved.map((row) => row.purchaseId);
+      const expenseIds = saved.map((row) => row.expenseId).filter((value): value is string => Boolean(value));
+      if (purchaseIds.length > 0) await supabase.from("packaging_purchases").delete().in("id", purchaseIds);
+      if (expenseIds.length > 0) await supabase.from("expenses").delete().in("id", expenseIds);
+      for (const packagingItemId of new Set(saved.map((row) => row.packagingItemId))) {
+        await refreshPackagingCost(supabase, packagingItemId).catch(() => undefined);
+      }
+      throw error;
     }
     revalidateCosts();
     return { ok: true, message: `บันทึกการซื้อ ${rows.length} รายการ รวม ${formatBaht(total)} · ลงในรายการค่าใช้จ่ายแล้ว` };
@@ -580,6 +749,8 @@ export type ItemizedPurchasePayload = {
   }>;
 };
 
+export type ItemizedPurchaseActionState = ActionState & { createdExpenseIds?: string[] };
+
 /**
  * Unified server action that saves an itemized slip containing any mix of:
  * - Per-unit ingredients -> ingredient_purchases + expenses + refreshPerUnitCost
@@ -588,8 +759,8 @@ export type ItemizedPurchasePayload = {
  * - General/extra expenses -> expenses
  * All records use the slip's date (`spentAt`), vendor/payee, payment method, and shared `receiptPath`.
  */
-export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload): Promise<ActionState> {
-  return runAction(async ({ supabase, user, shopId }) => {
+export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload): Promise<ItemizedPurchaseActionState> {
+  return runAction(async ({ supabase, user, shopId, inventoryShopId }) => {
     let purchasedAtDate: Date;
     try {
       purchasedAtDate = fromBangkokDateInput(payload.spentAt || bangkokDayKey(new Date()));
@@ -598,6 +769,7 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
     }
     const purchasedAtIso = purchasedAtDate.toISOString();
     const vendor = payload.vendor?.trim() ? payload.vendor.trim().slice(0, 120) : null;
+    const encodedPurchaseVendor = encodePurchaseVendorForShop(vendor, shopId);
     const paymentMethod: PaymentMethod =
       payload.paymentMethod === "cash" || payload.paymentMethod === "other" ? payload.paymentMethod : "transfer";
     const receiptPath = payload.receiptPath?.trim() ? payload.receiptPath.trim().slice(0, 300) : null;
@@ -618,8 +790,8 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
       throw new InputError("กรุณากรอกรายการอย่างน้อย 1 รายการ");
     }
 
-    const ingredientPurchasesToInsert: Row[] = [];
-    const expensesToInsert: Row[] = [];
+    const ingPairs: Array<{ purchase: Row; expense: Row }> = [];
+    const extraExpensesToInsert: Row[] = [];
     const perUnitToRefresh: PerUnitIngredient[] = [];
     let totalSatang = 0;
 
@@ -633,36 +805,40 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
 
       for (const item of perUnitInput) {
         const r = ingMap.get(item.ingredientId);
-        if (!r) continue;
+        if (!r || !matchesShopText(String(r.name ?? ""), inventoryShopId)) {
+          throw new InputError("รายการวัตถุดิบไม่ได้อยู่ในคลังของร้านปัจจุบัน");
+        }
         const rawName = String(r.name);
-        const { shopId: itemShopId, text: cleanName } = decodeShopText(rawName);
+        const { text: cleanName } = decodeShopText(rawName);
         const unit = String(r.purchase_unit ?? r.base_unit);
         const priceSatang = Math.round(item.quantity * item.unitPriceSatang);
         if (priceSatang <= 0) continue;
         totalSatang += priceSatang;
 
-        ingredientPurchasesToInsert.push({
-          owner_id: user.id,
-          ingredient_id: item.ingredientId,
-          purchased_at: purchasedAtIso,
-          price_satang: priceSatang,
-          purchased_quantity: item.quantity,
-          usable_quantity: item.quantity,
-          purchase_unit: unit,
-          vendor,
-          ...(receiptPath ? { receipt_path: receiptPath } : {}),
-        });
-        expensesToInsert.push({
-          owner_id: user.id,
-          spent_at: purchasedAtIso,
-          category: "วัตถุดิบ",
-          kind: "direct",
-          amount_satang: priceSatang,
-          description: encodeShopText(`ซื้อ${cleanName} ${item.quantity.toLocaleString("th-TH")} ${unit}`, itemShopId),
-          payee: vendor,
-          payment_method: paymentMethod,
-          ...(receiptPath ? { receipt_path: receiptPath } : {}),
-          ...(notesText ? { notes: notesText } : {}),
+        ingPairs.push({
+          purchase: {
+            owner_id: user.id,
+            ingredient_id: item.ingredientId,
+            purchased_at: purchasedAtIso,
+            price_satang: priceSatang,
+            purchased_quantity: item.quantity,
+            usable_quantity: item.quantity,
+            purchase_unit: unit,
+            vendor: encodedPurchaseVendor,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          },
+          expense: {
+            owner_id: user.id,
+            spent_at: purchasedAtIso,
+            category: "วัตถุดิบ",
+            kind: "direct",
+            amount_satang: priceSatang,
+            description: encodeShopText(`ซื้อ${cleanName} ${item.quantity.toLocaleString("th-TH")} ${unit}`, shopId),
+            payee: vendor,
+            payment_method: paymentMethod,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+            ...(notesText ? { notes: notesText } : {}),
+          },
         });
         perUnitToRefresh.push({
           id: item.ingredientId,
@@ -676,40 +852,62 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
 
       for (const item of pooledInput) {
         const r = ingMap.get(item.ingredientId);
-        if (!r) continue;
-        const { shopId: itemShopId, text: cleanName } = decodeShopText(String(r.name));
+        if (!r || !matchesShopText(String(r.name ?? ""), inventoryShopId)) {
+          throw new InputError("รายการวัตถุดิบไม่ได้อยู่ในคลังของร้านปัจจุบัน");
+        }
+        const { text: cleanName } = decodeShopText(String(r.name));
         const amount = Math.round(item.amountSatang);
         if (amount <= 0) continue;
         totalSatang += amount;
 
-        ingredientPurchasesToInsert.push({
-          owner_id: user.id,
-          ingredient_id: item.ingredientId,
-          purchased_at: purchasedAtIso,
-          price_satang: amount,
-          vendor,
-          ...(receiptPath ? { receipt_path: receiptPath } : {}),
-        });
-        expensesToInsert.push({
-          owner_id: user.id,
-          spent_at: purchasedAtIso,
-          category: "วัตถุดิบ",
-          kind: "direct",
-          amount_satang: amount,
-          description: encodeShopText(`ซื้อ${cleanName}`, itemShopId),
-          payee: vendor,
-          payment_method: paymentMethod,
-          ...(receiptPath ? { receipt_path: receiptPath } : {}),
-          ...(notesText ? { notes: notesText } : {}),
+        ingPairs.push({
+          purchase: {
+            owner_id: user.id,
+            ingredient_id: item.ingredientId,
+            purchased_at: purchasedAtIso,
+            price_satang: amount,
+            vendor: encodedPurchaseVendor,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+          },
+          expense: {
+            owner_id: user.id,
+            spent_at: purchasedAtIso,
+            category: "วัตถุดิบ",
+            kind: "direct",
+            amount_satang: amount,
+            description: encodeShopText(`ซื้อ${cleanName}`, shopId),
+            payee: vendor,
+            payment_method: paymentMethod,
+            ...(receiptPath ? { receipt_path: receiptPath } : {}),
+            ...(notesText ? { notes: notesText } : {}),
+          },
         });
       }
+    }
+
+    let validatedPackagingRows: Array<{ item: PackagingItem; input: NonNullable<ItemizedPurchasePayload["packagingItems"]>[number] }> = [];
+    if (packagingInput.length > 0) {
+      const { data: packRows, error: packErr } = await supabase
+        .from("packaging_items")
+        .select("id,name,unit,per_order")
+        .eq("is_active", true);
+      if (packErr) dbError(packErr);
+      const packMap = new Map((packRows as PackagingItem[]).map((p) => [p.id, p]));
+
+      validatedPackagingRows = packagingInput.map((pInput) => {
+        const item = packMap.get(pInput.packagingId);
+        if (!item || !matchesShopText(String(item.name ?? ""), inventoryShopId)) {
+          throw new InputError("รายการบรรจุภัณฑ์ไม่ได้อยู่ในคลังของร้านปัจจุบัน");
+        }
+        return { item, input: pInput };
+      });
     }
 
     for (const extra of extraInput) {
       const amount = Math.round(extra.amountSatang);
       if (amount <= 0) continue;
       totalSatang += amount;
-      expensesToInsert.push({
+      extraExpensesToInsert.push({
         owner_id: user.id,
         spent_at: purchasedAtIso,
         category: extra.category.trim().slice(0, 60),
@@ -723,57 +921,86 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
       });
     }
 
-    if (ingredientPurchasesToInsert.length > 0) {
-      const { error: insertIngErr } = await supabase
-        .from("ingredient_purchases")
-        .insert(ingredientPurchasesToInsert);
-      if (insertIngErr) dbError(insertIngErr);
-    }
+    let ingredientInsertResult = { expenseIds: [] as string[], purchaseIds: [] as string[] };
+    const extraExpenseIds = extraExpensesToInsert.map(() => crypto.randomUUID());
+    const packagingResults: Array<{ expenseId: string | null; purchaseId: string; packagingItemId: string }> = [];
+    const notes: string[] = [];
+    try {
+      if (ingPairs.length > 0) {
+        ingredientInsertResult = await insertIngredientPurchasesWithExpenseLinks(supabase, ingPairs);
+      }
 
-    if (expensesToInsert.length > 0) {
-      const { error: insertExpErr } = await supabase.from("expenses").insert(expensesToInsert);
-      if (insertExpErr) dbError(insertExpErr);
-    }
+      if (extraExpensesToInsert.length > 0) {
+        const { error: insertExpErr } = await supabase
+          .from("expenses")
+          .insert(extraExpensesToInsert.map((row, index) => ({ ...row, id: extraExpenseIds[index] })));
+        if (insertExpErr) dbError(insertExpErr);
+      }
 
-    if (packagingInput.length > 0) {
-      const { data: packRows, error: packErr } = await supabase
-        .from("packaging_items")
-        .select("id,name,unit,per_order")
-        .eq("is_active", true);
-      if (packErr) dbError(packErr);
-      const packMap = new Map((packRows as PackagingItem[]).map((p) => [p.id, p]));
-
-      for (const pInput of packagingInput) {
-        const item = packMap.get(pInput.packagingId);
-        if (!item) continue;
+      for (const { item, input: pInput } of validatedPackagingRows) {
         const packs = Math.round(pInput.packs);
         const totalPackPrice = Math.round(pInput.packPriceSatang * packs);
         const totalPackQty = pInput.perPackQuantity * packs;
         if (packs <= 0 || totalPackPrice <= 0 || totalPackQty <= 0) continue;
         totalSatang += totalPackPrice;
 
-        await recordPackagingPurchase(supabase, user.id, item, {
-          purchasedAt: purchasedAtDate,
-          vendor,
-          packCount: packs,
-          price: totalPackPrice,
-          packQuantity: totalPackQty,
-          receiptPath,
-          paymentMethod,
-          notes: notesText,
-        });
+        const result = await recordPackagingPurchase(
+          supabase,
+          user.id,
+          item,
+          {
+            purchasedAt: purchasedAtDate,
+            vendor,
+            packCount: packs,
+            price: totalPackPrice,
+            packQuantity: totalPackQty,
+            receiptPath,
+            paymentMethod,
+            notes: notesText,
+          },
+          shopId,
+        );
+        packagingResults.push(result);
       }
-    }
 
-    const notes: string[] = [];
-    for (const ingredient of perUnitToRefresh) {
-      notes.push(await refreshPerUnitCost(supabase, ingredient));
+      for (const ingredient of perUnitToRefresh) {
+        notes.push(await refreshPerUnitCost(supabase, ingredient));
+      }
+    } catch (error) {
+      const packagingPurchaseIds = packagingResults.map((row) => row.purchaseId);
+      const packagingExpenseIds = packagingResults
+        .map((row) => row.expenseId)
+        .filter((value): value is string => Boolean(value));
+      if (packagingPurchaseIds.length > 0) {
+        await supabase.from("packaging_purchases").delete().in("id", packagingPurchaseIds);
+      }
+      if (ingredientInsertResult.purchaseIds.length > 0) {
+        await supabase.from("ingredient_purchases").delete().in("id", ingredientInsertResult.purchaseIds);
+      }
+      const allExpenseIds = [
+        ...packagingExpenseIds,
+        ...ingredientInsertResult.expenseIds,
+        ...extraExpenseIds,
+      ];
+      if (allExpenseIds.length > 0) await supabase.from("expenses").delete().in("id", allExpenseIds);
+      for (const packagingItemId of new Set(packagingResults.map((row) => row.packagingItemId))) {
+        await refreshPackagingCost(supabase, packagingItemId).catch(() => undefined);
+      }
+      for (const ingredient of perUnitToRefresh) {
+        await refreshPerUnitCost(supabase, ingredient).catch(() => undefined);
+      }
+      throw error;
     }
 
     revalidateCosts();
 
     return {
       ok: true,
+      createdExpenseIds: [
+        ...ingredientInsertResult.expenseIds,
+        ...extraExpenseIds,
+        ...packagingResults.map((row) => row.expenseId).filter((value): value is string => Boolean(value)),
+      ],
       message: [
         `บันทึก ${totalItemsCount} รายการ รวม ${formatBaht(totalSatang)} เรียบร้อยแล้ว`,
         ...notes,
@@ -784,9 +1011,17 @@ export async function saveItemizedExpenseAction(payload: ItemizedPurchasePayload
 
 
 export async function toggleIngredientActive(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, inventoryShopId }) => {
     const ingredientId = id(form);
     const active = form.get("is_active") === "true";
+    const { data: ingRow } = await supabase
+      .from("ingredients")
+      .select("id,name")
+      .eq("id", ingredientId)
+      .maybeSingle();
+    if (!ingRow || !matchesShopText(String((ingRow as Row).name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
     const { error } = await supabase
       .from("ingredients")
       .update({ is_active: active, updated_at: new Date().toISOString() })
@@ -804,15 +1039,18 @@ export async function toggleIngredientActive(form: FormData): Promise<ActionStat
  * 3) Deletes the ingredient row itself.
  */
 export async function deleteIngredient(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, inventoryShopId }) => {
     const ingredientId = id(form);
     const { data: ingRow } = await supabase
       .from("ingredients")
       .select("id,name")
       .eq("id", ingredientId)
       .maybeSingle();
-    const ingName = ingRow ? String((ingRow as Row).name ?? "") : "";
-    const { shopId: ingShopId, text: cleanIngName } = decodeShopText(ingName);
+    if (!ingRow || !matchesShopText(String((ingRow as Row).name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
+    const ingName = String((ingRow as Row).name ?? "");
+    const { text: cleanIngName } = decodeShopText(ingName);
 
     const affectedMenuIds = await menusUsing(supabase, "ingredient_id", ingredientId);
     if (affectedMenuIds.length > 0) {
@@ -823,33 +1061,59 @@ export async function deleteIngredient(form: FormData): Promise<ActionState> {
       if (recipeDelErr) dbError(recipeDelErr);
     }
 
-    const { data: purchases } = await supabase
+    const { data: initialPurchases, error: purReadErr } = await supabase
       .from("ingredient_purchases")
-      .select("id,purchased_at,price_satang")
+      .select("id,purchased_at,price_satang,vendor,expense_id")
       .eq("ingredient_id", ingredientId);
+    let purchases = initialPurchases;
+    if (
+      purReadErr &&
+      (purReadErr.code === "42703" || purReadErr.code === "PGRST204" || String(purReadErr.message ?? "").includes("expense_id"))
+    ) {
+      const fallback = await supabase
+        .from("ingredient_purchases")
+        .select("id,purchased_at,price_satang,vendor")
+        .eq("ingredient_id", ingredientId);
+      purchases = fallback.data as typeof purchases;
+    }
 
     if (purchases && purchases.length > 0) {
-      if (cleanIngName) {
-        const expPrefix = encodeShopText(`ซื้อ${cleanIngName}`, ingShopId);
-        for (const p of purchases as Row[]) {
+      const directExpenseIds = (purchases as Row[])
+        .map((p) => (p.expense_id ? String(p.expense_id) : ""))
+        .filter(Boolean);
+      const fallbackPurchases = (purchases as Row[]).filter((p) => !p.expense_id);
+
+      const { error: purchaseDelErr } = await supabase
+        .from("ingredient_purchases")
+        .delete()
+        .eq("ingredient_id", ingredientId);
+      if (purchaseDelErr) dbError(purchaseDelErr);
+
+      if (directExpenseIds.length > 0) {
+        await supabase.from("expenses").delete().in("id", directExpenseIds);
+      }
+
+      if (cleanIngName && fallbackPurchases.length > 0) {
+        for (const p of fallbackPurchases) {
           const { data: matchedExp } = await supabase
             .from("expenses")
             .select("id,description")
             .eq("category", "วัตถุดิบ")
             .eq("spent_at", String(p.purchased_at))
             .eq("amount_satang", Number(p.price_satang))
-            .ilike("description", `${expPrefix}%`)
-            .limit(1);
-          if (matchedExp && matchedExp.length > 0) {
-            await supabase.from("expenses").delete().eq("id", String((matchedExp[0] as Row).id));
+            .ilike("description", `%ซื้อ${cleanIngName}%`);
+          const targetExp = ((matchedExp ?? []) as Row[]).find((exp) => {
+            const expShopId = decodeShopText(String(exp.description ?? "")).shopId;
+            return matchesPurchaseShop(
+              { vendor: (p.vendor as string | null) ?? null, ingredientName: ingName },
+              expShopId,
+            );
+          });
+          if (targetExp) {
+            await supabase.from("expenses").delete().eq("id", String(targetExp.id));
           }
         }
       }
-      const { error: purchaseDelErr } = await supabase
-        .from("ingredient_purchases")
-        .delete()
-        .eq("ingredient_id", ingredientId);
-      if (purchaseDelErr) dbError(purchaseDelErr);
     }
 
     const { error } = await supabase.from("ingredients").delete().eq("id", ingredientId);
@@ -871,9 +1135,17 @@ export async function deleteIngredient(form: FormData): Promise<ActionState> {
 }
 
 export async function togglePackagingActive(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase }) => {
+  return runAction(async ({ supabase, inventoryShopId }) => {
     const packagingId = id(form);
     const active = form.get("is_active") === "true";
+    const { data: packRow } = await supabase
+      .from("packaging_items")
+      .select("id,name")
+      .eq("id", packagingId)
+      .maybeSingle();
+    if (!packRow || !matchesShopText(String((packRow as Row).name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
     const { error } = await supabase
       .from("packaging_items")
       .update({ is_active: active, updated_at: new Date().toISOString() })
@@ -892,8 +1164,16 @@ export async function togglePackagingActive(form: FormData): Promise<ActionState
  * 4) Deletes the packaging item row and cleans up its default pack setting.
  */
 export async function deletePackaging(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, inventoryShopId }) => {
     const packagingId = id(form);
+    const { data: packRow } = await supabase
+      .from("packaging_items")
+      .select("id,name")
+      .eq("id", packagingId)
+      .maybeSingle();
+    if (!packRow || !matchesShopText(String((packRow as Row).name ?? ""), inventoryShopId)) {
+      throw new InputError("ไม่พบรายการในคลังวัตถุดิบของร้านปัจจุบัน");
+    }
     const affectedMenuIds = await menusUsing(supabase, "packaging_item_id", packagingId);
     if (affectedMenuIds.length > 0) {
       const { error: recipeDelErr } = await supabase
@@ -903,26 +1183,68 @@ export async function deletePackaging(form: FormData): Promise<ActionState> {
       if (recipeDelErr) dbError(recipeDelErr);
     }
 
-    const { data: packPurchases } = await supabase
+    const { data: initialPackPurchases, error: packPurReadErr } = await supabase
       .from("packaging_purchases")
-      .select("id,expense_id")
+      .select("id,expense_id,purchased_at,price_satang,vendor")
       .eq("packaging_item_id", packagingId);
+    let packPurchases = initialPackPurchases;
+    if (
+      packPurReadErr &&
+      (packPurReadErr.code === "42703" || packPurReadErr.code === "PGRST204" || String(packPurReadErr.message ?? "").includes("expense_id"))
+    ) {
+      const fallback = await supabase
+        .from("packaging_purchases")
+        .select("id,purchased_at,price_satang,vendor")
+        .eq("packaging_item_id", packagingId);
+      packPurchases = fallback.data as typeof packPurchases;
+    }
 
     if (packPurchases && packPurchases.length > 0) {
-      const expenseIds = (packPurchases as Row[])
+      const purchaseRows = packPurchases as Row[];
+      const expenseIds = new Set(purchaseRows
         .map((p) => (p.expense_id ? String(p.expense_id) : ""))
-        .filter(Boolean);
+        .filter(Boolean));
+      const cleanName = stripShopPrefix(String((packRow as Row).name ?? ""));
+      for (const purchase of purchaseRows.filter((row) => !row.expense_id)) {
+        const rawVendor = String(purchase.vendor ?? "");
+        const purchaseShopId = rawVendor.startsWith("[s:")
+          ? decodeShopText(rawVendor).shopId
+          : decodeShopText(String((packRow as Row).name ?? "")).shopId;
+        const { data: legacyExpenses, error: legacyExpenseError } = await supabase
+          .from("expenses")
+          .select("id,description")
+          .eq("owner_id", user.id)
+          .eq("category", PACKAGING_EXPENSE_CATEGORY)
+          .eq("spent_at", String(purchase.purchased_at))
+          .eq("amount_satang", Number(purchase.price_satang))
+          .order("created_at", { ascending: true });
+        if (legacyExpenseError) dbError(legacyExpenseError);
+        const matched = ((legacyExpenses ?? []) as Row[]).find((expense) => {
+          const decoded = decodeShopText(String(expense.description ?? ""));
+          return (
+            decoded.shopId === purchaseShopId &&
+            (decoded.text === `ซื้อ${cleanName}` || decoded.text.startsWith(`ซื้อ${cleanName} `)) &&
+            !expenseIds.has(String(expense.id))
+          );
+        });
+        if (matched) expenseIds.add(String(matched.id));
+      }
       const { error: packPurchaseDelErr } = await supabase
         .from("packaging_purchases")
         .delete()
         .eq("packaging_item_id", packagingId);
       if (packPurchaseDelErr) dbError(packPurchaseDelErr);
-      if (expenseIds.length > 0) {
-        await supabase.from("expenses").delete().in("id", expenseIds);
+      if (expenseIds.size > 0) {
+        const { error: expenseDeleteError } = await supabase.from("expenses").delete().in("id", Array.from(expenseIds));
+        if (expenseDeleteError) dbError(expenseDeleteError);
       }
     }
 
-    await supabase.from("sale_packaging").delete().eq("packaging_item_id", packagingId);
+    const { error: salePackagingDeleteError } = await supabase
+      .from("sale_packaging")
+      .delete()
+      .eq("packaging_item_id", packagingId);
+    if (salePackagingDeleteError) dbError(salePackagingDeleteError);
 
     const { error } = await supabase.from("packaging_items").delete().eq("id", packagingId);
     if (error) dbError(error);

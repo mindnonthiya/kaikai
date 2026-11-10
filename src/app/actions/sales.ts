@@ -1,9 +1,24 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionState } from "@/lib/action-state";
 import { invalidateQueryCache } from "@/lib/data/queries";
+import { matchesSaleShop } from "@/lib/shop-scope";
 import { InputError, dbError, id, runAction } from "@/lib/server-action";
+
+async function assertSaleInActiveShop(supabase: SupabaseClient, saleId: string, shopId: string) {
+  const { data: sale, error } = await supabase
+    .from("sales")
+    .select("id,notes,sale_items(menu_name_snapshot)")
+    .eq("id", saleId)
+    .maybeSingle();
+  if (error) dbError(error);
+  if (!sale || !matchesSaleShop(sale, shopId)) {
+    throw new InputError("ไม่พบบิลในร้านปัจจุบัน");
+  }
+  return sale;
+}
 
 /** Invalidates server-side sales & pooled-rate cache after client-side RPC sale creation. */
 export async function revalidateSalesAction(): Promise<void> {
@@ -17,8 +32,9 @@ export async function revalidateSalesAction(): Promise<void> {
 
 /** Cancels a confirmed sale. The row is kept (with cancelled_at) so history and audit stay intact. */
 export async function cancelSale(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const saleId = id(form);
+    await assertSaleInActiveShop(supabase, saleId, shopId);
     const now = new Date().toISOString();
     const { data, error } = await supabase.from("sales")
       .update({ status: "cancelled", cancelled_at: now, updated_at: now })
@@ -61,8 +77,9 @@ export async function cancelSale(form: FormData): Promise<ActionState> {
 
 /** Re-labels a sale's cash/other payments as transfer — for bills recorded with the wrong method. */
 export async function markSalePaidByTransfer(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const saleId = id(form);
+    await assertSaleInActiveShop(supabase, saleId, shopId);
     const { data, error } = await supabase.from("payments")
       .update({ method: "transfer" })
       .eq("sale_id", saleId).neq("method", "transfer")
@@ -80,7 +97,7 @@ export async function markSalePaidByTransfer(form: FormData): Promise<ActionStat
 
 /** Marks an unpaid or partially paid sale as fully paid by recording the remaining customer-due balance. */
 export async function markSalePaid(form: FormData): Promise<ActionState> {
-  return runAction(async ({ supabase, user }) => {
+  return runAction(async ({ supabase, user, shopId }) => {
     const saleId = id(form);
     const rawMethod = String(form.get("method") ?? "").trim() || "transfer";
     const method = rawMethod === "cash" || rawMethod === "other" ? rawMethod : "transfer";
@@ -88,12 +105,15 @@ export async function markSalePaid(form: FormData): Promise<ActionState> {
 
     const { data: sale, error: saleErr } = await supabase
       .from("sales")
-      .select("id, net_revenue_satang, payment_fee_satang, payment_status, status, payments(amount_satang)")
+      .select("id, notes, net_revenue_satang, payment_fee_satang, payment_status, status, payments(amount_satang), sale_items(menu_name_snapshot)")
       .eq("id", saleId)
       .maybeSingle();
     if (saleErr) dbError(saleErr);
     if (!sale || sale.status !== "confirmed") {
       throw new InputError("ไม่พบบิลที่ต้องการรับชำระ");
+    }
+    if (!matchesSaleShop(sale, shopId)) {
+      throw new InputError("ไม่พบบิลในร้านปัจจุบัน");
     }
     if (sale.payment_status === "paid") {
       throw new InputError("บิลนี้รับชำระครบแล้ว");
