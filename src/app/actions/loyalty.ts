@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import type { ActionState } from "@/lib/action-state";
 import { invalidateQueryCache } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
+import { processPendingLoyaltyPushJobs } from "@/lib/line-messaging";
 import {
   LOYALTY_SETTINGS_KEY,
   type LoyaltyConfig,
@@ -238,6 +240,24 @@ export async function fetchLoyaltyAdminData(
       sentAt: row.sent_at ? String(row.sent_at) : null,
     }),
   );
+
+  const hasPendingPush = recentPushJobs.some(
+    (j) => j.status === "pending" || j.status === "processing",
+  );
+  if (hasPendingPush && config.channelAccessToken) {
+    after(async () => {
+      try {
+        const bgSupabase = await createSupabaseServerClient();
+        await processPendingLoyaltyPushJobs(
+          bgSupabase,
+          config.shopSecret,
+          config.channelAccessToken,
+        );
+      } catch {
+        // Ignore background errors
+      }
+    });
+  }
 
   return {
     config,

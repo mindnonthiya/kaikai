@@ -4,7 +4,17 @@ import {
   getLegacyLoyaltyServerKeyHash,
   getLoyaltyServerKeyHash,
 } from "@/lib/loyalty-crypto";
-import type { LoyaltyNotifyMode } from "@/lib/loyalty";
+import {
+  type LoyaltyNotifyMode,
+  buildCouponRedeemFlexMessage,
+  buildCouponRedeemPlainText,
+  buildLoyaltyCardUrl,
+  buildStampAwardFlexMessage,
+  buildStampAwardPlainText,
+  formatThaiDateTime,
+  formatValidTillDate,
+  resolveTrustedAppOrigin,
+} from "@/lib/loyalty";
 
 export interface VerifiedLineProfile {
   ok: true;
@@ -453,6 +463,92 @@ export async function enqueueLoyaltyPushNotification(
   return { queued: false };
 }
 
+function resolvePushJobMessages(
+  job: {
+    eventType?: string;
+    messages?: unknown;
+    fallbackText?: string | null;
+  },
+  shopSecret: string,
+  trustedOrigin?: string,
+): { messages: Array<Record<string, unknown>>; fallbackText?: string } {
+  const origin = resolveTrustedAppOrigin(trustedOrigin ?? "https://kaikai.vercel.app");
+  if (Array.isArray(job.messages) && job.messages.length > 0) {
+    return {
+      messages: job.messages as Array<Record<string, unknown>>,
+      fallbackText: job.fallbackText ? String(job.fallbackText) : undefined,
+    };
+  }
+
+  // Hydrate Flex Message from atomic SQL outbox metadata (`autoBuild: true`)
+  if (job.messages && typeof job.messages === "object" && !Array.isArray(job.messages)) {
+    const meta = job.messages as Record<string, unknown>;
+    const cardTitle = String(meta.cardTitle ?? "GaiTomNamPla 🐔");
+    const rewardTitle = String(meta.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
+    const displayName = String(meta.displayName ?? "ลูกค้า LINE");
+
+    if (job.eventType === "coupon_redeem") {
+      const couponCode = String(meta.couponCode ?? "GT-COUPON");
+      const claimedAtText = formatThaiDateTime(
+        meta.claimedAt ? String(meta.claimedAt) : new Date().toISOString(),
+      );
+      const flexMessage = buildCouponRedeemFlexMessage({
+        cardTitle,
+        rewardTitle,
+        couponCode,
+        displayName,
+        claimedAtText,
+      });
+      const plainText = buildCouponRedeemPlainText({
+        cardTitle,
+        rewardTitle,
+        couponCode,
+        displayName,
+        claimedAtText,
+      });
+      return { messages: [flexMessage], fallbackText: plainText };
+    }
+
+    const pointsAdded = Number(meta.pointsAdded ?? 1);
+    const newStamps = Number(meta.newStamps ?? 0);
+    const stampsPerReward = Number(meta.stampsPerReward ?? 10);
+    const rewardsUnlocked = Number(meta.rewardsUnlocked ?? 0);
+    const validTill = formatValidTillDate(meta.expiresAt ? String(meta.expiresAt) : null);
+    const liffId = String(meta.liffId ?? "").trim();
+    const resolvedSecret = String(meta.shopSecret ?? shopSecret).trim();
+    const cardUrl = buildLoyaltyCardUrl(origin, resolvedSecret, liffId);
+
+    const flexMessage = buildStampAwardFlexMessage({
+      cardTitle,
+      rewardTitle,
+      displayName,
+      pointsAdded,
+      newStamps,
+      stampsPerReward,
+      rewardsUnlocked,
+      validTill,
+      cardUrl,
+    });
+    const plainText = buildStampAwardPlainText({
+      cardTitle,
+      rewardTitle,
+      displayName,
+      pointsAdded,
+      newStamps,
+      stampsPerReward,
+      rewardsUnlocked,
+      validTill,
+    });
+    return { messages: [flexMessage], fallbackText: plainText };
+  }
+
+  const fb = job.fallbackText ? String(job.fallbackText).trim() : "";
+  return {
+    messages: fb ? [{ type: "text", text: fb }] : [],
+    fallbackText: fb || undefined,
+  };
+}
+
 export async function processPendingLoyaltyPushJobs(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: { rpc: (fn: string, args: Record<string, unknown>) => any },
@@ -463,6 +559,8 @@ export async function processPendingLoyaltyPushJobs(
     messages: Array<Record<string, unknown>>;
     fallbackPlainText?: string;
   },
+  trustedOrigin?: string,
+  followUpPass = 0,
 ): Promise<void> {
   const token = decryptLoyaltySecret(channelAccessToken).trim();
   const primaryHash = getLoyaltyServerKeyHash();
@@ -495,17 +593,18 @@ export async function processPendingLoyaltyPushJobs(
   const jobs = jobsData as Array<{
     id?: string;
     lineUserId?: string;
-    messages?: Array<Record<string, unknown>>;
+    eventType?: string;
+    messages?: unknown;
     fallbackText?: string | null;
     attempts?: number;
     maxAttempts?: number;
   }>;
 
+  let scheduledRetryDelaySec = 0;
+
   for (const job of jobs) {
     const jobId = String(job.id ?? "");
     const toUserId = String(job.lineUserId ?? "");
-    const msgs = Array.isArray(job.messages) ? job.messages : [];
-    const fallbackText = job.fallbackText ? String(job.fallbackText) : undefined;
     const attempts = Number(job.attempts ?? 1);
     const maxAttempts = Number(job.maxAttempts ?? 3);
 
@@ -524,11 +623,13 @@ export async function processPendingLoyaltyPushJobs(
       continue;
     }
 
+    const hydrated = resolvePushJobMessages(job, shopSecret, trustedOrigin);
+
     const pushRes = await sendLinePushMessageWithRetry(
       token,
       toUserId,
-      msgs,
-      fallbackText,
+      hydrated.messages,
+      hydrated.fallbackText,
       2,
     );
 
@@ -543,6 +644,8 @@ export async function processPendingLoyaltyPushJobs(
         p_retry_delay_seconds: 0,
       });
     } else if (pushRes.transient && attempts < maxAttempts) {
+      const retrySec = 3;
+      scheduledRetryDelaySec = Math.max(scheduledRetryDelaySec, retrySec);
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
@@ -550,7 +653,7 @@ export async function processPendingLoyaltyPushJobs(
         p_legacy_key_hash: legacyHash,
         p_status: "retry",
         p_error: pushRes.reason ?? "TRANSIENT_ERROR",
-        p_retry_delay_seconds: attempts * 15,
+        p_retry_delay_seconds: retrySec,
       });
     } else {
       await supabase.rpc("complete_loyalty_push_job", {
@@ -564,4 +667,145 @@ export async function processPendingLoyaltyPushJobs(
       });
     }
   }
+
+  // Self-retry in the same background worker without waiting for the next customer scan
+  if (scheduledRetryDelaySec > 0 && followUpPass < 2) {
+    await new Promise((resolve) => setTimeout(resolve, (scheduledRetryDelaySec + 1) * 1000));
+    await processPendingLoyaltyPushJobs(
+      supabase,
+      shopSecret,
+      channelAccessToken,
+      undefined,
+      trustedOrigin,
+      followUpPass + 1,
+    );
+  }
+}
+
+export async function processGlobalDueLoyaltyPushJobs(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: { rpc: (fn: string, args: Record<string, unknown>) => any },
+  trustedOrigin?: string,
+): Promise<{
+  ok: boolean;
+  processed: number;
+  sent: number;
+  retried: number;
+  failed: number;
+  housekeeping?: Record<string, unknown>;
+}> {
+  const primaryHash = getLoyaltyServerKeyHash();
+  const legacyHash = getLegacyLoyaltyServerKeyHash();
+
+  if (!primaryHash) {
+    return { ok: false, processed: 0, sent: 0, retried: 0, failed: 0 };
+  }
+
+  const { data, error } = await supabase.rpc("claim_due_loyalty_push_jobs_batch", {
+    p_server_key_hash: primaryHash,
+    p_legacy_key_hash: legacyHash,
+    p_limit: 15,
+  });
+
+  if (error || !data || !(data as Record<string, unknown>).ok) {
+    return { ok: false, processed: 0, sent: 0, retried: 0, failed: 0 };
+  }
+
+  const payload = data as {
+    jobs?: Array<{
+      id?: string;
+      shopSecret?: string;
+      channelAccessToken?: string;
+      lineUserId?: string;
+      eventType?: string;
+      messages?: unknown;
+      fallbackText?: string | null;
+      attempts?: number;
+      maxAttempts?: number;
+    }>;
+    housekeeping?: Record<string, unknown>;
+  };
+
+  const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+  let sent = 0;
+  let retried = 0;
+  let failed = 0;
+
+  for (const job of jobs) {
+    const jobId = String(job.id ?? "");
+    const shopSecret = String(job.shopSecret ?? "");
+    const token = decryptLoyaltySecret(String(job.channelAccessToken ?? "")).trim();
+    const toUserId = String(job.lineUserId ?? "");
+    const attempts = Number(job.attempts ?? 1);
+    const maxAttempts = Number(job.maxAttempts ?? 3);
+
+    if (!jobId || !shopSecret) continue;
+
+    if (!token) {
+      failed += 1;
+      await supabase.rpc("complete_loyalty_push_job", {
+        p_job_id: jobId,
+        p_shop_secret: shopSecret,
+        p_server_key_hash: primaryHash,
+        p_legacy_key_hash: legacyHash,
+        p_status: "failed_auth",
+        p_error: "MISSING_CHANNEL_ACCESS_TOKEN",
+        p_retry_delay_seconds: 0,
+      });
+      continue;
+    }
+
+    const hydrated = resolvePushJobMessages(job, shopSecret, trustedOrigin);
+    const pushRes = await sendLinePushMessageWithRetry(
+      token,
+      toUserId,
+      hydrated.messages,
+      hydrated.fallbackText,
+      2,
+    );
+
+    if (pushRes.ok) {
+      sent += 1;
+      await supabase.rpc("complete_loyalty_push_job", {
+        p_job_id: jobId,
+        p_shop_secret: shopSecret,
+        p_server_key_hash: primaryHash,
+        p_legacy_key_hash: legacyHash,
+        p_status: "sent",
+        p_error: null,
+        p_retry_delay_seconds: 0,
+      });
+    } else if (pushRes.transient && attempts < maxAttempts) {
+      retried += 1;
+      await supabase.rpc("complete_loyalty_push_job", {
+        p_job_id: jobId,
+        p_shop_secret: shopSecret,
+        p_server_key_hash: primaryHash,
+        p_legacy_key_hash: legacyHash,
+        p_status: "retry",
+        p_error: pushRes.reason ?? "TRANSIENT_ERROR",
+        p_retry_delay_seconds: attempts * 15,
+      });
+    } else {
+      failed += 1;
+      await supabase.rpc("complete_loyalty_push_job", {
+        p_job_id: jobId,
+        p_shop_secret: shopSecret,
+        p_server_key_hash: primaryHash,
+        p_legacy_key_hash: legacyHash,
+        p_status: classifyPushFailureStatus(pushRes.reason),
+        p_error: pushRes.reason ?? "PUSH_FAILED",
+        p_retry_delay_seconds: 0,
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    processed: jobs.length,
+    sent,
+    retried,
+    failed,
+    housekeeping: payload.housekeeping,
+  };
 }
