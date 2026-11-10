@@ -71,8 +71,9 @@ export function hasLoyaltyServerSecret(): boolean {
 }
 
 export function resolveCronSecret(): string {
-  const envCron = (process.env.CRON_SECRET ?? "").trim();
-  if (envCron) return envCron;
+  if (process.env.CRON_SECRET !== undefined) {
+    return process.env.CRON_SECRET.trim();
+  }
   return readEnvFileVar(["CRON_SECRET"]);
 }
 

@@ -248,11 +248,29 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
   });
 
   it("enforces fail-closed CRON_SECRET verification and multi-hour retry backoff with X-Line-Retry-Key idempotency", async () => {
-    const cronSecret = resolveCronSecret();
-    expect(cronSecret.length).toBeGreaterThanOrEqual(16);
-    expect(verifyCronAuthorization(null)).toEqual({ ok: false, configured: true });
-    expect(verifyCronAuthorization("Bearer wrong_secret")).toEqual({ ok: false, configured: true });
-    expect(verifyCronAuthorization(`Bearer ${cronSecret}`)).toEqual({ ok: true, configured: true });
+    const previousCronSecret = process.env.CRON_SECRET;
+    try {
+      // 1) Unconfigured CRON_SECRET must fail closed
+      process.env.CRON_SECRET = "";
+      expect(resolveCronSecret()).toBe("");
+      expect(verifyCronAuthorization(null)).toEqual({ ok: false, configured: false });
+      expect(verifyCronAuthorization("Bearer anything")).toEqual({ ok: false, configured: false });
+
+      // 2) Configured CRON_SECRET (>= 16 chars) must verify Bearer token accurately
+      const testSecret = "cron_test_secret_1234567890abcdef";
+      process.env.CRON_SECRET = testSecret;
+      const cronSecret = resolveCronSecret();
+      expect(cronSecret.length).toBeGreaterThanOrEqual(16);
+      expect(verifyCronAuthorization(null)).toEqual({ ok: false, configured: true });
+      expect(verifyCronAuthorization("Bearer wrong_secret")).toEqual({ ok: false, configured: true });
+      expect(verifyCronAuthorization(`Bearer ${cronSecret}`)).toEqual({ ok: true, configured: true });
+    } finally {
+      if (previousCronSecret === undefined) {
+        delete process.env.CRON_SECRET;
+      } else {
+        process.env.CRON_SECRET = previousCronSecret;
+      }
+    }
 
     // Multi-stage backoff schedule (1m -> 5m -> 15m -> 1h -> 3h)
     expect(computePushRetryBackoffSeconds(1)).toBe(60);
