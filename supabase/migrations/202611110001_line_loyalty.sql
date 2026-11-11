@@ -107,6 +107,16 @@ create index if not exists settings_line_loyalty_webhook_idx
   on public.settings ((value->>'webhookSecret'))
   where key = 'line_loyalty' or key like 's:%:line_loyalty';
 
+create index if not exists settings_line_loyalty_server_key_idx
+  on public.settings ((value->>'serverKeyHash'))
+  where key = 'line_loyalty' or key like 's:%:line_loyalty';
+
+create index if not exists loyalty_push_queue_created_at_idx
+  on public.loyalty_push_queue(created_at);
+
+create index if not exists loyalty_logs_created_at_idx
+  on public.loyalty_logs(created_at);
+
 alter table public.loyalty_members enable row level security;
 alter table public.loyalty_coupons enable row level security;
 alter table public.loyalty_logs enable row level security;
@@ -1294,7 +1304,25 @@ declare
   v_housekeeping jsonb;
 begin
   if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
-    return jsonb_build_object('ok', false, 'jobs', '[]'::jsonb);
+    return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY', 'jobs', '[]'::jsonb);
+  end if;
+
+  -- Strictly fail-closed: verify serverKeyHash against settings BEFORE running housekeeping or claiming jobs
+  if not exists (
+    select 1
+    from public.settings s
+    where (s.key = 'line_loyalty' or s.key like 's:%:line_loyalty')
+      and trim(coalesce(s.value->>'serverKeyHash', '')) <> ''
+      and (
+        trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_server_key_hash)
+        or (
+          p_legacy_key_hash is not null
+          and length(trim(p_legacy_key_hash)) >= 32
+          and trim(coalesce(s.value->>'serverKeyHash', '')) = trim(p_legacy_key_hash)
+        )
+      )
+  ) then
+    return jsonb_build_object('ok', false, 'code', 'UNAUTHORIZED_SERVER_KEY', 'jobs', '[]'::jsonb);
   end if;
 
   v_housekeeping := public.run_loyalty_housekeeping(null);
@@ -1633,8 +1661,7 @@ grant execute on function public.enqueue_loyalty_push_job(text, text, text, text
 revoke all on function public.claim_pending_loyalty_push_jobs(text, text, text, integer) from public;
 grant execute on function public.claim_pending_loyalty_push_jobs(text, text, text, integer) to anon, authenticated;
 
-revoke all on function public.run_loyalty_housekeeping(uuid) from public;
-grant execute on function public.run_loyalty_housekeeping(uuid) to authenticated;
+revoke all on function public.run_loyalty_housekeeping(uuid) from public, anon, authenticated;
 
 revoke all on function public.claim_due_loyalty_push_jobs_batch(text, text, integer) from public;
 grant execute on function public.claim_due_loyalty_push_jobs_batch(text, text, integer) to anon, authenticated;

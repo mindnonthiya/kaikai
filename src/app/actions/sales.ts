@@ -23,6 +23,8 @@ async function assertSaleInActiveShop(supabase: SupabaseClient, saleId: string, 
 /** Invalidates server-side sales & pooled-rate cache after client-side RPC sale creation. */
 export async function revalidateSalesAction(): Promise<void> {
   invalidateQueryCache("pooled_rate");
+  invalidateQueryCache("sales_win");
+  invalidateQueryCache("sales_superset");
   invalidateQueryCache("all_time");
   revalidatePath("/sales");
   revalidatePath("/dashboard");
@@ -66,7 +68,9 @@ export async function cancelSale(form: FormData): Promise<ActionState> {
 
     await supabase.from("audit_logs").insert({ owner_id: user.id, entity_type: "sale", entity_id: saleId, action: "cancelled", new_data: { cancelled_at: now } });
     invalidateQueryCache("pooled_rate");
-    invalidateQueryCache("all_time");
+    invalidateQueryCache("sales_win");
+    invalidateQueryCache("sales_superset");
+  invalidateQueryCache("all_time");
     revalidatePath("/sales");
     revalidatePath("/dashboard");
     revalidatePath("/reports");
@@ -87,6 +91,9 @@ export async function markSalePaidByTransfer(form: FormData): Promise<ActionStat
     if (error) dbError(error);
     if (!data?.length) throw new InputError("บิลนี้เป็นเงินโอนอยู่แล้ว");
     await supabase.from("audit_logs").insert({ owner_id: user.id, entity_type: "sale", entity_id: saleId, action: "payment_method_changed", new_data: { method: "transfer" } });
+    invalidateQueryCache("sales_win");
+    invalidateQueryCache("sales_superset");
+    invalidateQueryCache("all_time");
     revalidatePath("/sales");
     revalidatePath("/dashboard");
     revalidatePath("/reports");
@@ -149,7 +156,9 @@ export async function markSalePaid(form: FormData): Promise<ActionState> {
       new_data: { method, amount_satang: remaining, settled_at: now },
     });
 
-    invalidateQueryCache("all_time");
+    invalidateQueryCache("sales_win");
+    invalidateQueryCache("sales_superset");
+  invalidateQueryCache("all_time");
     revalidatePath("/sales");
     revalidatePath("/dashboard");
     revalidatePath("/reports");

@@ -12,6 +12,7 @@ import { customerAmountDue, formatBaht } from "@/lib/money";
 import { formatThaiShortDate, formatTime, parseRange, resolveRange } from "@/lib/time";
 
 const RANGES = ["today", "7d", "month", "last-month", "all"] as const;
+const SALES_PAGE_SIZE = 50;
 
 function statusBadge(sale: SaleRecord) {
   if (sale.status === "cancelled") return <span className="status muted">ยกเลิกแล้ว</span>;
@@ -19,10 +20,11 @@ function statusBadge(sale: SaleRecord) {
   return <span className={`status ${sale.paymentStatus === "paid" ? "success" : "pending"}`}>{PAYMENT_STATUS_LABELS[sale.paymentStatus]}</span>;
 }
 
-export default async function SalesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string }> }) {
+export default async function SalesPage({ searchParams }: { searchParams: Promise<{ range?: string; q?: string; page?: string }> }) {
   const params = await searchParams;
   const key = parseRange(params.range, [...RANGES], "7d");
   const q = (params.q ?? "").trim();
+  const requestedPage = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
   const saleSettings = await fetchSaleSettings();
   const range = resolveRange(key, new Date(), saleSettings.dayStartHour);
   const all = await fetchSales(range.start, range.end);
@@ -32,6 +34,18 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
     ? all.filter((s) => String(s.saleNumber) === needle || (s.customerName ?? "").toLowerCase().includes(needle) || s.items.some((i) => i.name.toLowerCase().includes(needle)))
     : all;
   const total = summarize(sales, []);
+
+  const totalPages = Math.max(1, Math.ceil(sales.length / SALES_PAGE_SIZE));
+  const currentPage = Math.min(requestedPage, totalPages);
+  const pagedSales = sales.slice((currentPage - 1) * SALES_PAGE_SIZE, currentPage * SALES_PAGE_SIZE);
+
+  function buildPageHref(page: number) {
+    const query = new URLSearchParams();
+    query.set("range", key);
+    if (q) query.set("q", q);
+    if (page > 1) query.set("page", String(page));
+    return `/sales?${query.toString()}`;
+  }
 
   return <>
     <PageTitle eyebrow="รายการทั้งหมด" title="ประวัติการขาย" description="ตรวจสอบรายการ สถานะการรับเงิน และยกเลิกรายการที่บันทึกผิด" action={<Link className="primary-button" href="/sales/new">+ เปิดบิล</Link>} />
@@ -63,6 +77,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
           {total.saleCount.toLocaleString("th-TH")} รายการ · ยอดขาย {formatBaht(total.revenue)} · กำไรขั้นต้น {formatBaht(total.grossProfit)}
           {total.tipIncome > 0 ? ` · ทิปรวม +${formatBaht(total.tipIncome)}` : ""}
           {sales.length !== total.saleCount ? ` · ยกเลิก ${sales.length - total.saleCount} รายการ` : ""}
+          {totalPages > 1 ? ` · แสดงหน้า ${currentPage}/${totalPages}` : ""}
         </span>
         <ActionButton
           action={syncHistoricalSalesCosts}
@@ -75,7 +90,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
       <table className="data-table">
         <thead><tr><th>เวลา / เลขที่</th><th>ลูกค้า</th><th>รายการ</th><th>ชำระด้วย / สลิป</th><th>สถานะ</th><th className="num">ยอดรวม</th><th className="num">กำไรขั้นต้น</th><th /></tr></thead>
         <tbody>
-          {sales.map((sale) => <tr key={sale.id} className={sale.status === "cancelled" ? "row-muted" : undefined}>
+          {pagedSales.map((sale) => <tr key={sale.id} className={sale.status === "cancelled" ? "row-muted" : undefined}>
             <td><strong>{formatTime(sale.soldAt)}</strong> <small className="muted">{formatThaiShortDate(sale.soldAt)}</small><br />#{sale.saleNumber}</td>
             <td>{sale.customerName ?? "ลูกค้าทั่วไป"}</td>
             <td>{sale.items.map((i) => `${i.name} ×${i.quantity}`).join(" · ")}
@@ -126,6 +141,49 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
           {!sales.length && <tr><td colSpan={8}><div className="empty-state">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีรายการขายในช่วงนี้"}</div></td></tr>}
         </tbody>
       </table>
+      {totalPages > 1 && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "10px",
+            padding: "12px 16px",
+            borderTop: "1px solid var(--line, #eadfce)",
+            fontSize: "13px",
+          }}
+        >
+          <span className="muted">
+            แสดงรายการที่ {((currentPage - 1) * SALES_PAGE_SIZE + 1).toLocaleString("th-TH")}–
+            {Math.min(currentPage * SALES_PAGE_SIZE, sales.length).toLocaleString("th-TH")} จากทั้งหมด{" "}
+            {sales.length.toLocaleString("th-TH")} รายการ
+          </span>
+          <div style={{ display: "inline-flex", gap: "8px", alignItems: "center" }}>
+            {currentPage > 1 ? (
+              <Link className="secondary-button" href={buildPageHref(currentPage - 1)}>
+                ก่อนหน้า
+              </Link>
+            ) : (
+              <button type="button" className="secondary-button" disabled>
+                ก่อนหน้า
+              </button>
+            )}
+            <span style={{ fontWeight: 600 }}>
+              หน้า {currentPage} / {totalPages}
+            </span>
+            {currentPage < totalPages ? (
+              <Link className="secondary-button" href={buildPageHref(currentPage + 1)}>
+                ถัดไป
+              </Link>
+            ) : (
+              <button type="button" className="secondary-button" disabled>
+                ถัดไป
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   </>;
 }

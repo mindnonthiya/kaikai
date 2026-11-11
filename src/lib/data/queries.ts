@@ -2,7 +2,15 @@
 // When Supabase is not configured every function returns empty data (there is no sample data).
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { COSTING_WINDOW_DAYS, pooledFoodRevenue, pooledIngredientBps } from "@/lib/analytics";
+import {
+  COSTING_WINDOW_DAYS,
+  type Summary,
+  filterExpenses,
+  filterSales,
+  pooledFoodRevenue,
+  pooledIngredientBps,
+  summarize,
+} from "@/lib/analytics";
 import { hasSupabaseEnv } from "@/lib/env";
 import { SCHEMA_OUTDATED_CODES, SCHEMA_OUTDATED_MESSAGE } from "@/lib/server-action";
 import {
@@ -19,7 +27,7 @@ import {
   type ShopSummary,
 } from "@/lib/shop-scope";
 import { createClient } from "@/lib/supabase/server";
-import { DAY_MS, DEFAULT_DAY_START_HOUR, normalizeDayStartHour } from "@/lib/time";
+import { DAY_MS, DEFAULT_DAY_START_HOUR, normalizeDayStartHour, resolveRange } from "@/lib/time";
 import {
   DEFAULT_UNIT_LABEL,
   type ExpenseKind, type ExpenseRecord, type Fulfillment, type IngredientCosting, type IngredientRecord, type MenuRecord,
@@ -63,17 +71,47 @@ export function setCached<T>(key: string, data: T, ttlMs = 60_000): T {
   return data;
 }
 
+const DERIVED_WINDOW_CACHE_PREFIXES = [
+  "sales_win",
+  "sales_superset",
+  "expenses_win",
+  "expenses_superset",
+  "ing_purchases_win",
+  "recent_purchases",
+  "latest_purchases",
+  "pack_purchases",
+  "all_time",
+  "pooled_rate",
+];
+
 export function invalidateQueryCache(prefix?: string) {
   if (!prefix) {
     memoryCache.clear();
     return;
   }
   for (const key of memoryCache.keys()) {
-    if (key.includes(prefix)) {
+    if (
+      key.includes(prefix) ||
+      DERIVED_WINDOW_CACHE_PREFIXES.some((derived) => key.includes(derived))
+    ) {
       memoryCache.delete(key);
     }
   }
 }
+
+/** Deduplicates `supabase.auth.getUser()` within a single server request. */
+export const getSessionUser = cache(async () => {
+  if (!hasSupabaseEnv) return null;
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user ?? null;
+  } catch {
+    return null;
+  }
+});
 
 /** Reads the active shop ID and its resolved ingredient/packaging catalog shop ID from the request cookie. */
 export const getActiveShopState = cache(async (): Promise<{ shopId: string; inventoryShopId: string }> => {
@@ -88,14 +126,24 @@ export const getActiveShopState = cache(async (): Promise<{ shopId: string; inve
     return { shopId: DEFAULT_SHOP_ID, inventoryShopId: DEFAULT_SHOP_ID };
   }
   try {
-    const supabase = await createClient();
-    const { data } = await supabase
-      .from("settings")
-      .select("value")
-      .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
-      .maybeSingle();
-    const rawVal = (data?.value ?? {}) as Row;
-    const list = Array.isArray(rawVal.shops) ? (rawVal.shops as Row[]) : [];
+    const user = await getSessionUser();
+    const registryCacheKey = user ? `${user.id}:shops_registry_raw` : "";
+    let list: Row[] | undefined = registryCacheKey ? getCached<Row[]>(registryCacheKey) : undefined;
+
+    if (!list) {
+      const supabase = await createClient();
+      const { data } = await supabase
+        .from("settings")
+        .select("value")
+        .eq("key", SHOPS_REGISTRY_SETTINGS_KEY)
+        .maybeSingle();
+      const rawVal = (data?.value ?? {}) as Row;
+      list = Array.isArray(rawVal.shops) ? (rawVal.shops as Row[]) : [];
+      if (registryCacheKey) {
+        setCached(registryCacheKey, list, 60_000);
+      }
+    }
+
     const exists =
       rawCookieShop === DEFAULT_SHOP_ID ||
       list.some((s) => normalizeShopId(str(s.id)) === rawCookieShop);
@@ -120,8 +168,7 @@ export const getActiveInventoryShopId = cache(async (): Promise<string> => (awai
 export const getRequestUserId = cache(async (): Promise<string> => {
   if (!hasSupabaseEnv) return "anon";
   try {
-    const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
-    const { data: { user } } = await supabase.auth.getUser();
+    const [user, shopId] = await Promise.all([getSessionUser(), getActiveShopId()]);
     if (!user) return "anon";
     return `${user.id}:${shopId}`;
   } catch {
@@ -221,7 +268,7 @@ function mapSale(row: Row): SaleRecord {
   return {
     id: str(row.id),
     saleNumber: num(row.sale_number),
-    soldAt: str(row.sold_at),
+    soldAt: str(row.soldAt ?? row.sold_at),
     status: str(row.status) as SaleStatus,
     paymentStatus: str(row.payment_status) as PaymentStatus,
     customerName: strOrNull(row.customer_name),
@@ -251,44 +298,80 @@ function mapSale(row: Row): SaleRecord {
   };
 }
 
+interface SupersetWindowCache<T> {
+  startMs: number;
+  endMs: number;
+  records: T[];
+}
+
 /** Sales with sold_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchSales(start: Date, end: Date): Promise<SaleRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
+  const [supabase, shopId, userId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getRequestUserId(),
+  ]);
+
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const exactKey = `${userId}:sales_win:${shopId}:${startMs}:${endMs}`;
+  const exactCached = getCached<SaleRecord[]>(exactKey);
+  if (exactCached) return exactCached;
+
+  const supersetKey = `${userId}:sales_superset:${shopId}`;
+  const superset = getCached<SupersetWindowCache<SaleRecord>>(supersetKey);
+  if (superset && superset.startMs <= startMs && superset.endMs >= endMs) {
+    const sliced = filterSales(superset.records, start, end);
+    return setCached(exactKey, sliced, 60_000);
+  }
+
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
 
   const querySales = (cols: string) =>
     withScopeFallback(
       () =>
         fetchAll("ข้อมูลการขาย", (from, to) =>
-          supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
+          supabase.from("sales").select(cols).gte("sold_at", startIso).lt("sold_at", endIso)
             .eq("shop_scope_id", shopId)
             .order("sold_at", { ascending: false }).range(from, to)),
       () =>
         fetchAll("ข้อมูลการขาย", (from, to) =>
-          supabase.from("sales").select(cols).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString())
+          supabase.from("sales").select(cols).gte("sold_at", startIso).lt("sold_at", endIso)
             .order("sold_at", { ascending: false }).range(from, to)),
     );
 
+  let mapped: SaleRecord[];
   if (cachedHasTipColumn === false) {
     const data = await querySales(SALE_COLUMNS_LEGACY);
-    return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
+    mapped = data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
+  } else {
+    try {
+      const data = await querySales(SALE_COLUMNS_WITH_TIP);
+      cachedHasTipColumn = true;
+      mapped = data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
+    } catch (err: unknown) {
+      const isMissingColumn =
+        (err instanceof QueryError && (err.code === "42703" || err.originalMessage?.includes("tip_satang"))) ||
+        (err instanceof Error && err.message.includes("tip_satang"));
+      if (isMissingColumn) {
+        cachedHasTipColumn = false;
+        const data = await querySales(SALE_COLUMNS_LEGACY);
+        mapped = data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
+      } else {
+        throw err;
+      }
+    }
   }
 
-  try {
-    const data = await querySales(SALE_COLUMNS_WITH_TIP);
-    cachedHasTipColumn = true;
-    return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
-  } catch (err: unknown) {
-    const isMissingColumn =
-      (err instanceof QueryError && (err.code === "42703" || err.originalMessage?.includes("tip_satang"))) ||
-      (err instanceof Error && err.message.includes("tip_satang"));
-    if (isMissingColumn) {
-      cachedHasTipColumn = false;
-      const data = await querySales(SALE_COLUMNS_LEGACY);
-      return data.filter((r) => matchesSaleShop(r, shopId)).map(mapSale);
-    }
-    throw err;
+  setCached(exactKey, mapped, 60_000);
+  const currentSpan = endMs - startMs;
+  const prevSpan = superset ? superset.endMs - superset.startMs : 0;
+  if (!superset || currentSpan >= prevSpan) {
+    setCached(supersetKey, { startMs, endMs, records: mapped }, 60_000);
   }
+  return mapped;
 }
 
 function mapExpense(row: Row): ExpenseRecord {
@@ -309,19 +392,68 @@ function mapExpense(row: Row): ExpenseRecord {
 /** Expenses with spent_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchExpenses(start: Date, end: Date): Promise<ExpenseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
+  const [supabase, shopId, userId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getRequestUserId(),
+  ]);
+
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const exactKey = `${userId}:expenses_win:${shopId}:${startMs}:${endMs}`;
+  const exactCached = getCached<ExpenseRecord[]>(exactKey);
+  if (exactCached) return exactCached;
+
+  const supersetKey = `${userId}:expenses_superset:${shopId}`;
+  const superset = getCached<SupersetWindowCache<ExpenseRecord>>(supersetKey);
+  if (superset && superset.startMs <= startMs && superset.endMs >= endMs) {
+    const sliced = filterExpenses(superset.records, start, end);
+    return setCached(exactKey, sliced, 60_000);
+  }
+
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+
   const data = await withScopeFallback(
     () =>
       fetchAll("ค่าใช้จ่าย", (from, to) =>
         supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
           .eq("shop_scope_id", shopId)
-          .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to)),
+          .gte("spent_at", startIso).lt("spent_at", endIso).order("spent_at", { ascending: false }).range(from, to)),
     () =>
       fetchAll("ค่าใช้จ่าย", (from, to) =>
         supabase.from("expenses").select("id,spent_at,category,kind,amount_satang,description,payee,payment_method,receipt_path,notes")
-          .gte("spent_at", start.toISOString()).lt("spent_at", end.toISOString()).order("spent_at", { ascending: false }).range(from, to)),
+          .gte("spent_at", startIso).lt("spent_at", endIso).order("spent_at", { ascending: false }).range(from, to)),
   );
-  return data.filter((row) => matchesShopText(str(row.description), shopId)).map(mapExpense);
+  const mapped = data.filter((row) => matchesShopText(str(row.description), shopId)).map(mapExpense);
+
+  setCached(exactKey, mapped, 60_000);
+  const currentSpan = endMs - startMs;
+  const prevSpan = superset ? superset.endMs - superset.startMs : 0;
+  if (!superset || currentSpan >= prevSpan) {
+    setCached(supersetKey, { startMs, endMs, records: mapped }, 60_000);
+  }
+  return mapped;
+}
+
+/**
+ * Cached all-time summary for the active shop so `/dashboard` does not need to re-download
+ * all historical sales & expenses on every single visit when viewing Today / 7d / Month.
+ */
+export async function fetchAllTimeSummary(end: Date, dayStartHour = DEFAULT_DAY_START_HOUR): Promise<Summary> {
+  if (!hasSupabaseEnv) return summarize([], []);
+  const [userId, shopId] = await Promise.all([getRequestUserId(), getActiveShopId()]);
+  const cacheKey = `${userId}:all_time_summary:${shopId}`;
+  const cached = getCached<Summary>(cacheKey);
+  if (cached) return cached;
+
+  const allRange = resolveRange("all", end, dayStartHour);
+  const [allSales, allExpenses] = await Promise.all([
+    fetchSales(allRange.start, end),
+    fetchExpenses(allRange.start, end),
+  ]);
+  const summary = summarize(allSales, allExpenses);
+  return setCached(cacheKey, summary, 60_000);
 }
 
 /** Batch yield divisor per menu ID (e.g. 1 batch = 30 crepes -> yield 30). */
@@ -476,11 +608,16 @@ export const fetchPackaging = cache(async (): Promise<PackagingRecord[]> => {
 /** All packaging purchases for the active shop's catalog, newest first. */
 export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, shopId, inventoryShopId] = await Promise.all([
+  const [supabase, shopId, inventoryShopId, userId] = await Promise.all([
     createClient(),
     getActiveShopId(),
     getActiveInventoryShopId(),
+    getRequestUserId(),
   ]);
+  const cacheKey = `${userId}:packaging_purchases:${shopId}:${inventoryShopId}`;
+  const cached = getCached<PackagingPurchaseRecord[]>(cacheKey);
+  if (cached) return cached;
+
   const data = await withScopeFallback(
     () =>
       fetchAll("ประวัติการซื้อบรรจุภัณฑ์", (from, to) =>
@@ -493,7 +630,7 @@ export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord
         supabase.from("packaging_purchases").select("id,packaging_item_id,purchased_at,price_satang,pack_quantity,pack_count,vendor,expense_id,packaging_items(name,unit)")
           .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
   );
-  return data
+  const res = data
     .filter((row) => {
       const itemName = str(one(row.packaging_items)?.name);
       return (
@@ -510,6 +647,7 @@ export async function fetchPackagingPurchases(): Promise<PackagingPurchaseRecord
         vendor: cleanVendor || null, expenseId: strOrNull(row.expense_id),
       };
     });
+  return setCached(cacheKey, res, 60_000);
 }
 
 const PURCHASE_COLUMNS = "id,ingredient_id,purchased_at,price_satang,purchased_quantity,purchase_unit,vendor,ingredients!inner(name,costing,catalog_scope_id)";
@@ -528,11 +666,16 @@ function mapPurchase(row: Row): PurchaseRecord {
 
 export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, shopId, inventoryShopId] = await Promise.all([
+  const [supabase, shopId, inventoryShopId, userId] = await Promise.all([
     createClient(),
     getActiveShopId(),
     getActiveInventoryShopId(),
+    getRequestUserId(),
   ]);
+  const cacheKey = `${userId}:recent_purchases:${shopId}:${inventoryShopId}:${limit}`;
+  const cached = getCached<PurchaseRecord[]>(cacheKey);
+  if (cached) return cached;
+
   const rawRows = await withScopeFallback(
     async () => {
       const { data, error } = await supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS)
@@ -547,7 +690,7 @@ export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]
         supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS_LEGACY)
           .order("purchased_at", { ascending: false }).order("created_at", { ascending: false }).range(from, to)),
   );
-  return rawRows
+  const res = rawRows
     .filter((row) => {
       const ingredientName = str(one(row.ingredients)?.name);
       return (
@@ -557,12 +700,23 @@ export async function fetchRecentPurchases(limit = 20): Promise<PurchaseRecord[]
     })
     .slice(0, limit)
     .map(mapPurchase);
+  return setCached(cacheKey, res, 60_000);
 }
 
 /** Ingredient purchases with purchased_at in [start, end), newest first, scoped to the active shop. */
 export async function fetchIngredientPurchases(start: Date, end: Date): Promise<PurchaseRecord[]> {
   if (!hasSupabaseEnv) return [];
-  const [supabase, shopId] = await Promise.all([createClient(), getActiveShopId()]);
+  const [supabase, shopId, userId] = await Promise.all([
+    createClient(),
+    getActiveShopId(),
+    getRequestUserId(),
+  ]);
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const cacheKey = `${userId}:ing_purchases_win:${shopId}:${startMs}:${endMs}`;
+  const cached = getCached<PurchaseRecord[]>(cacheKey);
+  if (cached) return cached;
+
   const data = await withScopeFallback(
     () =>
       fetchAll("การซื้อวัตถุดิบ", (from, to) =>
@@ -574,9 +728,10 @@ export async function fetchIngredientPurchases(start: Date, end: Date): Promise<
         supabase.from("ingredient_purchases").select(PURCHASE_COLUMNS_LEGACY)
           .gte("purchased_at", start.toISOString()).lt("purchased_at", end.toISOString()).order("purchased_at", { ascending: false }).range(from, to)),
   );
-  return data
+  const res = data
     .filter((row) => matchesPurchaseShop({ vendor: row.vendor, ingredientName: one(row.ingredients)?.name }, shopId))
     .map(mapPurchase);
+  return setCached(cacheKey, res, 60_000);
 }
 
 export type LatestPurchase = { purchasedAt: string; price: number; quantity: number | null };
@@ -585,11 +740,16 @@ export type LatestPurchase = { purchasedAt: string; price: number; quantity: num
 export async function fetchLatestPurchases(): Promise<Map<string, LatestPurchase>> {
   const latest = new Map<string, LatestPurchase>();
   if (!hasSupabaseEnv) return latest;
-  const [supabase, shopId, inventoryShopId] = await Promise.all([
+  const [supabase, shopId, inventoryShopId, userId] = await Promise.all([
     createClient(),
     getActiveShopId(),
     getActiveInventoryShopId(),
+    getRequestUserId(),
   ]);
+  const cacheKey = `${userId}:latest_purchases:${shopId}:${inventoryShopId}`;
+  const cached = getCached<Map<string, LatestPurchase>>(cacheKey);
+  if (cached) return cached;
+
   const data = await withScopeFallback(
     () =>
       fetchAll("ประวัติการซื้อ", (from, to) =>
@@ -611,7 +771,7 @@ export async function fetchLatestPurchases(): Promise<Map<string, LatestPurchase
       quantity: row.purchased_quantity === null || row.purchased_quantity === undefined ? null : num(row.purchased_quantity),
     });
   }
-  return latest;
+  return setCached(cacheKey, latest, 60_000);
 }
 
 export const fetchRecipeItems = cache(async (): Promise<RecipeItemRecord[]> => {
@@ -840,10 +1000,21 @@ export const fetchShops = cache(async (): Promise<{ activeShopId: string; shops:
     return { activeShopId: DEFAULT_SHOP_ID, shops: [defaultFallback], email: null };
   }
   try {
-    const [supabase, activeShopId] = await Promise.all([createClient(), getActiveShopId()]);
-    const { data: { user } } = await supabase.auth.getUser();
+    const [user, activeShopId] = await Promise.all([getSessionUser(), getActiveShopId()]);
     if (!user) return { activeShopId: DEFAULT_SHOP_ID, shops: [defaultFallback], email: null };
 
+    const shopsCacheKey = `${user.id}:shops_list_cached`;
+    const cachedShopsData = getCached<{ shops: ShopSummary[]; email: string | null }>(shopsCacheKey);
+    if (cachedShopsData) {
+      const validIds = new Set(cachedShopsData.shops.map((s) => s.id));
+      return {
+        activeShopId: validIds.has(activeShopId) ? activeShopId : DEFAULT_SHOP_ID,
+        shops: cachedShopsData.shops,
+        email: cachedShopsData.email,
+      };
+    }
+
+    const supabase = await createClient();
     const meta = (user.user_metadata ?? {}) as Row;
     let defaultAvatar: string | null = str(meta.avatar_url) || str(meta.picture) || null;
     let defaultDisplay = str(meta.display_name);
@@ -896,6 +1067,8 @@ export const fetchShops = cache(async (): Promise<{ activeShopId: string; shops:
 
     const registryRow = settingsMap.get(SHOPS_REGISTRY_SETTINGS_KEY);
     const rawList = Array.isArray(registryRow?.shops) ? (registryRow!.shops as Row[]) : [];
+    setCached(`${user.id}:shops_registry_raw`, rawList, 60_000);
+
     const extraShops: ShopSummary[] = [];
     const seenIds = new Set<string>([DEFAULT_SHOP_ID]);
 
@@ -939,6 +1112,15 @@ export const fetchShops = cache(async (): Promise<{ activeShopId: string; shops:
       s.sharedIngredientsFromShopId = resolvedInvId !== s.id ? resolvedInvId : null;
     }
     const resolvedActiveId = seenIds.has(activeShopId) ? activeShopId : DEFAULT_SHOP_ID;
+
+    setCached(
+      shopsCacheKey,
+      {
+        shops: allShops,
+        email: user.email ?? null,
+      },
+      60_000,
+    );
 
     return {
       activeShopId: resolvedActiveId,

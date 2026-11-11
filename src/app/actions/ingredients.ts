@@ -27,6 +27,13 @@ type Row = Record<string, unknown>;
 const POOLED_UNIT = "บาท";
 
 function revalidateCosts() {
+  invalidateQueryCache("expenses_win");
+  invalidateQueryCache("expenses_superset");
+  invalidateQueryCache("ing_purchases_win");
+  invalidateQueryCache("recent_purchases");
+  invalidateQueryCache("latest_purchases");
+  invalidateQueryCache("pack_purchases");
+  invalidateQueryCache("all_time");
   invalidateQueryCache("ingredients");
   invalidateQueryCache("packaging");
   invalidateQueryCache("packaging_defaults");

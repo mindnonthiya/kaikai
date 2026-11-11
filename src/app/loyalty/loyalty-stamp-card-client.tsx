@@ -3,52 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LOYALTY_RULES_TEXT,
+  type LoyaltyConfig,
   type LoyaltyCouponRecord,
   formatThaiDateTime,
   formatValidTillDate,
   parseLoyaltyQueryParams,
 } from "@/lib/loyalty";
 
-interface LiffProfile {
-  userId: string;
-  displayName: string;
-  pictureUrl?: string;
-}
-
-interface LiffSdk {
-  init: (config: { liffId: string }) => Promise<void>;
-  isInClient: () => boolean;
-  isLoggedIn: () => boolean;
-  login: (config?: { redirectUri?: string }) => void;
-  getProfile: () => Promise<LiffProfile>;
-  getAccessToken?: () => string | null;
-  getIDToken?: () => string | null;
-  getContext?: () => { type?: string } | null;
-  sendMessages: (messages: Array<Record<string, unknown>>) => Promise<void>;
-  scanCodeV2?: () => Promise<{ value: string | null }>;
-}
-
-function getActiveLiffAccessToken(): string {
-  if (typeof window === "undefined" || !window.liff) return "";
-  try {
-    return window.liff.getAccessToken?.()?.trim() ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function isRecentlyClaimedWithinFiveMinutes(claimedAtIso?: string | null): boolean {
-  if (!claimedAtIso) return false;
-  const ts = new Date(claimedAtIso).getTime();
-  if (Number.isNaN(ts)) return false;
-  return Date.now() - ts <= 5 * 60 * 1000;
-}
-
-declare global {
-  interface Window {
-    liff?: LiffSdk;
-  }
-}
+const LOCAL_USER_ID_KEY = "kaikai_loyalty_line_uid_v1";
+const LOCAL_DISPLAY_NAME_KEY = "kaikai_loyalty_display_name_v1";
 
 export interface InitialLoyaltyCardConfig {
   cardTitle: string;
@@ -62,7 +25,25 @@ export interface InitialLoyaltyCardConfig {
   botBasicId: string;
 }
 
-type CardConfigState = InitialLoyaltyCardConfig;
+interface LiffWindowObject {
+  init: (config: { liffId: string }) => Promise<void>;
+  isLoggedIn: () => boolean;
+  isInClient: () => boolean;
+  login: (config?: { redirectUri?: string }) => void;
+  getAccessToken?: () => string | null;
+  getProfile: () => Promise<{
+    userId: string;
+    displayName: string;
+    pictureUrl?: string;
+  }>;
+  scanCodeV2?: () => Promise<{ value: string | null }>;
+}
+
+declare global {
+  interface Window {
+    liff?: LiffWindowObject;
+  }
+}
 
 interface MemberState {
   lineUserId: string;
@@ -76,7 +57,9 @@ interface MemberState {
   expiredReset: boolean;
 }
 
-interface ClaimBannerState {
+type CardConfigState = InitialLoyaltyCardConfig;
+
+interface ClaimNotificationBanner {
   type: "success" | "warning" | "error";
   title: string;
   subtitle: string;
@@ -86,48 +69,56 @@ interface ClaimBannerState {
   pushReason?: string;
 }
 
-export interface LoyaltyStampCardClientProps {
-  initialShopSecret: string;
-  initialPoints: number | null;
-  initialToken: string;
-  initialLiffId: string;
-  initialConfig?: InitialLoyaltyCardConfig | null;
+interface RedeemedReceiptModalState {
+  code: string;
+  title: string;
+  claimedAtFormatted: string;
+  displayName: string;
+  pictureUrl: string | null;
+  chatNotified: boolean;
+  isFreshRedemption: boolean;
 }
 
-const LOCAL_DEVICE_USER_KEY = "kaikai_loyalty_device_user_v1";
-const LOCAL_DISPLAY_NAME_KEY = "kaikai_loyalty_display_name_v1";
-
 function getOrCreateBrowserUserId(): string {
-  if (typeof window === "undefined") return "web_guest";
+  if (typeof window === "undefined") return "guest";
   try {
-    const existing = window.localStorage.getItem(LOCAL_DEVICE_USER_KEY);
-    if (existing && existing.length >= 8) return existing;
-    const bytes = new Uint8Array(12);
-    window.crypto.getRandomValues(bytes);
-    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    const nextId = `web_${hex}`;
-    window.localStorage.setItem(LOCAL_DEVICE_USER_KEY, nextId);
-    return nextId;
+    const existing = window.localStorage.getItem(LOCAL_USER_ID_KEY);
+    if (existing && existing.trim().length >= 6) return existing.trim();
+    const randomPart = Array.from(window.crypto.getRandomValues(new Uint8Array(8)))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    const created = `web_${randomPart}`;
+    window.localStorage.setItem(LOCAL_USER_ID_KEY, created);
+    return created;
   } catch {
-    return "web_guest_fallback";
+    return "web_fallback_guest";
   }
 }
 
 function getSavedDisplayName(): string {
   if (typeof window === "undefined") return "ลูกค้า LINE";
   try {
-    return window.localStorage.getItem(LOCAL_DISPLAY_NAME_KEY)?.trim() || "ลูกค้า LINE";
+    const saved = window.localStorage.getItem(LOCAL_DISPLAY_NAME_KEY);
+    return saved && saved.trim() ? saved.trim() : "ลูกค้า LINE";
   } catch {
     return "ลูกค้า LINE";
   }
 }
 
-async function loadLiffSdkScript(): Promise<LiffSdk | null> {
+function isRecentlyClaimedWithinFiveMinutes(claimedAt: string | null | undefined): boolean {
+  if (!claimedAt) return false;
+  const ts = new Date(claimedAt).getTime();
+  if (!Number.isFinite(ts)) return false;
+  const diffMs = Date.now() - ts;
+  return diffMs >= -60_000 && diffMs <= 5 * 60 * 1000;
+}
+
+async function loadLiffSdkScript(): Promise<LiffWindowObject | null> {
   if (typeof window === "undefined") return null;
   if (window.liff) return window.liff;
 
   return new Promise((resolve) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-liff-sdk="true"]');
+    const existing = document.querySelector('script[data-line-liff="1"]') as HTMLScriptElement | null;
     if (existing) {
       existing.addEventListener("load", () => resolve(window.liff ?? null), { once: true });
       existing.addEventListener("error", () => resolve(null), { once: true });
@@ -136,11 +127,62 @@ async function loadLiffSdkScript(): Promise<LiffSdk | null> {
     const script = document.createElement("script");
     script.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
     script.async = true;
-    script.dataset.liffSdk = "true";
+    script.dataset.lineLiff = "1";
     script.onload = () => resolve(window.liff ?? null);
     script.onerror = () => resolve(null);
     document.head.appendChild(script);
   });
+}
+
+function getActiveLiffAccessToken(): string {
+  if (typeof window === "undefined" || !window.liff) return "";
+  try {
+    if (window.liff.isLoggedIn() && typeof window.liff.getAccessToken === "function") {
+      return window.liff.getAccessToken() ?? "";
+    }
+  } catch {
+    // Ignore LIFF token error
+  }
+  return "";
+}
+
+function CustomerLineAvatar({
+  pictureUrl,
+  displayName,
+  size = 28,
+}: {
+  pictureUrl: string | null;
+  displayName: string;
+  size?: number;
+}) {
+  const [broken, setBroken] = useState(false);
+  const clean = (displayName || "ลูกค้า LINE").trim();
+  const initial = Array.from(clean)[0] ?? "ล";
+  const showImg = Boolean(pictureUrl && !broken);
+
+  return (
+    <span
+      className="line-customer-avatar"
+      style={{ width: size, height: size }}
+    >
+      {showImg ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={pictureUrl!}
+          alt={clean}
+          className="line-customer-avatar-img"
+          onError={() => setBroken(true)}
+        />
+      ) : (
+        <span
+          className="line-customer-avatar-fallback"
+          style={{ fontSize: Math.max(11, Math.round(size * 0.44)) }}
+        >
+          {initial}
+        </span>
+      )}
+    </span>
+  );
 }
 
 export function LoyaltyStampCardClient({
@@ -148,75 +190,73 @@ export function LoyaltyStampCardClient({
   initialPoints,
   initialToken,
   initialLiffId,
-  initialConfig = null,
-}: LoyaltyStampCardClientProps) {
+  initialConfig,
+}: {
+  initialShopSecret: string;
+  initialPoints: number | null;
+  initialToken: string;
+  initialLiffId: string;
+  initialConfig?: InitialLoyaltyCardConfig | Partial<LoyaltyConfig> | null;
+}) {
   const [shopSecret, setShopSecret] = useState(initialShopSecret);
-  const [config, setConfig] = useState<CardConfigState>(
-    initialConfig ?? {
-      cardTitle: "GaiTomNamPla 🐔",
-      cardHeadline: "สะสม 10 กล่อง ลด 50%",
-      rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
-      stampsPerReward: 10,
-      validityMonths: 3,
-      cooldownMinutes: 5,
-      rulesText: DEFAULT_LOYALTY_RULES_TEXT,
-      liffId: initialLiffId,
-      botBasicId: "",
-    },
-  );
-
-  const [member, setMember] = useState<MemberState>({
-    lineUserId: "",
-    displayName: "ลูกค้า LINE",
-    pictureUrl: null,
-    stamps: 0,
-    lifetimeStamps: 0,
-    expiresAt: null,
-    validTillFormatted: formatValidTillDate(null),
-    lastStampedAt: null,
-    expiredReset: false,
+  const [config, setConfig] = useState<CardConfigState>({
+    cardTitle: initialConfig?.cardTitle ?? "GaiTomNamPla 🐔",
+    cardHeadline: initialConfig?.cardHeadline ?? "สะสม 10 กล่อง ลด 50%",
+    rewardTitle: initialConfig?.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง",
+    stampsPerReward: initialConfig?.stampsPerReward ?? 10,
+    validityMonths: initialConfig?.validityMonths ?? 3,
+    cooldownMinutes: initialConfig?.cooldownMinutes ?? 5,
+    rulesText: initialConfig?.rulesText ?? DEFAULT_LOYALTY_RULES_TEXT,
+    liffId: initialLiffId || initialConfig?.liffId || "",
+    botBasicId: initialConfig?.botBasicId ?? "",
   });
-  const [memberLoaded, setMemberLoaded] = useState(false);
-  const [lineAuthError, setLineAuthError] = useState<string | null>(null);
+
+  const [member, setMember] = useState<MemberState>(() => {
+    const defaultExp = new Date();
+    defaultExp.setMonth(defaultExp.getMonth() + 3);
+    return {
+      lineUserId: "",
+      displayName: "ลูกค้า LINE",
+      pictureUrl: null,
+      stamps: 0,
+      lifetimeStamps: 0,
+      expiresAt: defaultExp.toISOString(),
+      validTillFormatted: formatValidTillDate(defaultExp),
+      lastStampedAt: null,
+      expiredReset: false,
+    };
+  });
 
   const [coupons, setCoupons] = useState<LoyaltyCouponRecord[]>([]);
   const [activeTab, setActiveTab] = useState<"unclaimed" | "claimed">("unclaimed");
   const [gridExpanded, setGridExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState(false);
+  const [memberLoaded, setMemberLoaded] = useState(false);
+  const [lineAuthError, setLineAuthError] = useState<string | null>(null);
+  const [redeemingCouponId, setRedeemingCouponId] = useState<string | null>(null);
+  const [claimBanner, setClaimBanner] = useState<ClaimNotificationBanner | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [claimBanner, setClaimBanner] = useState<ClaimBannerState | null>(null);
-  const [isInLineClient, setIsInLineClient] = useState(false);
 
   // Modals
-  const [confirmRedeemCoupon, setConfirmRedeemCoupon] = useState<LoyaltyCouponRecord | null>(null);
-  const [redeemingCouponId, setRedeemingCouponId] = useState<string | null>(null);
-  const [receiptCoupon, setReceiptCoupon] = useState<{
-    code: string;
-    title: string;
-    claimedAtFormatted: string;
-    displayName: string;
-    chatNotified: boolean;
-    isFreshRedemption: boolean;
-  } | null>(null);
   const [showScannerModal, setShowScannerModal] = useState(false);
+  const [showManualQrInput, setShowManualQrInput] = useState(false);
   const [manualQrInput, setManualQrInput] = useState("");
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [confirmRedeemCoupon, setConfirmRedeemCoupon] = useState<LoyaltyCouponRecord | null>(null);
+  const [copiedCouponCode, setCopiedCouponCode] = useState(false);
+  const [receiptCoupon, setReceiptCoupon] = useState<RedeemedReceiptModalState | null>(null);
   const [liveClock, setLiveClock] = useState("");
+  const [isInLineClient, setIsInLineClient] = useState(false);
 
   const hasProcessedInitialQr = useRef(false);
+  const rewardsSectionRef = useRef<HTMLDivElement | null>(null);
 
-  // Live clock ONLY for freshly redeemed coupons (within 5 minutes) to prevent replay of old screenshots
   useEffect(() => {
-    if (!receiptCoupon || !receiptCoupon.isFreshRedemption) {
-      setLiveClock("");
-      return;
-    }
-    const updateClock = () => {
-      setLiveClock(formatThaiDateTime(new Date()));
-    };
+    if (!receiptCoupon) return;
+    const updateClock = () => setLiveClock(formatThaiDateTime(new Date()));
     updateClock();
     const timer = window.setInterval(updateClock, 1000);
     return () => window.clearInterval(timer);
@@ -224,19 +264,23 @@ export function LoyaltyStampCardClient({
 
   const fetchCardState = useCallback(
     async (
-      resolvedShopSecret: string,
+      targetShopSecret: string,
       userProfile: { userId: string; displayName: string; pictureUrl: string | null },
-      liffAccessTokenOverride?: string,
+      explicitLiffAccessToken?: string,
       configOnly = false,
-    ) => {
-      const liffAccessToken = configOnly
-        ? ""
-        : (liffAccessTokenOverride ?? getActiveLiffAccessToken());
+    ): Promise<{ config: CardConfigState; member: MemberState | null; coupons: LoyaltyCouponRecord[] } | null> => {
+      if (!targetShopSecret) {
+        setErrorMessage("ไม่พบรหัสร้านค้าในลิงก์ กรุณาขอลิงก์บัตรสะสมแต้มจากทางร้าน");
+        setLoading(false);
+        return null;
+      }
+
+      const liffAccessToken = explicitLiffAccessToken ?? getActiveLiffAccessToken();
       const response = await fetch("/api/loyalty/state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shopSecret: resolvedShopSecret,
+          shopSecret: targetShopSecret,
           configOnly,
           liffAccessToken,
           lineUserId: configOnly ? "" : userProfile.userId,
@@ -298,7 +342,9 @@ export function LoyaltyStampCardClient({
         stamps: Math.max(0, Number(mem.stamps ?? 0)),
         lifetimeStamps: Math.max(0, Number(mem.lifetimeStamps ?? 0)),
         expiresAt: mem.expiresAt ? String(mem.expiresAt) : null,
-        validTillFormatted: String(mem.validTillFormatted ?? formatValidTillDate(mem.expiresAt ? String(mem.expiresAt) : null)),
+        validTillFormatted: String(
+          mem.validTillFormatted ?? formatValidTillDate(mem.expiresAt ? String(mem.expiresAt) : null),
+        ),
         lastStampedAt: mem.lastStampedAt ? String(mem.lastStampedAt) : null,
         expiredReset: Boolean(mem.expiredReset),
       };
@@ -357,7 +403,6 @@ export function LoyaltyStampCardClient({
             title: data.code === "COOLDOWN_ACTIVE" ? "สแกนซ้ำเร็วเกินไป" : "ไม่สามารถสะสมแต้มได้",
             subtitle: String(data.message ?? "คิวอาร์โค้ดไม่ถูกต้องหรือหมดอายุ"),
           });
-          // Load member state if it was skipped before claim so customer still sees their real balance
           await fetchCardState(targetShopSecret, userProfile, liffAccessToken);
           return;
         }
@@ -389,25 +434,26 @@ export function LoyaltyStampCardClient({
 
         setClaimBanner({
           type: "success",
-          title: `🎉 สะสมสำเร็จ +${pointsAdded} แต้ม!`,
+          title: `รับเพิ่ม +${pointsAdded} แต้มสำเร็จ`,
           subtitle:
             rewardsUnlocked > 0
-              ? `ครบ ${stampsPerReward} แต้ม! ได้รับคูปองส่วนลดใหม่ +${rewardsUnlocked} ใบ และมีแต้มสะสมต่อ ${newStamps}/${stampsPerReward} แต้ม`
-              : `แต้มสะสมปัจจุบันของคุณคือ ${newStamps} / ${stampsPerReward} แต้ม (อีก ${Math.max(0, stampsPerReward - newStamps)} แต้มรับส่วนลด 50%)`,
+              ? `ครบ ${stampsPerReward} แต้ม ได้รับคูปองส่วนลดใหม่ +${rewardsUnlocked} ใบ และมีแต้มสะสมต่อ ${newStamps}/${stampsPerReward} แต้ม`
+              : `แต้มสะสมปัจจุบันของคุณคือ ${newStamps}/${stampsPerReward} แต้ม (เหลืออีก ${Math.max(0, stampsPerReward - newStamps)} แต้มรับรางวัล)`,
           pointsAdded,
           rewardsUnlocked,
           chatNotified,
           pushReason: notification?.pushReason,
         });
 
-        // Apply returned member and coupons state in a single round-trip if available
         if (data.member && typeof data.member === "object" && Array.isArray(data.coupons)) {
           const mem = data.member as Record<string, unknown>;
           const rawCoupons = data.coupons as Array<Record<string, unknown>>;
           setMember((prev) => ({
-            lineUserId: String(mem.lineUserId ?? prev.lineUserId),
-            displayName: String(mem.displayName ?? prev.displayName),
-            pictureUrl: mem.pictureUrl ? String(mem.pictureUrl) : prev.pictureUrl,
+            lineUserId: String(mem.lineUserId ?? userProfile.userId ?? prev.lineUserId),
+            displayName: String(mem.displayName ?? userProfile.displayName ?? prev.displayName),
+            pictureUrl: mem.pictureUrl
+              ? String(mem.pictureUrl)
+              : (userProfile.pictureUrl ?? prev.pictureUrl),
             stamps: Math.max(0, Number(mem.stamps ?? newStamps)),
             lifetimeStamps: Math.max(0, Number(mem.lifetimeStamps ?? prev.lifetimeStamps)),
             expiresAt: mem.expiresAt ? String(mem.expiresAt) : prev.expiresAt,
@@ -435,7 +481,6 @@ export function LoyaltyStampCardClient({
           await fetchCardState(targetShopSecret, userProfile, liffAccessToken);
         }
 
-        // Clean QR token from browser URL so refreshing the page doesn't trigger cooldown warning
         if (typeof window !== "undefined") {
           const cleanUrl = new URL(window.location.href);
           cleanUrl.searchParams.delete("p");
@@ -457,7 +502,6 @@ export function LoyaltyStampCardClient({
     [config.rewardTitle, fetchCardState],
   );
 
-  // Initialize URL params, LIFF SDK (if configured), card state, and auto-claim QR if present
   useEffect(() => {
     let cancelled = false;
 
@@ -472,21 +516,34 @@ export function LoyaltyStampCardClient({
       let resolvedPoints = parsedFromUrl.points ?? initialPoints;
       let resolvedToken = parsedFromUrl.token || initialToken;
 
-      // Restore pending QR claim from sessionStorage if returning from LINE Login redirect
       if (typeof window !== "undefined") {
         try {
-          const savedRaw = window.sessionStorage.getItem("kaikai_pending_qr_claim_v1");
-          if (savedRaw) {
-            const saved = JSON.parse(savedRaw) as {
-              shopSecret?: string;
-              points?: number | null;
-              token?: string;
-              savedAt?: number;
-            };
-            if (saved && (!saved.savedAt || Date.now() - saved.savedAt < 5 * 60 * 1000)) {
-              if (!resolvedShopSecret && saved.shopSecret) resolvedShopSecret = saved.shopSecret;
-              if (!resolvedPoints && saved.points) resolvedPoints = saved.points;
-              if (!resolvedToken && saved.token) resolvedToken = saved.token;
+          if (resolvedShopSecret && resolvedPoints && resolvedToken) {
+            window.sessionStorage.setItem(
+              "kaikai_pending_qr_claim_v1",
+              JSON.stringify({
+                shopSecret: resolvedShopSecret,
+                points: resolvedPoints,
+                token: resolvedToken,
+                ts: Date.now(),
+              }),
+            );
+          } else {
+            const rawSaved = window.sessionStorage.getItem("kaikai_pending_qr_claim_v1");
+            if (rawSaved) {
+              const saved = JSON.parse(rawSaved) as {
+                shopSecret?: string;
+                points?: number;
+                token?: string;
+                ts?: number;
+              };
+              if (saved && Date.now() - Number(saved.ts ?? 0) < 5 * 60 * 1000) {
+                resolvedShopSecret = resolvedShopSecret || saved.shopSecret || "";
+                resolvedPoints = resolvedPoints ?? saved.points ?? null;
+                resolvedToken = resolvedToken || saved.token || "";
+              } else {
+                window.sessionStorage.removeItem("kaikai_pending_qr_claim_v1");
+              }
             }
           }
         } catch {
@@ -498,45 +555,24 @@ export function LoyaltyStampCardClient({
         setShopSecret(resolvedShopSecret);
       }
 
-      if (!resolvedShopSecret) {
-        setErrorMessage("ไม่พบรหัสร้านค้าในลิงก์ กรุณาเปิดจากลิงก์หรือคิวอาร์โค้ดของร้าน");
-        setLoading(false);
-        return;
-      }
-
-      // Save pending QR claim before any LINE redirect so p and t are never lost
-      if (typeof window !== "undefined" && resolvedPoints && resolvedToken) {
-        try {
-          window.sessionStorage.setItem(
-            "kaikai_pending_qr_claim_v1",
-            JSON.stringify({
-              shopSecret: resolvedShopSecret,
-              points: resolvedPoints,
-              token: resolvedToken,
-              savedAt: Date.now(),
-            }),
-          );
-        } catch {
-          // Ignore sessionStorage error
-        }
-      }
-
-      const fallbackUserId = getOrCreateBrowserUserId();
+      const fallbackId = getOrCreateBrowserUserId();
       const fallbackName = getSavedDisplayName();
       let userProfile = {
-        userId: fallbackUserId,
+        userId: fallbackId,
         displayName: fallbackName,
         pictureUrl: null as string | null,
       };
-      const hasPendingQrClaim = Boolean(resolvedPoints && resolvedToken);
 
-      // Only fetch config on client if SSR didn't already supply initialConfig
+      const hasPendingQrClaim = Boolean(
+        !hasProcessedInitialQr.current && resolvedPoints && resolvedToken,
+      );
+
       let effectiveLiffId = initialLiffId || initialConfig?.liffId || "";
-      if (!initialConfig) {
+      if (!effectiveLiffId && resolvedShopSecret) {
         const configState = await fetchCardState(
           resolvedShopSecret,
-          { userId: "", displayName: fallbackName, pictureUrl: null },
-          "",
+          userProfile,
+          undefined,
           true,
         );
         if (cancelled) return;
@@ -556,7 +592,6 @@ export function LoyaltyStampCardClient({
           const inClient = liff.isInClient();
           setIsInLineClient(inClient);
 
-          // If opened inside the LINE app via a direct web URL instead of liff.line.me, upgrade to LIFF URL automatically
           if (
             !inClient &&
             typeof navigator !== "undefined" &&
@@ -582,7 +617,21 @@ export function LoyaltyStampCardClient({
               displayName: profile.displayName || fallbackName,
               pictureUrl: profile.pictureUrl ?? null,
             };
-            // Skip redundant fetchCardState when a QR claim is about to run (claim returns full member + coupons!)
+            // Immediately reflect LINE profile photo & display name on the card UI
+            setMember((prev) => ({
+              ...prev,
+              lineUserId: profile.userId,
+              displayName: profile.displayName || prev.displayName,
+              pictureUrl: profile.pictureUrl ?? prev.pictureUrl,
+            }));
+            try {
+              if (profile.displayName) {
+                window.localStorage.setItem(LOCAL_DISPLAY_NAME_KEY, profile.displayName);
+              }
+            } catch {
+              // Ignore
+            }
+
             if (!hasPendingQrClaim) {
               await fetchCardState(resolvedShopSecret, userProfile);
             }
@@ -597,7 +646,6 @@ export function LoyaltyStampCardClient({
             return;
           }
         } catch {
-          // Do NOT fall back to a fake web_... guest when the shop has configured LIFF!
           setLineAuthError("เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดบัตรสะสมแต้มผ่านแอป LINE แล้วลองใหม่");
           setMemberLoaded(false);
           setLoading(false);
@@ -661,6 +709,7 @@ export function LoyaltyStampCardClient({
         // Fallback to scanner modal if scanCodeV2 is not enabled or cancelled
       }
     }
+    setShowManualQrInput(false);
     setShowScannerModal(true);
   };
 
@@ -685,7 +734,6 @@ export function LoyaltyStampCardClient({
         return;
       }
     } catch {
-      // Check if #STAMP:<points>:<token> format
       const match = /#STAMP:(\d{1,2}):([A-Za-z0-9_-]+)/i.exec(trimmed);
       if (match && shopSecret) {
         setShowScannerModal(false);
@@ -771,6 +819,7 @@ export function LoyaltyStampCardClient({
         title: String(data.title ?? coupon.title),
         claimedAtFormatted: String(data.claimedAtFormatted ?? formatThaiDateTime(new Date())),
         displayName: String(data.displayName ?? member.displayName),
+        pictureUrl: member.pictureUrl,
         chatNotified,
         isFreshRedemption: !data.alreadyClaimed,
       });
@@ -795,17 +844,65 @@ export function LoyaltyStampCardClient({
     });
   };
 
+  const handleCopyCouponCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(`#${code}`);
+      setCopiedCouponCode(true);
+      setTimeout(() => setCopiedCouponCode(false), 2000);
+    } catch {
+      // Ignore
+    }
+  };
+
   const totalSlots = Math.max(1, Math.min(30, config.stampsPerReward));
+  const isLineConnected = Boolean(member.lineUserId.startsWith("U") || isInLineClient);
 
   return (
     <div className="line-stamp-shell">
       <div className="line-stamp-container">
-        {/* Coral-Red Mascot Banner */}
+        {/* TOP NOTIFICATION BANNER (Above hero & card so customer sees scan result immediately) */}
+        {claiming && (
+          <div className="line-stamp-top-banner info">
+            <strong>กำลังบันทึกแต้มสะสมของคุณ...</strong>
+            <p>กรุณารอสักครู่ ระบบกำลังอัปเดตบัตรสะสมแต้ม</p>
+          </div>
+        )}
+
+        {claimBanner && !claiming && (
+          <div className={`line-stamp-top-banner ${claimBanner.type}`}>
+            <div className="line-stamp-alert-head">
+              <strong>{claimBanner.title}</strong>
+              <button
+                type="button"
+                className="line-stamp-alert-close"
+                onClick={() => setClaimBanner(null)}
+                aria-label="ปิดแจ้งเตือน"
+              >
+                ✕
+              </button>
+            </div>
+            <p>{claimBanner.subtitle}</p>
+            {claimBanner.type === "success" && claimBanner.chatNotified && (
+              <div className="line-stamp-alert-foot">
+                <span>ส่งข้อความสรุปแต้มไปยังแชท LINE ของคุณแล้ว</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="line-stamp-top-banner error">
+            <strong>แจ้งเตือนระบบ</strong>
+            <p>{errorMessage}</p>
+          </div>
+        )}
+
+        {/* Compact Mascot Banner */}
         <div className="line-stamp-hero">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/loyalty/banner-chicken.jpg"
-            alt="GaiTomNamPla Banner"
+            alt={config.cardTitle}
             className="line-stamp-hero-img"
           />
         </div>
@@ -825,18 +922,23 @@ export function LoyaltyStampCardClient({
 
             <h1 className="line-stamp-title">{config.cardTitle}</h1>
             <p className="line-stamp-valid">
-              {memberLoaded ? `Valid till ${member.validTillFormatted}` : "LINE Official Stamp Card"}
+              {memberLoaded ? `ใช้ได้ถึง ${member.validTillFormatted}` : "บัตรสะสมแต้มสมาชิก"}
             </p>
             <p className="line-stamp-headline">{config.cardHeadline}</p>
 
-            {/* Customer identity pill */}
-            {memberLoaded && (
+            {/* Customer LINE Profile Bar (Shows real LINE Profile Picture + LINE Display Name) */}
+            {(memberLoaded || member.lineUserId) && (
               <div className="line-stamp-user-bar">
-                <span>
-                  👤 {member.displayName}
-                  {isInLineClient ? " (LINE)" : ""}
-                </span>
-                {!isInLineClient && !config.liffId && (
+                <CustomerLineAvatar
+                  pictureUrl={member.pictureUrl}
+                  displayName={member.displayName}
+                  size={28}
+                />
+                <span className="line-stamp-user-name">{member.displayName}</span>
+                {isLineConnected && (
+                  <span className="line-stamp-line-pill">LINE</span>
+                )}
+                {!isLineConnected && !config.liffId && (
                   <button
                     type="button"
                     className="line-stamp-edit-name-btn"
@@ -845,40 +947,21 @@ export function LoyaltyStampCardClient({
                       setShowNameModal(true);
                     }}
                   >
-                    ตั้งชื่อของคุณ
+                    เปลี่ยนชื่อ
                   </button>
                 )}
               </div>
             )}
 
             {lineAuthError ? (
-              <div
-                style={{
-                  marginTop: 14,
-                  padding: "16px",
-                  borderRadius: 14,
-                  background: "rgba(0, 0, 0, 0.22)",
-                  color: "#ffffff",
-                  textAlign: "center",
-                }}
-              >
-                <strong style={{ display: "block", fontSize: "0.98rem", marginBottom: 6 }}>
-                  ⚠️ {lineAuthError}
-                </strong>
-                <p style={{ fontSize: "0.84rem", opacity: 0.9, marginBottom: 12 }}>
-                  ระบบยังไม่แสดงยอดแต้มเพื่อป้องกันความสับสน กรุณากดปุ่มด้านล่างเพื่อเชื่อมต่อบัญชี LINE ของคุณอีกครั้ง
+              <div className="line-stamp-auth-box">
+                <strong>{lineAuthError}</strong>
+                <p>
+                  กรุณากดปุ่มด้านล่างเพื่อเข้าสู่ระบบด้วยบัญชี LINE ของคุณและแสดงแต้มสะสม
                 </p>
                 <button
                   type="button"
-                  style={{
-                    background: "#06C755",
-                    color: "#ffffff",
-                    border: "none",
-                    borderRadius: 999,
-                    padding: "10px 20px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
+                  className="line-stamp-auth-btn"
                   onClick={() => {
                     if (config.liffId) {
                       window.location.href = `https://liff.line.me/${config.liffId}?s=${encodeURIComponent(shopSecret)}`;
@@ -887,36 +970,29 @@ export function LoyaltyStampCardClient({
                     }
                   }}
                 >
-                  เชื่อมต่อ LINE อีกครั้ง
+                  เข้าสู่ระบบด้วย LINE
                 </button>
               </div>
             ) : !memberLoaded && (loading || claiming) ? (
-              <div
-                style={{
-                  marginTop: 14,
-                  padding: "18px 16px",
-                  borderRadius: 14,
-                  background: "rgba(255, 255, 255, 0.14)",
-                  color: "#ffffff",
-                  textAlign: "center",
-                  fontWeight: 600,
-                }}
-              >
-                ⏳ กำลังเชื่อมต่อ LINE และโหลดแต้มสะสมของคุณ...
+              <div className="line-stamp-loading-box">
+                กำลังซิงก์ข้อมูลบัญชี LINE และแต้มสะสมของคุณ...
               </div>
             ) : (
               <>
-                {/* ★REWARD progress bar */}
+                {/* Stamp Progress Row */}
                 <button
                   type="button"
                   className="line-stamp-progress-row"
                   onClick={() => setGridExpanded((prev) => !prev)}
-                  aria-expanded={gridExpanded}
+                  aria-expanded={gridExpanded ? "true" : "false"}
                 >
                   <div className="line-stamp-progress-left">
-                    <span className="line-stamp-reward-badge">★REWARD</span>
+                    <span className="line-stamp-reward-badge">รางวัล</span>
                     <span className="line-stamp-progress-text">
-                      {stampsRemaining} stamp(s) till reward
+                      สะสมแล้ว {member.stamps}/{totalSlots} แต้ม ·{" "}
+                      {stampsRemaining > 0
+                        ? `เหลืออีก ${stampsRemaining} แต้ม`
+                        : "ครบรับรางวัลแล้ว"}
                     </span>
                   </div>
                   <span className={`line-stamp-chevron ${gridExpanded ? "open" : ""}`} aria-hidden>
@@ -936,7 +1012,7 @@ export function LoyaltyStampCardClient({
                         <div
                           key={slotNumber}
                           className={`line-stamp-slot ${isFilled ? "filled" : "empty"} ${isFinalSlot ? "final" : ""}`}
-                          aria-label={`Stamp ${slotNumber} of ${totalSlots}${isFilled ? " (สะสมแล้ว)" : ""}`}
+                          aria-label={`แต้มที่ ${slotNumber} จาก ${totalSlots}${isFilled ? " (สะสมแล้ว)" : ""}`}
                         >
                           <div className="line-stamp-emblem">
                             <div className="line-stamp-emblem-inner">
@@ -957,83 +1033,34 @@ export function LoyaltyStampCardClient({
           </div>
         </div>
 
-        {/* Notification Banner after scanning QR code */}
-        {claiming && (
-          <div className="line-stamp-alert info">
-            <strong>⏳ กำลังบันทึกแต้มสะสมของคุณ...</strong>
-            <span>กรุณารอสักครู่ ระบบกำลังอัปเดตบัตรสะสมแต้มและส่งแจ้งเตือนเข้าแชท</span>
-          </div>
-        )}
-
-        {claimBanner && !claiming && (
-          <div className={`line-stamp-alert ${claimBanner.type}`}>
-            <div className="line-stamp-alert-head">
-              <strong>{claimBanner.title}</strong>
-              <button
-                type="button"
-                className="line-stamp-alert-close"
-                onClick={() => setClaimBanner(null)}
-                aria-label="ปิดแจ้งเตือน"
-              >
-                ✕
-              </button>
+        {/* Ready-to-use Coupon Highlight Callout */}
+        {unclaimedCoupons.length > 0 && (
+          <div className="line-ready-coupon-callout">
+            <div className="line-ready-coupon-callout-info">
+              <strong>คุณมีคูปองส่วนลดพร้อมใช้ {unclaimedCoupons.length} ใบ</strong>
+              <span>{config.rewardTitle}</span>
             </div>
-            <p>{claimBanner.subtitle}</p>
-            {claimBanner.type === "success" && (
-              <div className="line-stamp-alert-foot">
-                {claimBanner.chatNotified ? (
-                  <span className="line-stamp-chat-ok">
-                    ✓ ส่งคำขอแจ้งเตือนไปยัง LINE OA ({config.cardTitle}) แล้ว (หากเพิ่มเพื่อนกับร้านไว้จะได้รับข้อความในแชท)
-                  </span>
-                ) : claimBanner.pushReason === "NOTIFY_MODE_REWARD_ONLY" ? (
-                  <span className="line-stamp-chat-hint">
-                    ℹ️ บันทึกแต้มบนบัตรเรียบร้อยแล้ว (ร้านตั้งค่าส่งข้อความแจ้งเตือนใน LINE เฉพาะเมื่อสะสมครบรับคูปองส่วนลด)
-                  </span>
-                ) : claimBanner.pushReason === "NOTIFY_MODE_OFF" ? (
-                  <span className="line-stamp-chat-hint">
-                    ✓ บันทึกแต้มบนบัตรสะสมแต้มเรียบร้อยแล้ว
-                  </span>
-                ) : claimBanner.pushReason === "LINE_QUOTA_EXCEEDED_429" ? (
-                  <span className="line-stamp-chat-hint">
-                    ⚠️ โควตาข้อความแจ้งเตือน LINE OA รายเดือนของร้านเต็มแล้ว (แต่แต้มของคุณถูกบันทึกบนบัตรเรียบร้อย)
-                  </span>
-                ) : claimBanner.pushReason === "LINE_TOKEN_INVALID_401" ? (
-                  <span className="line-stamp-chat-hint">
-                    ⚠️ Channel Access Token ของร้านหมดอายุหรือไม่ถูกต้อง (กรุณาออก Token ใหม่ในหน้าตั้งค่าร้าน)
-                  </span>
-                ) : claimBanner.pushReason === "LINE_PROVIDER_OR_FRIEND_MISMATCH_400" ? (
-                  <span className="line-stamp-chat-hint">
-                    ⚠️ ไม่สามารถส่งแจ้งเตือนเข้าแชทได้ (กรุณาตรวจสอบว่า LINE Login และ Messaging API อยู่ภายใต้ Provider เดียวกัน)
-                  </span>
-                ) : claimBanner.pushReason === "MISSING_CHANNEL_ACCESS_TOKEN" ? (
-                  <span className="line-stamp-chat-hint">
-                    ℹ️ สำหรับร้านค้า: กรุณาใส่ Messaging API Channel Access Token ในหน้าตั้งค่า เพื่อให้ LINE OA ทักแจ้งแต้มหาลูกค้าอัตโนมัติ
-                  </span>
-                ) : claimBanner.pushReason === "NOT_LINE_USER_ID" ? (
-                  <span className="line-stamp-chat-hint">
-                    ℹ️ กรุณาสแกนผ่านลิงก์ LIFF ในแอป LINE เพื่อให้ LINE OA ทักแจ้งเตือนแต้มในแชทอัตโนมัติ
-                  </span>
-                ) : null}
-              </div>
-            )}
+            <button
+              type="button"
+              className="line-ready-coupon-callout-btn"
+              onClick={() => {
+                setActiveTab("unclaimed");
+                setConfirmRedeemCoupon(unclaimedCoupons[0]);
+              }}
+            >
+              แสดงคูปอง
+            </button>
           </div>
         )}
 
-        {errorMessage && (
-          <div className="line-stamp-alert error">
-            <strong>แจ้งเตือนระบบ</strong>
-            <p>{errorMessage}</p>
-          </div>
-        )}
-
-        {/* Unclaimed rewards | Claimed rewards Tabs */}
-        <div className="line-stamp-tabs">
+        {/* Thai Rewards Tabs: คูปองพร้อมใช้ | ประวัติการใช้คูปอง */}
+        <div className="line-stamp-tabs" ref={rewardsSectionRef}>
           <button
             type="button"
             className={`line-stamp-tab ${activeTab === "unclaimed" ? "active" : ""}`}
             onClick={() => setActiveTab("unclaimed")}
           >
-            Unclaimed rewards
+            คูปองพร้อมใช้
             {unclaimedCoupons.length > 0 && (
               <span className="line-stamp-tab-count">{unclaimedCoupons.length}</span>
             )}
@@ -1043,7 +1070,7 @@ export function LoyaltyStampCardClient({
             className={`line-stamp-tab ${activeTab === "claimed" ? "active" : ""}`}
             onClick={() => setActiveTab("claimed")}
           >
-            Claimed rewards
+            ประวัติการใช้คูปอง
             {claimedCoupons.length > 0 && (
               <span className="line-stamp-tab-count muted">{claimedCoupons.length}</span>
             )}
@@ -1054,7 +1081,6 @@ export function LoyaltyStampCardClient({
         <div className="line-stamp-rewards-section">
           {activeTab === "unclaimed" ? (
             <>
-              {/* Ready-to-use Unclaimed Coupons (when customer has reached 10 stamps) */}
               {unclaimedCoupons.map((coupon) => (
                 <div key={coupon.id} className="line-reward-item unlocked">
                   <div className="line-reward-thumb-wrap">
@@ -1072,15 +1098,18 @@ export function LoyaltyStampCardClient({
                     <button
                       type="button"
                       className="line-reward-use-btn"
-                      onClick={() => setConfirmRedeemCoupon(coupon)}
+                      onClick={() => {
+                        setCopiedCouponCode(false);
+                        setConfirmRedeemCoupon(coupon);
+                      }}
                     >
-                      กดใช้คูปองส่วนลด (ตัดแต้ม)
+                      แสดงคูปองให้ร้าน / ใช้สิทธิ์
                     </button>
                   </div>
                 </div>
               ))}
 
-              {/* Locked Progress Reward Item (matches Screenshot 1) */}
+              {/* Next Reward Progress Item */}
               <div className="line-reward-item">
                 <div className="line-reward-thumb-wrap">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1089,7 +1118,7 @@ export function LoyaltyStampCardClient({
                     alt={config.rewardTitle}
                     className="line-reward-thumb"
                   />
-                  <span className="line-reward-lock-badge" aria-label="Locked">
+                  <span className="line-reward-lock-badge" aria-label="กำลังสะสม">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                       <path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2Zm-6 6.73V17a1 1 0 0 1-2 0v-1.27a2 2 0 1 1 2 0ZM10 9V7a2 2 0 1 1 4 0v2h-4Z" />
                     </svg>
@@ -1098,7 +1127,7 @@ export function LoyaltyStampCardClient({
                 <div className="line-reward-info">
                   <div className="line-reward-title">{config.rewardTitle}</div>
                   <div className="line-reward-required">
-                    {stampsRemaining} more stamp(s) required
+                    สะสมเพิ่มอีก {stampsRemaining} แต้ม เพื่อรับคูปองใบใหม่
                   </div>
                 </div>
               </div>
@@ -1133,6 +1162,7 @@ export function LoyaltyStampCardClient({
                         title: coupon.title,
                         claimedAtFormatted: formatThaiDateTime(coupon.claimedAt),
                         displayName: member.displayName,
+                        pictureUrl: member.pictureUrl,
                         chatNotified: false,
                         isFreshRedemption: isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt),
                       })
@@ -1140,7 +1170,7 @@ export function LoyaltyStampCardClient({
                   >
                     {isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt)
                       ? "ดูใบยืนยันคูปอง (สำหรับแคปส่งร้าน)"
-                      : "ดูรายละเอียดประวัติการใช้สิทธิ์"}
+                      : "ดูรายละเอียดการใช้สิทธิ์"}
                   </button>
                 </div>
               </div>
@@ -1148,9 +1178,9 @@ export function LoyaltyStampCardClient({
           )}
         </div>
 
-        {/* How this works Section (matches Screenshot 1) */}
+        {/* Thai Rules Section */}
         <div className="line-stamp-how">
-          <h2>How this works</h2>
+          <h2>กติกาและเงื่อนไขการสะสมแต้ม</h2>
           <div className="line-stamp-rules">
             {rulesLines.map((line, index) => (
               <p key={index}>{line}</p>
@@ -1161,11 +1191,11 @@ export function LoyaltyStampCardClient({
             className="line-stamp-help-link"
             onClick={() => setShowHelpModal(true)}
           >
-            See Service Guide/Help <span aria-hidden>›</span>
+            ดูวิธีใช้งานบัตรสะสมแต้ม <span aria-hidden>›</span>
           </button>
         </div>
 
-        {/* Floating Bottom "Scan QR code" Pill Button */}
+        {/* Floating Bottom "สแกน QR รับแต้ม" Button */}
         <div className="line-stamp-fab-bar">
           <button
             type="button"
@@ -1180,24 +1210,53 @@ export function LoyaltyStampCardClient({
               <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            <span>Scan QR code</span>
+            <span>สแกน QR รับแต้ม</span>
           </button>
         </div>
       </div>
 
-      {/* Modal 1: Confirm Self-Service Coupon Redemption (ลูกค้ากดตัดแต้มเอง) */}
+      {/* Modal 1: Coupon Presentation & Safe Redemption */}
       {confirmRedeemCoupon && (
         <div className="line-modal-backdrop" onClick={() => !redeemingCouponId && setConfirmRedeemCoupon(null)}>
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="line-modal-badge">🎟️ ยืนยันการใช้คูปองส่วนลด</div>
+            <div className="line-modal-badge">คูปองส่วนลดของคุณ</div>
             <h3>{confirmRedeemCoupon.title}</h3>
-            <p className="line-modal-desc">
-              เมื่อกดปุ่ม <strong>“ยืนยันใช้สิทธิ์ส่วนลดตอนนี้”</strong> ระบบจะตัดสิทธิ์คูปองใบนี้ไปยังหน้า Claimed rewards พร้อมแสดงหน้าจอยืนยันและส่งแจ้งเตือนเข้าแชท LINE ร้าน เพื่อให้คุณแคปหน้าจอส่งให้ทางร้านได้ทันที
-            </p>
-            <div className="line-modal-code-box">
-              <span>รหัสคูปอง</span>
-              <strong>#{confirmRedeemCoupon.code}</strong>
+
+            {/* Customer LINE Profile on Coupon */}
+            <div className="line-modal-profile-row">
+              <CustomerLineAvatar
+                pictureUrl={member.pictureUrl}
+                displayName={member.displayName}
+                size={36}
+              />
+              <div className="line-modal-profile-text">
+                <strong>{member.displayName}</strong>
+                <span>{config.cardTitle}</span>
+              </div>
             </div>
+
+            <div className="line-modal-code-box large">
+              <div>
+                <span className="line-modal-code-label">รหัสคูปองสำหรับแจ้งร้านค้า</span>
+                <strong>#{confirmRedeemCoupon.code}</strong>
+              </div>
+              <button
+                type="button"
+                className="line-modal-copy-btn"
+                onClick={() => handleCopyCouponCode(confirmRedeemCoupon.code)}
+              >
+                {copiedCouponCode ? "คัดลอกแล้ว" : "คัดลอกรหัส"}
+              </button>
+            </div>
+
+            <p className="line-modal-desc">
+              แจ้งรหัส <strong>#{confirmRedeemCoupon.code}</strong> ให้ทางร้านตรวจสอบ หรือกดปุ่มยืนยันด้านล่างเพื่อตัดสิทธิ์และแสดงใบยืนยันสำหรับแคปหน้าจอส่งในแชทร้าน
+            </p>
+
+            <div className="line-modal-warn-note">
+              หมายเหตุ: เมื่อกดปุ่มยืนยันใช้สิทธิ์ด้านล่าง คูปองจะถูกเปลี่ยนเป็นสถานะ “ใช้แล้ว” ทันทีและไม่สามารถย้อนกลับได้
+            </div>
+
             <div className="line-modal-actions">
               <button
                 type="button"
@@ -1205,7 +1264,7 @@ export function LoyaltyStampCardClient({
                 disabled={Boolean(redeemingCouponId)}
                 onClick={handleConfirmRedeem}
               >
-                {redeemingCouponId ? "กำลังตัดสิทธิ์คูปอง..." : "✓ ยืนยันใช้สิทธิ์ส่วนลดตอนนี้"}
+                {redeemingCouponId ? "กำลังยืนยันการใช้สิทธิ์..." : "ยืนยันใช้สิทธิ์คูปองตอนนี้"}
               </button>
               <button
                 type="button"
@@ -1213,14 +1272,14 @@ export function LoyaltyStampCardClient({
                 disabled={Boolean(redeemingCouponId)}
                 onClick={() => setConfirmRedeemCoupon(null)}
               >
-                ยกเลิก (เก็บไว้ใช้ครั้งถัดไป)
+                ปิดหน้าต่าง (เก็บไว้ใช้ภายหลัง)
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal 2: Screenshot-Ready Redemption Receipt (แคปหน้าจอส่งในแชทร้าน) */}
+      {/* Modal 2: Screenshot-Ready Redemption Receipt */}
       {receiptCoupon && (
         <div className="line-modal-backdrop" onClick={() => setReceiptCoupon(null)}>
           <div className="line-modal-sheet receipt" onClick={(e) => e.stopPropagation()}>
@@ -1237,24 +1296,33 @@ export function LoyaltyStampCardClient({
               </div>
               <span className="line-receipt-status">
                 {receiptCoupon.isFreshRedemption
-                  ? "ตัดสิทธิ์คูปองสำเร็จ (CLAIM CONFIRMED)"
-                  : "ประวัติคูปองที่ใช้สิทธิ์ไปแล้ว (USED HISTORY)"}
+                  ? "ยืนยันการใช้คูปองสำเร็จ"
+                  : "ประวัติคูปองที่ใช้สิทธิ์ไปแล้ว"}
               </span>
               <h3>{config.cardTitle}</h3>
             </div>
 
             <div className="line-receipt-ticket">
               <div className="line-receipt-reward-title">{receiptCoupon.title}</div>
+
+              <div className="line-receipt-profile-row">
+                <CustomerLineAvatar
+                  pictureUrl={receiptCoupon.pictureUrl}
+                  displayName={receiptCoupon.displayName}
+                  size={34}
+                />
+                <div>
+                  <strong>{receiptCoupon.displayName}</strong>
+                  <span>บัญชี LINE ลูกค้า</span>
+                </div>
+              </div>
+
               <div className="line-receipt-row">
-                <span>รหัสอ้างอิง</span>
+                <span>รหัสคูปอง</span>
                 <strong>#{receiptCoupon.code}</strong>
               </div>
               <div className="line-receipt-row">
-                <span>ลูกค้า</span>
-                <strong>{receiptCoupon.displayName}</strong>
-              </div>
-              <div className="line-receipt-row">
-                <span>เวลาที่กดใช้สิทธิ์</span>
+                <span>เวลาที่ใช้สิทธิ์</span>
                 <strong>{receiptCoupon.claimedAtFormatted}</strong>
               </div>
               {receiptCoupon.isFreshRedemption ? (
@@ -1266,21 +1334,21 @@ export function LoyaltyStampCardClient({
                   className="line-receipt-live-clock"
                   style={{ background: "#fef2f2", color: "#991b1b", borderColor: "#fecaca" }}
                 >
-                  <span>คูปองใบนี้ถูกใช้สิทธิ์ไปแล้วเมื่อ {receiptCoupon.claimedAtFormatted} (ไม่สามารถใช้ซ้ำได้)</span>
+                  <span>คูปองใบนี้ถูกใช้สิทธิ์ไปแล้วเมื่อ {receiptCoupon.claimedAtFormatted}</span>
                 </div>
               )}
             </div>
 
             {receiptCoupon.isFreshRedemption ? (
               <p className="line-receipt-instruction">
-                📸 <strong>แคปหน้าจอนี้ส่งในแชท LINE ร้านได้เลย!</strong>
+                <strong>แคปหน้าจอนี้ส่งในแชท LINE ให้ทางร้านได้เลย</strong>
                 {receiptCoupon.chatNotified
-                  ? " (ระบบได้ส่งคำขอแจ้งเตือนเข้าแชท LINE ให้อัตโนมัติแล้วเช่นกัน)"
+                  ? " (ระบบได้ส่งข้อความยืนยันเข้าแชท LINE ให้อัตโนมัติแล้ว)"
                   : ""}
               </p>
             ) : (
               <p className="line-receipt-instruction">
-                ℹ️ หน้าต่างนี้แสดงประวัติคูปองที่เคยใช้สิทธิ์ไปแล้ว (ทางร้านสามารถตรวจสอบรหัส <strong>#{receiptCoupon.code}</strong> ในระบบหลังร้านได้)
+                หน้าต่างนี้แสดงประวัติคูปองที่เคยใช้สิทธิ์ไปแล้ว (รหัสอ้างอิง <strong>#{receiptCoupon.code}</strong>)
               </p>
             )}
 
@@ -1295,54 +1363,69 @@ export function LoyaltyStampCardClient({
         </div>
       )}
 
-      {/* Modal 3: QR Scanner / Code Input Fallback */}
+      {/* Modal 3: QR Scanner with Collapsible Fallback Input */}
       {showScannerModal && (
         <div className="line-modal-backdrop" onClick={() => setShowScannerModal(false)}>
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <h3>สแกนคิวอาร์โค้ดสะสมแต้ม</h3>
+            <h3>วิธีสแกนคิวอาร์โค้ดรับแต้ม</h3>
             <p className="line-modal-desc">
-              คุณสามารถใช้กล้องในแอป LINE สแกนรูปคิวอาร์โค้ดที่ร้านส่งให้ในแชทได้โดยตรง หรือวางลิงก์คิวอาร์โค้ดด้านล่างเพื่อรับแต้มทันที
+              ใช้กล้องในแอป LINE สแกนรูป QR Code ที่ได้รับจากทางร้าน หรือกดค้างที่รูป QR Code ในแชทแล้วเลือก <strong>“สแกนคิวอาร์โค้ด”</strong> แต้มจะเข้าบัตรอัตโนมัติทันที
             </p>
-            <input
-              type="text"
-              className="line-modal-input"
-              placeholder="วางลิงก์ QR Code หรือรหัสจากร้าน..."
-              value={manualQrInput}
-              onChange={(e) => setManualQrInput(e.target.value)}
-            />
-            <div className="line-modal-actions">
-              <button
-                type="button"
-                className="line-modal-primary-btn"
-                onClick={() => handleScannedQrText(manualQrInput)}
-                disabled={!manualQrInput.trim()}
-              >
-                รับแต้มสะสม
-              </button>
+
+            <button
+              type="button"
+              className="line-scanner-fallback-toggle"
+              onClick={() => setShowManualQrInput((prev) => !prev)}
+            >
+              {showManualQrInput ? "ซ่อนช่องวางลิงก์" : "มีปัญหาในการสแกน? วางลิงก์หรือรหัสจากร้าน"}
+            </button>
+
+            {showManualQrInput && (
+              <div style={{ marginTop: 10 }}>
+                <input
+                  type="text"
+                  className="line-modal-input"
+                  placeholder="วางลิงก์ QR Code หรือรหัสจากร้าน..."
+                  value={manualQrInput}
+                  onChange={(e) => setManualQrInput(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="line-modal-primary-btn"
+                  style={{ marginBottom: 8 }}
+                  onClick={() => handleScannedQrText(manualQrInput)}
+                  disabled={!manualQrInput.trim()}
+                >
+                  รับแต้มสะสม
+                </button>
+              </div>
+            )}
+
+            <div className="line-modal-actions" style={{ marginTop: 8 }}>
               <button
                 type="button"
                 className="line-modal-secondary-btn"
                 onClick={() => setShowScannerModal(false)}
               >
-                ปิด
+                ปิดหน้าต่าง
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal 4: Customer Display Name Editor (when testing outside LINE) */}
+      {/* Modal 4: Customer Display Name Editor (only when testing without LIFF) */}
       {showNameModal && (
         <div className="line-modal-backdrop" onClick={() => setShowNameModal(false)}>
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <h3>ระบุชื่อของคุณบนบัตรสะสมแต้ม</h3>
             <p className="line-modal-desc">
-              ชื่อนี้จะแสดงในใบยืนยันคูปองส่วนลดและในระบบของทางร้าน (หากเปิดผ่านแอป LINE ระบบจะดึงชื่อ LINE ของคุณให้อัตโนมัติ)
+              เมื่อเปิดใช้งานผ่านแอป LINE ระบบจะซิงก์รูปโปรไฟล์และชื่อ LINE ของคุณให้อัตโนมัติ
             </p>
             <input
               type="text"
               className="line-modal-input"
-              placeholder="เช่น คุณนนท์, ลูกค้าประจำ..."
+              placeholder="ระบุชื่อของคุณ..."
               value={nameDraft}
               maxLength={60}
               onChange={(e) => setNameDraft(e.target.value)}
@@ -1374,9 +1457,15 @@ export function LoyaltyStampCardClient({
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <h3>วิธีใช้งานบัตรสะสมแต้ม {config.cardTitle}</h3>
             <div className="line-modal-desc" style={{ textAlign: "left" }}>
-              <p><strong>1. การสะสมแต้ม:</strong> เมื่อสั่งซื้อเมนูหลัก ทางร้านจะส่งรูป QR Code ตามจำนวนกล่อง (1–10 กล่อง) ให้ในแชท เมื่อสแกนแล้วแต้มจะขึ้นบนบัตรทันทีพร้อมแจ้งเตือนในแชท</p>
-              <p style={{ marginTop: 8 }}><strong>2. การใช้ส่วนลด 50%:</strong> เมื่อสะสมครบ {config.stampsPerReward} แต้ม ระบบจะออกคูปองไว้ในแถบ <strong>Unclaimed rewards</strong> คุณสามารถกดปุ่มใช้คูปองและแคปหน้าจอยืนยันส่งให้ร้านในแชทได้เลย</p>
-              <p style={{ marginTop: 8 }}><strong>3. อายุแต้มสะสม:</strong> แต้มมีอายุ {config.validityMonths} เดือนนับจากวันที่สะสมแต้มครั้งล่าสุด</p>
+              <p>
+                <strong>1. การสะสมแต้ม:</strong> เมื่อสั่งซื้อเมนูหลัก ทางร้านจะส่งรูป QR Code ตามจำนวนกล่อง (1–10 กล่อง) ให้ในแชท เมื่อสแกนแล้วแต้มจะขึ้นบนบัตรทันทีพร้อมแจ้งเตือนในแชท
+              </p>
+              <p style={{ marginTop: 8 }}>
+                <strong>2. การใช้คูปองส่วนลด:</strong> เมื่อสะสมครบ {config.stampsPerReward} แต้ม ระบบจะออกคูปองไว้ในแถบ <strong>คูปองพร้อมใช้</strong> คุณสามารถกดดูรหัสคูปองเพื่อแจ้งร้าน หรือกดยืนยันใช้สิทธิ์แล้วแคปหน้าจอส่งให้ร้านในแชทได้เลย
+              </p>
+              <p style={{ marginTop: 8 }}>
+                <strong>3. อายุแต้มสะสม:</strong> แต้มมีอายุ {config.validityMonths} เดือนนับจากวันที่สะสมแต้มครั้งล่าสุด
+              </p>
             </div>
             <button
               type="button"

@@ -165,11 +165,21 @@ export async function POST(request: Request) {
 
     const memberRaw = result.member as Record<string, unknown>;
     const expiresAt = memberRaw.expiresAt ? String(memberRaw.expiresAt) : null;
+    const rawDisplayName = String(memberRaw.displayName ?? "").trim();
+    const finalDisplayName =
+      rawDisplayName && rawDisplayName !== "ลูกค้า LINE"
+        ? rawDisplayName
+        : resolvedDisplayName || "ลูกค้า LINE";
+    const finalPictureUrl = memberRaw.pictureUrl
+      ? String(memberRaw.pictureUrl)
+      : resolvedPictureUrl;
 
     return NextResponse.json({
       ...result,
       member: {
         ...memberRaw,
+        displayName: finalDisplayName,
+        pictureUrl: finalPictureUrl,
         validTillFormatted: formatValidTillDate(expiresAt),
       },
     });
