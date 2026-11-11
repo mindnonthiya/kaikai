@@ -77,6 +77,12 @@ async function updateIngUnitCostWithFallback(
 }
 
 function revalidateExpenses() {
+  invalidateQueryCache("expenses_win");
+  invalidateQueryCache("expenses_superset");
+  invalidateQueryCache("ing_purchases_win");
+  invalidateQueryCache("recent_purchases");
+  invalidateQueryCache("latest_purchases");
+  invalidateQueryCache("pack_purchases");
   invalidateQueryCache("ingredients");
   invalidateQueryCache("packaging");
   invalidateQueryCache("recipes");

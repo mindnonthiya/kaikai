@@ -3,10 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import type { ActionState } from "@/lib/action-state";
-import { invalidateQueryCache } from "@/lib/data/queries";
+import { readCostRows } from "@/lib/cost-rows";
+import { getCached, invalidateQueryCache, setCached } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
 import { processPendingLoyaltyPushJobs } from "@/lib/line-messaging";
 import {
+  LOYALTY_ADMIN_PAGE_SIZE,
   LOYALTY_SETTINGS_KEY,
   type LoyaltyConfig,
   type LoyaltyCouponRecord,
@@ -17,8 +19,11 @@ import {
   createDefaultQrTokens,
   formatThaiDateTime,
   generateCouponCode,
+  isMissingRelationError,
+  isMissingRpcError,
   isValidLiffId,
   normalizeLoyaltyConfig,
+  redactLoyaltyConfigForClient,
 } from "@/lib/loyalty";
 import {
   decryptLoyaltySecret,
@@ -76,6 +81,25 @@ export interface LoyaltyAdminCouponItem extends LoyaltyCouponRecord {
   pictureUrl: string | null;
 }
 
+export interface LoyaltyPaginatedResult<T> {
+  ok: boolean;
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  message?: string;
+}
+
+export interface LoyaltyMemberDetailResult {
+  ok: boolean;
+  member: LoyaltyMemberSummary | null;
+  coupons: LoyaltyAdminCouponItem[];
+  logs: LoyaltyActivityLogItem[];
+  couponsTotal?: number;
+  logsTotal?: number;
+  message?: string;
+}
+
 export interface LoyaltyAdminSnapshot {
   config: LoyaltyConfig;
   persisted: boolean;
@@ -85,6 +109,10 @@ export interface LoyaltyAdminSnapshot {
   recentPushJobs?: LoyaltyPushQueueSummary[];
   recentLogs?: LoyaltyActivityLogItem[];
   metrics?: LoyaltyOverviewMetrics;
+  membersTotal?: number;
+  couponsTotal?: number;
+  logsTotal?: number;
+  loadedTabs?: string[];
 }
 
 export interface LoyaltySettingsSummary {
@@ -94,20 +122,6 @@ export interface LoyaltySettingsSummary {
   totalMembers: number;
   readyCouponsCount: number;
   failedPushCount: number;
-}
-
-function isMissingRelationError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST204") return true;
-  const msg = String(error.message ?? "");
-  return msg.includes("loyalty_") && (msg.includes("does not exist") || msg.includes("schema cache"));
-}
-
-function isMissingRpcError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === "PGRST202" || error.code === "42883") return true;
-  const msg = String(error.message ?? "");
-  return msg.includes("Could not find the function") || msg.includes("does not exist");
 }
 
 function getBangkokStartOfDayMs(now = new Date()): number {
@@ -121,6 +135,428 @@ function getBangkokStartOfDayMs(now = new Date()): number {
   return new Date(`${dateStr}T00:00:00+07:00`).getTime();
 }
 
+function sanitizePostgrestSearch(raw: string): string {
+  return raw.replace(/[,()*%\\]/g, " ").trim();
+}
+
+async function fetchMemberProfilesByIds(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  ownerId: string,
+  shopId: string,
+  memberIds: string[],
+  lineUserIds: string[] = [],
+): Promise<{
+  nameById: Map<string, string>;
+  picById: Map<string, string | null>;
+  nameByLineId: Map<string, string>;
+  picByLineId: Map<string, string | null>;
+}> {
+  const nameById = new Map<string, string>();
+  const picById = new Map<string, string | null>();
+  const nameByLineId = new Map<string, string>();
+  const picByLineId = new Map<string, string | null>();
+
+  const uniqueMemberIds = Array.from(new Set(memberIds.filter(Boolean)));
+  const uniqueLineIds = Array.from(new Set(lineUserIds.filter(Boolean)));
+
+  if (uniqueMemberIds.length > 0) {
+    const { data } = await supabase
+      .from("loyalty_members")
+      .select("id,line_user_id,display_name,picture_url")
+      .eq("owner_id", ownerId)
+      .eq("shop_scope_id", shopId)
+      .in("id", uniqueMemberIds);
+
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const id = String(row.id ?? "");
+      const lineId = String(row.line_user_id ?? "");
+      const name = String(row.display_name ?? "ลูกค้า LINE");
+      const pic = row.picture_url ? String(row.picture_url) : null;
+      if (id) {
+        nameById.set(id, name);
+        picById.set(id, pic);
+      }
+      if (lineId) {
+        nameByLineId.set(lineId, name);
+        picByLineId.set(lineId, pic);
+      }
+    }
+  }
+
+  const missingLineIds = uniqueLineIds.filter((lid) => !nameByLineId.has(lid));
+  if (missingLineIds.length > 0) {
+    const { data } = await supabase
+      .from("loyalty_members")
+      .select("id,line_user_id,display_name,picture_url")
+      .eq("owner_id", ownerId)
+      .eq("shop_scope_id", shopId)
+      .in("line_user_id", missingLineIds);
+
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const id = String(row.id ?? "");
+      const lineId = String(row.line_user_id ?? "");
+      const name = String(row.display_name ?? "ลูกค้า LINE");
+      const pic = row.picture_url ? String(row.picture_url) : null;
+      if (id) {
+        nameById.set(id, name);
+        picById.set(id, pic);
+      }
+      if (lineId) {
+        nameByLineId.set(lineId, name);
+        picByLineId.set(lineId, pic);
+      }
+    }
+  }
+
+  return { nameById, picById, nameByLineId, picByLineId };
+}
+
+async function queryMembersPageWithClient(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  ownerId: string,
+  shopId: string,
+  options: {
+    query?: string;
+    filter?: "all" | "has_coupon" | "near_reward";
+    page?: number;
+    pageSize?: number;
+    stampsPerReward?: number;
+  },
+): Promise<{ items: LoyaltyMemberSummary[]; total: number; page: number; pageSize: number; error?: { code?: string; message?: string } | null }> {
+  const pageSize = Math.max(1, Math.min(100, Math.round(options.pageSize ?? LOYALTY_ADMIN_PAGE_SIZE)));
+  const page = Math.max(1, Math.round(options.page ?? 1));
+  const filter = options.filter ?? "all";
+  const cleanSearch = sanitizePostgrestSearch(options.query ?? "");
+  const stampsPerReward = Math.max(1, Math.round(options.stampsPerReward ?? 10));
+
+  const selectCols: string =
+    filter === "has_coupon"
+      ? "id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at,loyalty_coupons!inner(status)"
+      : "id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at";
+
+  let dbQuery = supabase
+    .from("loyalty_members")
+    .select(selectCols, {
+      count: "exact",
+    })
+    .eq("owner_id", ownerId)
+    .eq("shop_scope_id", shopId);
+
+  if (cleanSearch) {
+    dbQuery = dbQuery.or(`display_name.ilike.%${cleanSearch}%,line_user_id.ilike.%${cleanSearch}%`);
+  }
+  if (filter === "near_reward") {
+    dbQuery = dbQuery.gte("stamps", Math.max(1, stampsPerReward - 2));
+  }
+  if (filter === "has_coupon") {
+    dbQuery = dbQuery.eq("loyalty_coupons.status", "unclaimed");
+  }
+
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data: memberRows, count, error } = await dbQuery
+    .order("updated_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    return { items: [], total: 0, page, pageSize, error };
+  }
+
+  const rowsList = (memberRows ?? []) as unknown as Array<Record<string, unknown>>;
+  const pageMemberIds = rowsList.map((r) => String(r.id ?? "")).filter(Boolean);
+
+  const unclaimedByMember = new Map<string, number>();
+  const claimedByMember = new Map<string, number>();
+
+  if (pageMemberIds.length > 0) {
+    const { data: memberCoupons } = await supabase
+      .from("loyalty_coupons")
+      .select("member_id,status")
+      .eq("owner_id", ownerId)
+      .eq("shop_scope_id", shopId)
+      .in("member_id", pageMemberIds);
+
+    for (const c of (memberCoupons ?? []) as Array<Record<string, unknown>>) {
+      const mId = String(c.member_id ?? "");
+      if (!mId) continue;
+      if (c.status === "claimed") {
+        claimedByMember.set(mId, (claimedByMember.get(mId) ?? 0) + 1);
+      } else {
+        unclaimedByMember.set(mId, (unclaimedByMember.get(mId) ?? 0) + 1);
+      }
+    }
+  }
+
+  const items: LoyaltyMemberSummary[] = rowsList.map((row) => {
+    const id = String(row.id ?? "");
+    return {
+      id,
+      lineUserId: String(row.line_user_id ?? ""),
+      displayName: String(row.display_name ?? "ลูกค้า LINE"),
+      pictureUrl: row.picture_url ? String(row.picture_url) : null,
+      stamps: Math.max(0, Number(row.stamps ?? 0)),
+      lifetimeStamps: Math.max(0, Number(row.lifetime_stamps ?? 0)),
+      expiresAt: row.expires_at ? String(row.expires_at) : null,
+      lastStampedAt: row.last_stamped_at ? String(row.last_stamped_at) : null,
+      unclaimedCount: unclaimedByMember.get(id) ?? 0,
+      claimedCount: claimedByMember.get(id) ?? 0,
+    };
+  });
+
+  return {
+    items,
+    total: count ?? items.length,
+    page,
+    pageSize,
+  };
+}
+
+async function queryCouponsPageWithClient(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  ownerId: string,
+  shopId: string,
+  rewardTitleFallback: string,
+  options: {
+    query?: string;
+    status?: "unclaimed" | "claimed" | "all";
+    page?: number;
+    pageSize?: number;
+  },
+): Promise<{ items: LoyaltyAdminCouponItem[]; total: number; page: number; pageSize: number; error?: { code?: string; message?: string } | null }> {
+  const pageSize = Math.max(1, Math.min(100, Math.round(options.pageSize ?? LOYALTY_ADMIN_PAGE_SIZE)));
+  const page = Math.max(1, Math.round(options.page ?? 1));
+  const status = options.status ?? "unclaimed";
+  const rawSearch = (options.query ?? "").replace(/^#/, "").trim();
+  const cleanSearch = sanitizePostgrestSearch(rawSearch);
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_coupons", {
+    p_shop_scope_id: shopId,
+    p_status: status,
+    p_query: cleanSearch,
+    p_limit: pageSize,
+    p_offset: from,
+  });
+
+  if (!rpcErr && rpcData && typeof rpcData === "object") {
+    const payload = rpcData as Record<string, unknown>;
+    if (payload.ok) {
+      const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
+      return {
+        items: rpcItems.map((row) => ({
+          id: String(row.id ?? ""),
+          memberId: String(row.memberId ?? ""),
+          lineUserId: String(row.lineUserId ?? ""),
+          code: String(row.code ?? ""),
+          title: String(row.title ?? rewardTitleFallback),
+          status: row.status === "claimed" ? "claimed" : "unclaimed",
+          issuedAt: String(row.issuedAt ?? new Date().toISOString()),
+          claimedAt: row.claimedAt ? String(row.claimedAt) : null,
+          displayName: String(row.displayName ?? "ลูกค้า LINE"),
+          pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
+        })),
+        total: Math.max(0, Number(payload.total ?? 0)),
+        page,
+        pageSize,
+      };
+    }
+  }
+
+  let matchingMemberIds: string[] = [];
+  if (cleanSearch) {
+    const { data: matchedMembers } = await supabase
+      .from("loyalty_members")
+      .select("id")
+      .eq("owner_id", ownerId)
+      .eq("shop_scope_id", shopId)
+      .or(`display_name.ilike.%${cleanSearch}%,line_user_id.ilike.%${cleanSearch}%`)
+      .limit(500);
+
+    matchingMemberIds = ((matchedMembers ?? []) as Array<Record<string, unknown>>)
+      .map((m) => String(m.id ?? ""))
+      .filter(Boolean);
+  }
+
+  let dbQuery = supabase
+    .from("loyalty_coupons")
+    .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at", { count: "exact" })
+    .eq("owner_id", ownerId)
+    .eq("shop_scope_id", shopId);
+
+  if (status === "unclaimed" || status === "claimed") {
+    dbQuery = dbQuery.eq("status", status);
+  }
+
+  if (cleanSearch) {
+    if (matchingMemberIds.length > 0) {
+      dbQuery = dbQuery.or(`code.ilike.%${cleanSearch}%,title.ilike.%${cleanSearch}%,member_id.in.(${matchingMemberIds.join(",")})`);
+    } else {
+      dbQuery = dbQuery.or(`code.ilike.%${cleanSearch}%,title.ilike.%${cleanSearch}%`);
+    }
+  }
+
+  const { data: couponRows, count, error } = await dbQuery
+    .order("issued_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    return { items: [], total: 0, page, pageSize, error };
+  }
+
+  const rowsList = (couponRows ?? []) as Array<Record<string, unknown>>;
+  const { nameById, picById, nameByLineId, picByLineId } = await fetchMemberProfilesByIds(
+    supabase,
+    ownerId,
+    shopId,
+    rowsList.map((r) => String(r.member_id ?? "")),
+    rowsList.map((r) => String(r.line_user_id ?? "")),
+  );
+
+  const items: LoyaltyAdminCouponItem[] = rowsList.map((row) => {
+    const memberId = String(row.member_id ?? "");
+    const lineUserId = String(row.line_user_id ?? "");
+    return {
+      id: String(row.id ?? ""),
+      memberId,
+      lineUserId,
+      code: String(row.code ?? ""),
+      title: String(row.title ?? rewardTitleFallback),
+      status: row.status === "claimed" ? "claimed" : "unclaimed",
+      issuedAt: String(row.issued_at ?? new Date().toISOString()),
+      claimedAt: row.claimed_at ? String(row.claimed_at) : null,
+      displayName: nameById.get(memberId) ?? nameByLineId.get(lineUserId) ?? "ลูกค้า LINE",
+      pictureUrl: picById.get(memberId) ?? picByLineId.get(lineUserId) ?? null,
+    };
+  });
+
+  return {
+    items,
+    total: count ?? items.length,
+    page,
+    pageSize,
+  };
+}
+
+async function queryLogsPageWithClient(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  ownerId: string,
+  shopId: string,
+  options: {
+    query?: string;
+    page?: number;
+    pageSize?: number;
+  },
+): Promise<{ items: LoyaltyActivityLogItem[]; total: number; page: number; pageSize: number; error?: { code?: string; message?: string } | null }> {
+  const pageSize = Math.max(1, Math.min(100, Math.round(options.pageSize ?? LOYALTY_ADMIN_PAGE_SIZE)));
+  const page = Math.max(1, Math.round(options.page ?? 1));
+  const cleanSearch = sanitizePostgrestSearch(options.query ?? "");
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_logs", {
+    p_shop_scope_id: shopId,
+    p_query: cleanSearch,
+    p_limit: pageSize,
+    p_offset: from,
+  });
+
+  if (!rpcErr && rpcData && typeof rpcData === "object") {
+    const payload = rpcData as Record<string, unknown>;
+    if (payload.ok) {
+      const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
+      return {
+        items: rpcItems.map((row) => ({
+          id: String(row.id ?? ""),
+          memberId: String(row.memberId ?? ""),
+          lineUserId: String(row.lineUserId ?? ""),
+          displayName: String(row.displayName ?? "ลูกค้า LINE"),
+          pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
+          action: String(row.action ?? "qr_claim"),
+          pointsDelta: Number(row.pointsDelta ?? 0),
+          balanceAfter: Number(row.balanceAfter ?? 0),
+          note: row.note ? String(row.note) : null,
+          createdAt: String(row.createdAt ?? new Date().toISOString()),
+        })),
+        total: Math.max(0, Number(payload.total ?? 0)),
+        page,
+        pageSize,
+      };
+    }
+  }
+
+  let matchingMemberIds: string[] = [];
+  if (cleanSearch) {
+    const { data: matchedMembers } = await supabase
+      .from("loyalty_members")
+      .select("id")
+      .eq("owner_id", ownerId)
+      .eq("shop_scope_id", shopId)
+      .or(`display_name.ilike.%${cleanSearch}%,line_user_id.ilike.%${cleanSearch}%`)
+      .limit(500);
+
+    matchingMemberIds = ((matchedMembers ?? []) as Array<Record<string, unknown>>)
+      .map((m) => String(m.id ?? ""))
+      .filter(Boolean);
+  }
+
+  let dbQuery = supabase
+    .from("loyalty_logs")
+    .select("id,member_id,line_user_id,action,points_delta,balance_after,note,created_at", { count: "exact" })
+    .eq("owner_id", ownerId)
+    .eq("shop_scope_id", shopId);
+
+  if (cleanSearch) {
+    if (matchingMemberIds.length > 0) {
+      dbQuery = dbQuery.or(`note.ilike.%${cleanSearch}%,action.ilike.%${cleanSearch}%,member_id.in.(${matchingMemberIds.join(",")})`);
+    } else {
+      dbQuery = dbQuery.or(`note.ilike.%${cleanSearch}%,action.ilike.%${cleanSearch}%`);
+    }
+  }
+
+  const { data: logRows, count, error } = await dbQuery
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    return { items: [], total: 0, page, pageSize, error };
+  }
+
+  const rowsList = (logRows ?? []) as Array<Record<string, unknown>>;
+  const { nameById, picById, nameByLineId, picByLineId } = await fetchMemberProfilesByIds(
+    supabase,
+    ownerId,
+    shopId,
+    rowsList.map((r) => String(r.member_id ?? "")),
+    rowsList.map((r) => String(r.line_user_id ?? "")),
+  );
+
+  const items: LoyaltyActivityLogItem[] = rowsList.map((row) => {
+    const memberId = String(row.member_id ?? "");
+    const lineUserId = String(row.line_user_id ?? "");
+    return {
+      id: String(row.id ?? ""),
+      memberId,
+      lineUserId,
+      displayName: nameById.get(memberId) ?? nameByLineId.get(lineUserId) ?? "ลูกค้า LINE",
+      pictureUrl: picById.get(memberId) ?? picByLineId.get(lineUserId) ?? null,
+      action: String(row.action ?? "qr_claim"),
+      pointsDelta: Number(row.points_delta ?? 0),
+      balanceAfter: Number(row.balance_after ?? 0),
+      note: row.note ? String(row.note) : null,
+      createdAt: String(row.created_at ?? new Date().toISOString()),
+    };
+  });
+
+  return {
+    items,
+    total: count ?? items.length,
+    page,
+    pageSize,
+  };
+}
+
 export async function fetchLoyaltySettingsSummary(
   rawShopId: string,
   fallbackShopName = "GaiTomNamPla 🐔",
@@ -128,7 +564,7 @@ export async function fetchLoyaltySettingsSummary(
   const shopId = normalizeShopId(rawShopId || DEFAULT_SHOP_ID);
   if (!hasSupabaseEnv) {
     return {
-      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      config: redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, fallbackShopName), "", ""),
       persisted: false,
       isTableReady: true,
       totalMembers: 0,
@@ -144,7 +580,7 @@ export async function fetchLoyaltySettingsSummary(
 
   if (!user) {
     return {
-      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      config: redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, fallbackShopName), "", ""),
       persisted: false,
       isTableReady: true,
       totalMembers: 0,
@@ -152,6 +588,10 @@ export async function fetchLoyaltySettingsSummary(
       failedPushCount: 0,
     };
   }
+
+  const cacheKey = `${user.id}:loyalty_summary:${shopId}`;
+  const cached = getCached<LoyaltySettingsSummary>(cacheKey);
+  if (cached) return cached;
 
   const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
   const { data: settingRow } = await supabase
@@ -163,12 +603,17 @@ export async function fetchLoyaltySettingsSummary(
 
   const persisted = Boolean(settingRow?.value && typeof settingRow.value === "object");
   const normalized = normalizeLoyaltyConfig(settingRow?.value, fallbackShopName);
-  const config: LoyaltyConfig = {
-    ...normalized,
-    channelSecret: decryptLoyaltySecret(normalized.channelSecret),
-    channelAccessToken: decryptLoyaltySecret(normalized.channelAccessToken),
-    serverKeyHash: getLoyaltyServerKeyHash(),
-  };
+  const decryptedSecret = decryptLoyaltySecret(normalized.channelSecret);
+  const decryptedAccessToken = decryptLoyaltySecret(normalized.channelAccessToken);
+
+  const config = redactLoyaltyConfigForClient(
+    {
+      ...normalized,
+      serverKeyHash: getLoyaltyServerKeyHash(),
+    },
+    decryptedSecret,
+    decryptedAccessToken,
+  );
 
   const [
     { count: memberCount, error: memberErr },
@@ -205,7 +650,7 @@ export async function fetchLoyaltySettingsSummary(
     };
   }
 
-  return {
+  const summary: LoyaltySettingsSummary = {
     config,
     persisted,
     isTableReady: true,
@@ -213,11 +658,14 @@ export async function fetchLoyaltySettingsSummary(
     readyCouponsCount: readyCouponsCount ?? 0,
     failedPushCount: failedPushCount ?? 0,
   };
+
+  return setCached(cacheKey, summary, 30_000);
 }
 
 export async function fetchLoyaltyAdminData(
   rawShopId: string,
   fallbackShopName = "GaiTomNamPla 🐔",
+  initialTab: "overview" | "qr" | "members" | "coupons" | "settings" = "overview",
 ): Promise<LoyaltyAdminSnapshot> {
   const shopId = normalizeShopId(rawShopId || DEFAULT_SHOP_ID);
   const emptyMetrics: LoyaltyOverviewMetrics = {
@@ -234,7 +682,7 @@ export async function fetchLoyaltyAdminData(
 
   if (!hasSupabaseEnv) {
     return {
-      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      config: redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, fallbackShopName), "", ""),
       persisted: false,
       isTableReady: true,
       members: [],
@@ -242,6 +690,10 @@ export async function fetchLoyaltyAdminData(
       recentPushJobs: [],
       recentLogs: [],
       metrics: emptyMetrics,
+      membersTotal: 0,
+      couponsTotal: 0,
+      logsTotal: 0,
+      loadedTabs: [initialTab],
     };
   }
 
@@ -252,7 +704,7 @@ export async function fetchLoyaltyAdminData(
 
   if (!user) {
     return {
-      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      config: redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, fallbackShopName), "", ""),
       persisted: false,
       isTableReady: true,
       members: [],
@@ -260,6 +712,10 @@ export async function fetchLoyaltyAdminData(
       recentPushJobs: [],
       recentLogs: [],
       metrics: emptyMetrics,
+      membersTotal: 0,
+      couponsTotal: 0,
+      logsTotal: 0,
+      loadedTabs: [initialTab],
     };
   }
 
@@ -301,226 +757,214 @@ export async function fetchLoyaltyAdminData(
     );
   }
 
-  const config: LoyaltyConfig = {
-    ...normalized,
-    channelSecret: decryptedSecret,
-    channelAccessToken: decryptedAccessToken,
-    serverKeyHash: currentServerKeyHash,
-  };
+  // Never send decrypted secrets to Client Components
+  const config = redactLoyaltyConfigForClient(
+    {
+      ...normalized,
+      serverKeyHash: currentServerKeyHash,
+    },
+    decryptedSecret,
+    decryptedAccessToken,
+  );
 
+  const todayStartMs = getBangkokStartOfDayMs();
+  const todayStartIso = new Date(todayStartMs).toISOString();
+  const sevenDaysAgoMs = todayStartMs - 6 * 24 * 60 * 60 * 1000;
+  const sevenDaysAgoIso = new Date(sevenDaysAgoMs).toISOString();
+
+  // 1. Try single-query database aggregate RPC (`get_loyalty_admin_overview_stats`) alongside tab-specific data
   const [
-    { data: memberRows, error: memberErr },
-    { data: couponRows, error: couponErr },
+    { data: overviewRpcData, error: overviewRpcErr },
     { data: pushRows },
-    { data: logRows },
+    overviewLogsRes,
+    initialMembersRes,
+    initialCouponsRes,
   ] = await Promise.all([
-    supabase
-      .from("loyalty_members")
-      .select("id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at")
-      .eq("owner_id", user.id)
-      .eq("shop_scope_id", shopId)
-      .order("updated_at", { ascending: false })
-      .limit(300),
-    supabase
-      .from("loyalty_coupons")
-      .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at")
-      .eq("owner_id", user.id)
-      .eq("shop_scope_id", shopId)
-      .order("issued_at", { ascending: false })
-      .limit(200),
+    supabase.rpc("get_loyalty_admin_overview_stats", {
+      p_shop_scope_id: shopId,
+      p_today_start: todayStartIso,
+      p_seven_days_ago: sevenDaysAgoIso,
+    }),
     supabase
       .from("loyalty_push_queue")
       .select("id,member_id,line_user_id,event_type,status,attempts,last_error,created_at,sent_at")
       .eq("owner_id", user.id)
       .eq("shop_scope_id", shopId)
       .order("created_at", { ascending: false })
-      .limit(25),
-    supabase
-      .from("loyalty_logs")
-      .select("id,member_id,line_user_id,action,points_delta,balance_after,note,created_at")
-      .eq("owner_id", user.id)
-      .eq("shop_scope_id", shopId)
-      .order("created_at", { ascending: false })
-      .limit(200),
+      .limit(15),
+    queryLogsPageWithClient(supabase, user.id, shopId, {
+      page: 1,
+      pageSize: initialTab === "coupons" ? LOYALTY_ADMIN_PAGE_SIZE : 8,
+    }),
+    initialTab === "members"
+      ? queryMembersPageWithClient(supabase, user.id, shopId, {
+          page: 1,
+          pageSize: LOYALTY_ADMIN_PAGE_SIZE,
+          stampsPerReward: config.stampsPerReward,
+        })
+      : Promise.resolve({ items: [] as LoyaltyMemberSummary[], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE }),
+    initialTab === "coupons"
+      ? queryCouponsPageWithClient(supabase, user.id, shopId, config.rewardTitle, {
+          status: "unclaimed",
+          page: 1,
+          pageSize: LOYALTY_ADMIN_PAGE_SIZE,
+        })
+      : Promise.resolve({ items: [] as LoyaltyAdminCouponItem[], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE }),
   ]);
 
-  if (isMissingRelationError(memberErr) || isMissingRelationError(couponErr)) {
-    return {
-      config,
-      persisted,
-      isTableReady: false,
-      members: [],
-      recentCoupons: [],
-      recentPushJobs: [],
-      recentLogs: [],
-      metrics: emptyMetrics,
-    };
-  }
-
-  const couponsList = ((couponRows ?? []) as Array<Record<string, unknown>>).map((row) => ({
-    id: String(row.id),
-    memberId: String(row.member_id ?? ""),
-    lineUserId: String(row.line_user_id ?? ""),
-    code: String(row.code ?? ""),
-    title: String(row.title ?? config.rewardTitle),
-    status: (row.status === "claimed" ? "claimed" : "unclaimed") as "unclaimed" | "claimed",
-    issuedAt: String(row.issued_at ?? new Date().toISOString()),
-    claimedAt: row.claimed_at ? String(row.claimed_at) : null,
-  }));
-
-  const unclaimedByMember = new Map<string, number>();
-  const claimedByMember = new Map<string, number>();
-  let readyCouponsCount = 0;
-  let usedCouponsCount = 0;
-
-  for (const c of couponsList) {
-    if (c.status === "unclaimed") {
-      readyCouponsCount += 1;
-      unclaimedByMember.set(c.memberId, (unclaimedByMember.get(c.memberId) ?? 0) + 1);
-    } else {
-      usedCouponsCount += 1;
-      claimedByMember.set(c.memberId, (claimedByMember.get(c.memberId) ?? 0) + 1);
-    }
-  }
-
-  const memberNameById = new Map<string, string>();
-  const memberPicById = new Map<string, string | null>();
-  const memberNameByLineId = new Map<string, string>();
-  const memberPicByLineId = new Map<string, string | null>();
-
-  const members: LoyaltyMemberSummary[] = ((memberRows ?? []) as Array<Record<string, unknown>>).map((row) => {
-    const id = String(row.id);
-    const lineUserId = String(row.line_user_id ?? "");
-    const displayName = String(row.display_name ?? "ลูกค้า LINE");
-    const pictureUrl = row.picture_url ? String(row.picture_url) : null;
-
-    memberNameById.set(id, displayName);
-    memberPicById.set(id, pictureUrl);
-    if (lineUserId) {
-      memberNameByLineId.set(lineUserId, displayName);
-      memberPicByLineId.set(lineUserId, pictureUrl);
-    }
-
-    return {
-      id,
-      lineUserId,
-      displayName,
-      pictureUrl,
-      stamps: Math.max(0, Number(row.stamps ?? 0)),
-      lifetimeStamps: Math.max(0, Number(row.lifetime_stamps ?? 0)),
-      expiresAt: row.expires_at ? String(row.expires_at) : null,
-      lastStampedAt: row.last_stamped_at ? String(row.last_stamped_at) : null,
-      unclaimedCount: unclaimedByMember.get(id) ?? 0,
-      claimedCount: claimedByMember.get(id) ?? 0,
-    };
-  });
-
-  const recentCoupons: LoyaltyAdminCouponItem[] = couponsList.slice(0, 100).map((c) => ({
-    id: c.id,
-    memberId: c.memberId,
-    lineUserId: c.lineUserId,
-    code: c.code,
-    title: c.title,
-    status: c.status,
-    issuedAt: c.issuedAt,
-    claimedAt: c.claimedAt,
-    displayName:
-      memberNameById.get(c.memberId) ??
-      memberNameByLineId.get(c.lineUserId) ??
-      "ลูกค้า LINE",
-    pictureUrl:
-      memberPicById.get(c.memberId) ??
-      memberPicByLineId.get(c.lineUserId) ??
-      null,
-  }));
-
-  const recentPushJobs: LoyaltyPushQueueSummary[] = ((pushRows ?? []) as Array<Record<string, unknown>>).map(
-    (row) => {
-      const memberId = String(row.member_id ?? "");
-      const lineUserId = String(row.line_user_id ?? "");
-      return {
-        id: String(row.id),
-        memberId,
-        lineUserId,
-        displayName:
-          memberNameById.get(memberId) ??
-          memberNameByLineId.get(lineUserId) ??
-          "ลูกค้า LINE",
-        pictureUrl:
-          memberPicById.get(memberId) ??
-          memberPicByLineId.get(lineUserId) ??
-          null,
-        eventType: row.event_type === "coupon_redeem" ? "coupon_redeem" : "stamp_claim",
-        status: String(row.status ?? "pending"),
-        attempts: Number(row.attempts ?? 0),
-        lastError: row.last_error ? String(row.last_error) : null,
-        createdAt: String(row.created_at ?? new Date().toISOString()),
-        sentAt: row.sent_at ? String(row.sent_at) : null,
-      };
-    },
-  );
-
-  const todayStartMs = getBangkokStartOfDayMs();
-  const sevenDaysAgoMs = todayStartMs - 6 * 24 * 60 * 60 * 1000;
-
+  let exactTotalMembers = 0;
+  let exactReadyCoupons = 0;
+  let exactUsedCoupons = 0;
+  let exactFailedPush = 0;
+  let exactPendingPush = 0;
   let scansTodayCount = 0;
   let pointsTodayCount = 0;
   let scans7dCount = 0;
   let points7dCount = 0;
 
-  const recentLogs: LoyaltyActivityLogItem[] = ((logRows ?? []) as Array<Record<string, unknown>>).map((row) => {
-    const memberId = String(row.member_id ?? "");
-    const lineUserId = String(row.line_user_id ?? "");
-    const action = String(row.action ?? "qr_claim");
-    const pointsDelta = Number(row.points_delta ?? 0);
-    const createdAt = String(row.created_at ?? new Date().toISOString());
-    const createdMs = new Date(createdAt).getTime();
+  if (!overviewRpcErr && overviewRpcData && typeof overviewRpcData === "object") {
+    const rpcMetrics = overviewRpcData as Record<string, unknown>;
+    exactTotalMembers = Math.max(0, Number(rpcMetrics.totalMembers ?? 0));
+    exactReadyCoupons = Math.max(0, Number(rpcMetrics.readyCouponsCount ?? 0));
+    exactUsedCoupons = Math.max(0, Number(rpcMetrics.usedCouponsCount ?? 0));
+    exactFailedPush = Math.max(0, Number(rpcMetrics.failedPushCount ?? 0));
+    exactPendingPush = Math.max(0, Number(rpcMetrics.pendingPushCount ?? 0));
+    scansTodayCount = Math.max(0, Number(rpcMetrics.scansTodayCount ?? 0));
+    pointsTodayCount = Math.max(0, Number(rpcMetrics.pointsTodayCount ?? 0));
+    scans7dCount = Math.max(0, Number(rpcMetrics.scans7dCount ?? 0));
+    points7dCount = Math.max(0, Number(rpcMetrics.points7dCount ?? 0));
+  } else {
+    // Fallback when `get_loyalty_admin_overview_stats` RPC is not yet migrated in Supabase:
+    // Use exact counts (`head: true`) + paginated `readCostRows` over 7-day logs (no 5,000-row ceiling)
+    let scanLogsErr: { code?: string; message?: string } | null = null;
+    const [
+      { count: totalMembersCount, error: memberCountErr },
+      { count: readyCouponsCount, error: readyCouponErr },
+      { count: usedCouponsCount },
+      { count: failedPushCount },
+      { count: pendingPushCount },
+      scanLogs7d,
+    ] = await Promise.all([
+      supabase
+        .from("loyalty_members")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId),
+      supabase
+        .from("loyalty_coupons")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId)
+        .eq("status", "unclaimed"),
+      supabase
+        .from("loyalty_coupons")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId)
+        .eq("status", "claimed"),
+      supabase
+        .from("loyalty_push_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId)
+        .in("status", ["failed_network", "failed_quota", "failed_auth", "failed_recipient"]),
+      supabase
+        .from("loyalty_push_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id)
+        .eq("shop_scope_id", shopId)
+        .in("status", ["pending", "processing"]),
+      readCostRows((from, to) =>
+        supabase
+          .from("loyalty_logs")
+          .select("id,points_delta,created_at")
+          .eq("owner_id", user.id)
+          .eq("shop_scope_id", shopId)
+          .eq("action", "qr_claim")
+          .gte("created_at", sevenDaysAgoIso)
+          .order("id")
+          .range(from, to),
+      ).catch((err) => {
+        scanLogsErr = err as { code?: string; message?: string };
+        return [] as Array<Record<string, unknown>>;
+      }),
+    ]);
 
-    if (action === "qr_claim" && Number.isFinite(createdMs)) {
-      if (createdMs >= todayStartMs) {
-        scansTodayCount += 1;
-        pointsTodayCount += Math.max(0, pointsDelta);
-      }
-      if (createdMs >= sevenDaysAgoMs) {
-        scans7dCount += 1;
-        points7dCount += Math.max(0, pointsDelta);
-      }
+    if (
+      isMissingRelationError(memberCountErr) ||
+      isMissingRelationError(readyCouponErr) ||
+      isMissingRelationError(scanLogsErr)
+    ) {
+      return {
+        config,
+        persisted,
+        isTableReady: false,
+        members: [],
+        recentCoupons: [],
+        recentPushJobs: [],
+        recentLogs: [],
+        metrics: emptyMetrics,
+        membersTotal: 0,
+        couponsTotal: 0,
+        logsTotal: 0,
+        loadedTabs: [initialTab],
+      };
     }
 
+    exactTotalMembers = totalMembersCount ?? 0;
+    exactReadyCoupons = readyCouponsCount ?? 0;
+    exactUsedCoupons = usedCouponsCount ?? 0;
+    exactFailedPush = failedPushCount ?? 0;
+    exactPendingPush = pendingPushCount ?? 0;
+
+    for (const row of (scanLogs7d ?? []) as Array<Record<string, unknown>>) {
+      const delta = Math.max(0, Number(row.points_delta ?? 0));
+      const createdMs = new Date(String(row.created_at ?? "")).getTime();
+      if (!Number.isFinite(createdMs)) continue;
+      if (createdMs >= sevenDaysAgoMs) {
+        scans7dCount += 1;
+        points7dCount += delta;
+      }
+      if (createdMs >= todayStartMs) {
+        scansTodayCount += 1;
+        pointsTodayCount += delta;
+      }
+    }
+  }
+
+  const pushRowsList = (pushRows ?? []) as Array<Record<string, unknown>>;
+  const { nameById: pushNameById, picById: pushPicById, nameByLineId: pushNameByLineId, picByLineId: pushPicByLineId } =
+    await fetchMemberProfilesByIds(
+      supabase,
+      user.id,
+      shopId,
+      pushRowsList.map((r) => String(r.member_id ?? "")),
+      pushRowsList.map((r) => String(r.line_user_id ?? "")),
+    );
+
+  const recentPushJobs: LoyaltyPushQueueSummary[] = pushRowsList.map((row) => {
+    const memberId = String(row.member_id ?? "");
+    const lineUserId = String(row.line_user_id ?? "");
     return {
-      id: String(row.id),
+      id: String(row.id ?? ""),
       memberId,
       lineUserId,
-      displayName:
-        memberNameById.get(memberId) ??
-        memberNameByLineId.get(lineUserId) ??
-        "ลูกค้า LINE",
-      pictureUrl:
-        memberPicById.get(memberId) ??
-        memberPicByLineId.get(lineUserId) ??
-        null,
-      action,
-      pointsDelta,
-      balanceAfter: Number(row.balance_after ?? 0),
-      note: row.note ? String(row.note) : null,
-      createdAt,
+      displayName: pushNameById.get(memberId) ?? pushNameByLineId.get(lineUserId) ?? "ลูกค้า LINE",
+      pictureUrl: pushPicById.get(memberId) ?? pushPicByLineId.get(lineUserId) ?? null,
+      eventType: row.event_type === "coupon_redeem" ? "coupon_redeem" : "stamp_claim",
+      status: String(row.status ?? "pending"),
+      attempts: Number(row.attempts ?? 0),
+      lastError: row.last_error ? String(row.last_error) : null,
+      createdAt: String(row.created_at ?? new Date().toISOString()),
+      sentAt: row.sent_at ? String(row.sent_at) : null,
     };
   });
 
-  const failedPushCount = recentPushJobs.filter((j) => j.status.startsWith("failed")).length;
-  const pendingPushCount = recentPushJobs.filter(
-    (j) => j.status === "pending" || j.status === "processing",
-  ).length;
-
-  if (pendingPushCount > 0 && config.channelAccessToken) {
+  if (exactPendingPush > 0 && decryptedAccessToken) {
     after(async () => {
       try {
         const bgSupabase = await createSupabaseServerClient();
-        await processPendingLoyaltyPushJobs(
-          bgSupabase,
-          config.shopSecret,
-          config.channelAccessToken,
-        );
+        await processPendingLoyaltyPushJobs(bgSupabase, config.shopSecret, decryptedAccessToken);
       } catch {
         // Ignore background errors
       }
@@ -531,21 +975,271 @@ export async function fetchLoyaltyAdminData(
     config,
     persisted,
     isTableReady: true,
-    members,
-    recentCoupons,
+    members: initialMembersRes.items,
+    recentCoupons: initialCouponsRes.items,
     recentPushJobs,
-    recentLogs,
+    recentLogs: overviewLogsRes.items,
     metrics: {
-      totalMembers: members.length,
+      totalMembers: exactTotalMembers,
       scansTodayCount,
       pointsTodayCount,
       scans7dCount,
       points7dCount,
-      readyCouponsCount,
-      usedCouponsCount,
-      failedPushCount,
-      pendingPushCount,
+      readyCouponsCount: exactReadyCoupons,
+      usedCouponsCount: exactUsedCoupons,
+      failedPushCount: exactFailedPush,
+      pendingPushCount: exactPendingPush,
     },
+    membersTotal: initialTab === "members" ? initialMembersRes.total : exactTotalMembers,
+    couponsTotal: initialTab === "coupons" ? initialCouponsRes.total : exactReadyCoupons,
+    logsTotal: overviewLogsRes.total,
+    loadedTabs: [initialTab],
+  };
+}
+
+export async function queryLoyaltyMembersPageAction(input: {
+  shopId?: string;
+  query?: string;
+  filter?: "all" | "has_coupon" | "near_reward";
+  page?: number;
+  pageSize?: number;
+  stampsPerReward?: number;
+}): Promise<LoyaltyPaginatedResult<LoyaltyMemberSummary>> {
+  const shopId = normalizeShopId(input.shopId || DEFAULT_SHOP_ID);
+  if (!hasSupabaseEnv) {
+    return { ok: true, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE };
+  }
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { ok: false, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE, message: "กรุณาเข้าสู่ระบบ" };
+  }
+
+  const res = await queryMembersPageWithClient(supabase, user.id, shopId, input);
+  if (res.error) {
+    return {
+      ok: false,
+      items: [],
+      total: 0,
+      page: res.page,
+      pageSize: res.pageSize,
+      message: res.error.message ?? "โหลดรายชื่อลูกค้าไม่สำเร็จ",
+    };
+  }
+  return {
+    ok: true,
+    items: res.items,
+    total: res.total,
+    page: res.page,
+    pageSize: res.pageSize,
+  };
+}
+
+export async function queryLoyaltyCouponsPageAction(input: {
+  shopId?: string;
+  query?: string;
+  status?: "unclaimed" | "claimed" | "all";
+  page?: number;
+  pageSize?: number;
+  rewardTitleFallback?: string;
+}): Promise<LoyaltyPaginatedResult<LoyaltyAdminCouponItem>> {
+  const shopId = normalizeShopId(input.shopId || DEFAULT_SHOP_ID);
+  if (!hasSupabaseEnv) {
+    return { ok: true, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE };
+  }
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { ok: false, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE, message: "กรุณาเข้าสู่ระบบ" };
+  }
+
+  const res = await queryCouponsPageWithClient(
+    supabase,
+    user.id,
+    shopId,
+    input.rewardTitleFallback ?? "ส่วนลด 50%",
+    input,
+  );
+  if (res.error) {
+    return {
+      ok: false,
+      items: [],
+      total: 0,
+      page: res.page,
+      pageSize: res.pageSize,
+      message: res.error.message ?? "โหลดรายการคูปองไม่สำเร็จ",
+    };
+  }
+  return {
+    ok: true,
+    items: res.items,
+    total: res.total,
+    page: res.page,
+    pageSize: res.pageSize,
+  };
+}
+
+export async function queryLoyaltyLogsPageAction(input: {
+  shopId?: string;
+  query?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<LoyaltyPaginatedResult<LoyaltyActivityLogItem>> {
+  const shopId = normalizeShopId(input.shopId || DEFAULT_SHOP_ID);
+  if (!hasSupabaseEnv) {
+    return { ok: true, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE };
+  }
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { ok: false, items: [], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE, message: "กรุณาเข้าสู่ระบบ" };
+  }
+
+  const res = await queryLogsPageWithClient(supabase, user.id, shopId, input);
+  if (res.error) {
+    return {
+      ok: false,
+      items: [],
+      total: 0,
+      page: res.page,
+      pageSize: res.pageSize,
+      message: res.error.message ?? "โหลดประวัติแต้มไม่สำเร็จ",
+    };
+  }
+  return {
+    ok: true,
+    items: res.items,
+    total: res.total,
+    page: res.page,
+    pageSize: res.pageSize,
+  };
+}
+
+export async function fetchLoyaltyMemberDetailAction(input: {
+  shopId?: string;
+  memberId: string;
+  rewardTitleFallback?: string;
+}): Promise<LoyaltyMemberDetailResult> {
+  const shopId = normalizeShopId(input.shopId || DEFAULT_SHOP_ID);
+  const memberId = String(input.memberId ?? "").trim();
+  if (!hasSupabaseEnv || !memberId) {
+    return { ok: false, member: null, coupons: [], logs: [], message: "ไม่พบรหัสลูกค้า" };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { ok: false, member: null, coupons: [], logs: [], message: "กรุณาเข้าสู่ระบบ" };
+  }
+
+  const [
+    { data: memberRow, error: memberErr },
+    { count: unclaimedCount },
+    { count: claimedCount },
+    { data: couponRows },
+    { data: logRows, count: logsTotalCount },
+  ] = await Promise.all([
+    supabase
+      .from("loyalty_members")
+      .select("id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("id", memberId)
+      .maybeSingle(),
+    supabase
+      .from("loyalty_coupons")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("member_id", memberId)
+      .eq("status", "unclaimed"),
+    supabase
+      .from("loyalty_coupons")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("member_id", memberId)
+      .eq("status", "claimed"),
+    supabase
+      .from("loyalty_coupons")
+      .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("member_id", memberId)
+      .order("issued_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("loyalty_logs")
+      .select("id,member_id,line_user_id,action,points_delta,balance_after,note,created_at", { count: "exact" })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("member_id", memberId)
+      .order("created_at", { ascending: false })
+      .limit(100),
+  ]);
+
+  if (memberErr || !memberRow) {
+    return { ok: false, member: null, coupons: [], logs: [], message: "ไม่พบข้อมูลลูกค้ารายนี้" };
+  }
+
+  const displayName = String(memberRow.display_name ?? "ลูกค้า LINE");
+  const pictureUrl = memberRow.picture_url ? String(memberRow.picture_url) : null;
+  const lineUserId = String(memberRow.line_user_id ?? "");
+
+  const member: LoyaltyMemberSummary = {
+    id: String(memberRow.id),
+    lineUserId,
+    displayName,
+    pictureUrl,
+    stamps: Math.max(0, Number(memberRow.stamps ?? 0)),
+    lifetimeStamps: Math.max(0, Number(memberRow.lifetime_stamps ?? 0)),
+    expiresAt: memberRow.expires_at ? String(memberRow.expires_at) : null,
+    lastStampedAt: memberRow.last_stamped_at ? String(memberRow.last_stamped_at) : null,
+    unclaimedCount: unclaimedCount ?? 0,
+    claimedCount: claimedCount ?? 0,
+  };
+
+  const coupons: LoyaltyAdminCouponItem[] = ((couponRows ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id ?? ""),
+    memberId,
+    lineUserId,
+    code: String(row.code ?? ""),
+    title: String(row.title ?? input.rewardTitleFallback ?? "ส่วนลด 50%"),
+    status: row.status === "claimed" ? "claimed" : "unclaimed",
+    issuedAt: String(row.issued_at ?? new Date().toISOString()),
+    claimedAt: row.claimed_at ? String(row.claimed_at) : null,
+    displayName,
+    pictureUrl,
+  }));
+
+  const logs: LoyaltyActivityLogItem[] = ((logRows ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id ?? ""),
+    memberId,
+    lineUserId,
+    displayName,
+    pictureUrl,
+    action: String(row.action ?? "qr_claim"),
+    pointsDelta: Number(row.points_delta ?? 0),
+    balanceAfter: Number(row.balance_after ?? 0),
+    note: row.note ? String(row.note) : null,
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+  }));
+
+  return {
+    ok: true,
+    member,
+    coupons,
+    logs,
+    couponsTotal: (unclaimedCount ?? 0) + (claimedCount ?? 0),
+    logsTotal: logsTotalCount ?? logs.length,
   };
 }
 
@@ -589,6 +1283,25 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
 
     const rawChannelSecret = optionalText(form, "channel_secret", "Channel Secret", 240) ?? "";
     const rawChannelAccessToken = optionalText(form, "channel_access_token", "Channel Access Token", 600) ?? "";
+    const clearChannelSecret =
+      form.get("clear_channel_secret") === "true" || form.get("clear_channel_secret") === "on";
+    const clearChannelAccessToken =
+      form.get("clear_channel_access_token") === "true" || form.get("clear_channel_access_token") === "on";
+
+    const existingDecryptedSecret = decryptLoyaltySecret(current.channelSecret);
+    const existingDecryptedToken = decryptLoyaltySecret(current.channelAccessToken);
+
+    const resolvedSecretPlain = rawChannelSecret
+      ? rawChannelSecret
+      : clearChannelSecret
+        ? ""
+        : existingDecryptedSecret;
+
+    const resolvedTokenPlain = rawChannelAccessToken
+      ? rawChannelAccessToken
+      : clearChannelAccessToken
+        ? ""
+        : existingDecryptedToken;
 
     const formShopSecret = optionalText(form, "shop_secret", "Shop Secret", 80) ?? "";
     const formWebhookSecret = optionalText(form, "webhook_secret", "Webhook Secret", 80) ?? "";
@@ -620,8 +1333,8 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
       liffId,
       botBasicId: botBasicId ? (botBasicId.startsWith("@") ? botBasicId : `@${botBasicId}`) : "",
       notifyMode,
-      channelSecret: rawChannelSecret ? encryptLoyaltySecret(rawChannelSecret) : "",
-      channelAccessToken: rawChannelAccessToken ? encryptLoyaltySecret(rawChannelAccessToken) : "",
+      channelSecret: resolvedSecretPlain ? encryptLoyaltySecret(resolvedSecretPlain) : "",
+      channelAccessToken: resolvedTokenPlain ? encryptLoyaltySecret(resolvedTokenPlain) : "",
       serverKeyHash: getLoyaltyServerKeyHash(),
       qrTokens: parsedQrTokens,
     };
@@ -669,7 +1382,7 @@ export async function testLineConnectionAction(form: FormData): Promise<ActionSt
     }
 
     if (!accessToken) {
-      throw new InputError("กรุณากรอก Channel Access Token ก่อนกดทดสอบการเชื่อมต่อ");
+      throw new InputError("กรุณากรอกหรือบันทึก Channel Access Token ก่อนกดทดสอบการเชื่อมต่อ");
     }
 
     const controller = new AbortController();

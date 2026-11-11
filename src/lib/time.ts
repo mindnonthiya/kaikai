@@ -39,43 +39,79 @@ export const RANGE_LABELS: Record<RangeKey, string> = {
   all: "ทั้งหมด",
 };
 
+// Pre-instantiated Intl.DateTimeFormat singletons avoid expensive ICU table initialization inside loops
+const THAI_DATE_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  dateStyle: "medium",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_LONG_DATE_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_SHORT_DATE_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  day: "numeric",
+  month: "short",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_MONTH_YEAR_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  month: "long",
+  year: "numeric",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_WEEKDAY_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  weekday: "narrow",
+  timeZone: APP_TIME_ZONE,
+});
+
+const THAI_TIME_FORMATTER = new Intl.DateTimeFormat("th-TH", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: APP_TIME_ZONE,
+});
+
 export function formatThaiDate(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", {
-    dateStyle: "medium",
-    timeZone: APP_TIME_ZONE,
-  }).format(new Date(date));
+  return THAI_DATE_FORMATTER.format(new Date(date));
 }
 
 export function formatThaiDateTime(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: APP_TIME_ZONE,
-  }).format(new Date(date));
+  return THAI_DATE_TIME_FORMATTER.format(new Date(date));
 }
 
 /** e.g. "วันอังคารที่ 13 ตุลาคม" */
 export function formatThaiLongDate(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", { weekday: "long", day: "numeric", month: "long", timeZone: APP_TIME_ZONE }).format(new Date(date));
+  return THAI_LONG_DATE_FORMATTER.format(new Date(date));
 }
 
 /** e.g. "13 ต.ค." */
 export function formatThaiShortDate(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", timeZone: APP_TIME_ZONE }).format(new Date(date));
+  return THAI_SHORT_DATE_FORMATTER.format(new Date(date));
 }
 
 /** e.g. "ตุลาคม 2569" */
 export function formatThaiMonthYear(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: APP_TIME_ZONE }).format(new Date(date));
+  return THAI_MONTH_YEAR_FORMATTER.format(new Date(date));
 }
 
 /** e.g. "อ." */
 export function formatThaiWeekday(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", { weekday: "narrow", timeZone: APP_TIME_ZONE }).format(new Date(date));
+  return THAI_WEEKDAY_FORMATTER.format(new Date(date));
 }
 
 export function formatTime(date: Date | string) {
-  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: APP_TIME_ZONE }).format(new Date(date));
+  return THAI_TIME_FORMATTER.format(new Date(date));
 }
 
 /** Business day in Bangkok as "YYYY-MM-DD" (also the value format of <input type="date">). */

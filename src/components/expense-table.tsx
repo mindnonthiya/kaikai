@@ -31,6 +31,7 @@ import { formatBaht, satangToBahtInput, tryBahtToSatang } from "@/lib/money";
 import { bangkokDayKey, formatThaiShortDate } from "@/lib/time";
 
 const QUICK_CATEGORIES = [FUEL_CATEGORY, "ค่าแก๊ส", "ค่าไฟ", "ค่าน้ำ", "วัตถุดิบ", "บรรจุภัณฑ์", "อุปกรณ์"];
+const EXPENSE_PAGE_SIZE = 50;
 
 export function ExpenseTable({
   expenses,
@@ -53,6 +54,7 @@ export function ExpenseTable({
 }) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
   const [isPending, startTransition] = useTransition();
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -79,6 +81,9 @@ export function ExpenseTable({
     .reduce((sum, e) => sum + e.amount, 0);
 
   const allSelected = expenses.length > 0 && validSelectedIds.length === expenses.length;
+  const totalPages = Math.max(1, Math.ceil(expenses.length / EXPENSE_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedExpenses = expenses.slice((currentPage - 1) * EXPENSE_PAGE_SIZE, currentPage * EXPENSE_PAGE_SIZE);
   const noSlipIds = expenses.filter((e) => !e.receiptPath).map((e) => e.id);
   const oldPurchaseNoSlipIds = expenses
     .filter((e) => !e.receiptPath && (e.category === "วัตถุดิบ" || e.category === "บรรจุภัณฑ์"))
@@ -449,7 +454,7 @@ export function ExpenseTable({
           </tr>
         </thead>
         <tbody>
-          {expenses.map((e) => {
+          {pagedExpenses.map((e) => {
             const isChecked = selectedIds.has(e.id);
             const isEditing = editingId === e.id;
             const sameSlipExpenses = e.receiptPath
@@ -834,6 +839,47 @@ export function ExpenseTable({
           )}
         </tbody>
       </table>
+      {totalPages > 1 && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "10px",
+            padding: "12px 16px",
+            borderTop: "1px solid var(--line, #eadfce)",
+            fontSize: "13px",
+          }}
+        >
+          <span className="muted">
+            แสดงรายการที่ {((currentPage - 1) * EXPENSE_PAGE_SIZE + 1).toLocaleString("th-TH")}–
+            {Math.min(currentPage * EXPENSE_PAGE_SIZE, expenses.length).toLocaleString("th-TH")} จากทั้งหมด{" "}
+            {expenses.length.toLocaleString("th-TH")} รายการ
+          </span>
+          <div style={{ display: "inline-flex", gap: "8px", alignItems: "center" }}>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentPage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              ก่อนหน้า
+            </button>
+            <span style={{ fontWeight: 600 }}>
+              หน้า {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              ถัดไป
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

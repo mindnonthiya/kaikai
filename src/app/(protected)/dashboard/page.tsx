@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { SalesChart } from "@/components/sales-chart";
 import { RangeTabs } from "@/components/range-tabs";
 import { dailySeries, filterExpenses, filterSales, formatChange, formatPercentBps, menuCostWarnings, menuRanking, percentChange, summarize } from "@/lib/analytics";
-import { fetchExpenses, fetchMenus, fetchPooledRate, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
+import { fetchAllTimeSummary, fetchExpenses, fetchMenus, fetchPooledRate, fetchSaleSettings, fetchSales } from "@/lib/data/queries";
 import { DEFAULT_UNIT_LABEL } from "@/lib/data/types";
 import { formatBaht } from "@/lib/money";
 import { DAY_MS, bangkokDayKey, formatThaiLongDate, formatThaiShortDate, formatTime, parseRange, previousRange, resolveRange, startOfBangkokDay, startOfBangkokMonth } from "@/lib/time";
@@ -24,13 +24,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const today = startOfBangkokDay(now, dayStartHour);
   const chartStart = new Date(today.getTime() - 6 * DAY_MS);
   const monthStart = startOfBangkokMonth(now, 0, dayStartHour);
-  const windowStart = new Date(Math.min(allRange.start.getTime(), prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
+  const windowStart = new Date(Math.min(range.start.getTime(), prev.start.getTime(), chartStart.getTime(), monthStart.getTime()));
   const windowEnd = new Date(today.getTime() + DAY_MS);
 
-  const [sales, expenses, menus, pooled] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate(saleSettings)]);
+  const [sales, expenses, menus, pooled, fetchedAllTime] = await Promise.all([fetchSales(windowStart, windowEnd), fetchExpenses(windowStart, windowEnd), fetchMenus(), fetchPooledRate(saleSettings), key === "all" ? Promise.resolve(null) : fetchAllTimeSummary(windowEnd, dayStartHour)]);
 
   const month = summarize(filterSales(sales, monthStart, windowEnd), filterExpenses(expenses, monthStart, windowEnd));
-  const allTime = summarize(filterSales(sales, allRange.start, windowEnd), filterExpenses(expenses, allRange.start, windowEnd));
+  const allTime = fetchedAllTime ?? summarize(filterSales(sales, allRange.start, windowEnd), filterExpenses(expenses, allRange.start, windowEnd));
   const current = summarize(filterSales(sales, range.start, range.end), filterExpenses(expenses, range.start, range.end));
   const previous = summarize(filterSales(sales, prev.start, prev.end), filterExpenses(expenses, prev.start, prev.end));
   const chart = dailySeries(sales, expenses, chartStart, 7, bangkokDayKey(now, dayStartHour), dayStartHour);

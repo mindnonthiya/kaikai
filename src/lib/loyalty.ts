@@ -2,6 +2,7 @@ export const LOYALTY_SETTINGS_KEY = "line_loyalty";
 export const LINE_LOYALTY_SETTINGS_KEY = LOYALTY_SETTINGS_KEY;
 
 export const LOYALTY_POINT_TIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+export const LOYALTY_ADMIN_PAGE_SIZE = 20;
 
 export const DEFAULT_LOYALTY_CARD_TITLE = "GaiTomNamPla 🐔";
 export const DEFAULT_LOYALTY_CARD_HEADLINE = "สะสม 10 กล่อง ลด 50%";
@@ -37,13 +38,60 @@ export interface LoyaltyConfig {
   notifyMode: LoyaltyNotifyMode;
   channelSecret: string;
   channelAccessToken: string;
+  hasChannelSecret?: boolean;
+  hasChannelAccessToken?: boolean;
   serverKeyHash?: string;
+}
+
+/**
+ * Strips decrypted LINE credentials before sending LoyaltyConfig to Client Components.
+ * Exposes only boolean flags (`hasChannelSecret`, `hasChannelAccessToken`).
+ */
+export function redactLoyaltyConfigForClient(
+  config: LoyaltyConfig,
+  decryptedSecret: string = config.channelSecret,
+  decryptedAccessToken: string = config.channelAccessToken,
+): LoyaltyConfig {
+  return {
+    ...config,
+    channelSecret: "",
+    channelAccessToken: "",
+    hasChannelSecret: Boolean(decryptedSecret && decryptedSecret.trim().length > 0),
+    hasChannelAccessToken: Boolean(decryptedAccessToken && decryptedAccessToken.trim().length > 0),
+  };
 }
 
 export function isValidLiffId(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return true;
   return /^[0-9]{8,14}-[A-Za-z0-9_-]{6,36}$/.test(trimmed);
+}
+
+export function isMissingRpcError(
+  error: { code?: string; message?: string } | null | undefined,
+): boolean {
+  if (!error) return false;
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  const msg = String(error.message ?? "");
+  return (
+    msg.includes("Could not find the function") ||
+    (msg.includes("function") && msg.includes("does not exist"))
+  );
+}
+
+export function isMissingRelationError(
+  error: { code?: string; message?: string } | null | undefined,
+): boolean {
+  if (!error || isMissingRpcError(error)) return false;
+  if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST204") return true;
+  const msg = String(error.message ?? "");
+  if (msg.includes("function")) return false;
+  const mentionsLoyaltyTable =
+    msg.includes("loyalty_members") ||
+    msg.includes("loyalty_coupons") ||
+    msg.includes("loyalty_logs") ||
+    msg.includes("loyalty_push_queue");
+  return mentionsLoyaltyTable && (msg.includes("does not exist") || msg.includes("schema cache"));
 }
 
 export function resolveTrustedAppOrigin(fallbackRequestUrl?: string): string {
@@ -196,6 +244,10 @@ export function normalizeLoyaltyConfig(
   const notifyMode: LoyaltyNotifyMode =
     rawNotifyMode === "reward_only" || rawNotifyMode === "off" ? rawNotifyMode : "all";
 
+  const channelSecret = typeof obj.channelSecret === "string" ? obj.channelSecret.trim() : "";
+  const channelAccessToken =
+    typeof obj.channelAccessToken === "string" ? obj.channelAccessToken.trim() : "";
+
   return {
     enabled: Boolean(obj.enabled),
     shopSecret,
@@ -223,9 +275,14 @@ export function normalizeLoyaltyConfig(
     liffId: typeof obj.liffId === "string" ? obj.liffId.trim() : "",
     botBasicId: typeof obj.botBasicId === "string" ? obj.botBasicId.trim() : "",
     notifyMode,
-    channelSecret: typeof obj.channelSecret === "string" ? obj.channelSecret.trim() : "",
-    channelAccessToken:
-      typeof obj.channelAccessToken === "string" ? obj.channelAccessToken.trim() : "",
+    channelSecret,
+    channelAccessToken,
+    hasChannelSecret:
+      typeof obj.hasChannelSecret === "boolean" ? obj.hasChannelSecret : Boolean(channelSecret),
+    hasChannelAccessToken:
+      typeof obj.hasChannelAccessToken === "boolean"
+        ? obj.hasChannelAccessToken
+        : Boolean(channelAccessToken),
     ...(typeof obj.serverKeyHash === "string" && obj.serverKeyHash.trim()
       ? { serverKeyHash: obj.serverKeyHash.trim() }
       : {}),

@@ -20,9 +20,10 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const unitLabel = saleSettings.unitLabel || DEFAULT_UNIT_LABEL;
   const range = resolveRange(key, now, dayStartHour);
   const prev = previousRange(range, dayStartHour);
+  const queryStart = key === "all" ? range.start : prev.start;
   const [sales, expenses, purchases, ingredients, recipeItems, menuYields] = await Promise.all([
-    fetchSales(prev.start, range.end),
-    fetchExpenses(prev.start, range.end),
+    fetchSales(queryStart, range.end),
+    fetchExpenses(queryStart, range.end),
     fetchIngredientPurchases(range.start, range.end),
     fetchIngredients(),
     fetchRecipeItems(),
@@ -45,7 +46,9 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       : startOfBangkokMonth(now, 0, dayStartHour);
   }
   const days = Math.max(1, Math.round((range.end.getTime() - dailyStart.getTime()) / DAY_MS));
-  const daily = dailySeries(curSales, curExpenses, dailyStart, days, undefined, dayStartHour).reverse();
+  const rawDaily = dailySeries(curSales, curExpenses, dailyStart, days, undefined, dayStartHour).reverse();
+  const activeDaily = key === "all" ? rawDaily.filter((d) => d.saleCount > 0 || d.operatingExpenses > 0) : rawDaily;
+  const daily = key === "all" ? activeDaily.slice(0, 90) : rawDaily;
   const monthly = monthlySeries(curSales, curExpenses, dayStartHour);
   const menus = menuRanking(curSales);
   const categories = expensesByCategory(curExpenses);
@@ -197,7 +200,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     )}
 
     <section className="panel table-panel spaced">
-      <div className="table-title"><h2>ยอดขายรายวัน</h2><span>{days} วัน</span></div>
+      <div className="table-title"><h2>ยอดขายรายวัน</h2><span>{key === "all" ? (activeDaily.length > 90 ? `แสดง 90 วันล่าสุดที่มีรายการ จาก ${activeDaily.length} วัน` : `${activeDaily.length} วันที่มียอด`) : `${days} วัน`}</span></div>
       <table className="data-table">
         <thead><tr><th>วันที่</th><th className="num">รายการ</th><th className="num">ยอดขาย</th><th className="num">กำไรขั้นต้น</th><th className="num">ค่าใช้จ่ายดำเนินงาน</th><th className="num">กำไรสุทธิ</th></tr></thead>
         <tbody>

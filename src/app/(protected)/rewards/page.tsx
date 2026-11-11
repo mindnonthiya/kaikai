@@ -18,13 +18,13 @@ export default async function RewardsPage({
     searchParams ? searchParams : Promise.resolve({} as Record<string, string | string[] | undefined>),
   ]);
 
-  const activeShopId = shopsData.activeShopId;
-  const snapshot = await fetchLoyaltyAdminData(activeShopId, profile.shopName);
-
   const rawTab = typeof resolvedParams.tab === "string" ? resolvedParams.tab.trim() : "";
   const initialTab: LoyaltyHubTab = VALID_TABS.has(rawTab as LoyaltyHubTab)
     ? (rawTab as LoyaltyHubTab)
     : "overview";
+
+  const activeShopId = shopsData.activeShopId;
+  const snapshot = await fetchLoyaltyAdminData(activeShopId, profile.shopName, initialTab);
 
   return (
     <>
@@ -36,6 +36,7 @@ export default async function RewardsPage({
 
       <LoyaltyRewardsHub
         key={`rewards-hub-${activeShopId}`}
+        shopId={activeShopId}
         shopName={profile.shopName}
         snapshot={snapshot}
         initialTab={initialTab}

@@ -22,7 +22,9 @@ export function LoyaltySettingsCard({
     (snapshot?.recentCoupons ?? []).filter((c) => c.status === "unclaimed").length;
   const failedPushCount =
     summary?.failedPushCount ?? snapshot?.metrics?.failedPushCount ?? 0;
-  const isLineReady = Boolean(config.liffId && config.channelAccessToken);
+  const isLineReady = Boolean(
+    config.liffId && (config.hasChannelAccessToken || config.channelAccessToken),
+  );
 
   return (
     <section className="panel settings-card loyalty-settings-summary-card">

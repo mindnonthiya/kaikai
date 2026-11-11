@@ -1,5 +1,8 @@
 import { createHmac } from "crypto";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { describe, expect, it, vi } from "vitest";
+import { getCached, invalidateQueryCache, setCached } from "@/lib/data/queries";
 import {
   computePushRetryBackoffSeconds,
   deriveFallbackRetryKey,
@@ -9,6 +12,7 @@ import {
   verifyLineWebhookSignature,
 } from "@/lib/line-messaging";
 import {
+  LOYALTY_ADMIN_PAGE_SIZE,
   LOYALTY_POINT_TIERS,
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
@@ -19,9 +23,12 @@ import {
   computeExpiryDateIso,
   computeStampAwardProgress,
   formatValidTillDate,
+  isMissingRelationError,
+  isMissingRpcError,
   isValidLiffId,
   normalizeLoyaltyConfig,
   parseLoyaltyQueryParams,
+  redactLoyaltyConfigForClient,
   shouldSendStampPushNotification,
 } from "@/lib/loyalty";
 import {
@@ -308,5 +315,112 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
       | undefined;
     expect(calledHeaders?.["X-Line-Retry-Key"]).toBe(jobRetryKey);
     fetchSpy.mockRestore();
+  });
+
+  it("redacts LINE Channel Secret and Channel Access Token before returning config to browser clients", () => {
+    const rawConfig = normalizeLoyaltyConfig(
+      {
+        enabled: true,
+        liffId: "2009769853-BWR6D81k",
+        channelSecret: "super_secret_channel_secret_value",
+        channelAccessToken: "super_secret_channel_access_token_value",
+      },
+      "GaiTomNamPla",
+    );
+
+    const clientSafe = redactLoyaltyConfigForClient(rawConfig);
+    expect(clientSafe.channelSecret).toBe("");
+    expect(clientSafe.channelAccessToken).toBe("");
+    expect(clientSafe.hasChannelSecret).toBe(true);
+    expect(clientSafe.hasChannelAccessToken).toBe(true);
+    expect(clientSafe.liffId).toBe("2009769853-BWR6D81k");
+
+    const emptySafe = redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, "GaiTomNamPla"));
+    expect(emptySafe.channelSecret).toBe("");
+    expect(emptySafe.channelAccessToken).toBe("");
+    expect(emptySafe.hasChannelSecret).toBe(false);
+    expect(emptySafe.hasChannelAccessToken).toBe(false);
+    expect(LOYALTY_ADMIN_PAGE_SIZE).toBe(20);
+  });
+
+  it("clears sales_win, sales_superset, expenses_win, and expenses_superset caches on any mutation invalidation", () => {
+    setCached("user1:sales_win:default:100:200", [{ id: "s1" }]);
+    setCached("user1:sales_superset:default", { startMs: 100, endMs: 200, rows: [{ id: "s1" }] });
+    setCached("user1:expenses_win:default:100:200", [{ id: "e1" }]);
+    setCached("user1:expenses_superset:default", { startMs: 100, endMs: 200, rows: [{ id: "e1" }] });
+
+    invalidateQueryCache("pooled_rate");
+
+    expect(getCached("user1:sales_win:default:100:200")).toBeUndefined();
+    expect(getCached("user1:sales_superset:default")).toBeUndefined();
+    expect(getCached("user1:expenses_win:default:100:200")).toBeUndefined();
+    expect(getCached("user1:expenses_superset:default")).toBeUndefined();
+  });
+
+  it("distinguishes missing RPC errors from missing table errors so overview fallback works before 0002 migration", () => {
+    const missingOverviewRpcSchemaCache = {
+      code: "PGRST202",
+      message:
+        "Could not find the function public.get_loyalty_admin_overview_stats(p_seven_days_ago, p_shop_scope_id, p_today_start) in the schema cache",
+    };
+    const missingOverviewRpcPg = {
+      code: "42883",
+      message: "function public.get_loyalty_admin_overview_stats(text, timestamptz, timestamptz) does not exist",
+    };
+    const missingOverviewRpcWithoutCode = {
+      message:
+        "Could not find the function public.get_loyalty_admin_overview_stats in the schema cache",
+    };
+
+    expect(isMissingRpcError(missingOverviewRpcSchemaCache)).toBe(true);
+    expect(isMissingRpcError(missingOverviewRpcPg)).toBe(true);
+    expect(isMissingRpcError(missingOverviewRpcWithoutCode)).toBe(true);
+
+    // Must NOT misclassify missing RPC as missing relation (table)
+    expect(isMissingRelationError(missingOverviewRpcSchemaCache)).toBe(false);
+    expect(isMissingRelationError(missingOverviewRpcPg)).toBe(false);
+    expect(isMissingRelationError(missingOverviewRpcWithoutCode)).toBe(false);
+
+    // Real missing table errors must be classified as missing relation
+    const missingMembersTable = {
+      code: "42P01",
+      message: 'relation "public.loyalty_members" does not exist',
+    };
+    const missingMembersSchemaCache = {
+      code: "PGRST205",
+      message: "Could not find the table 'public.loyalty_members' in the schema cache",
+    };
+    const missingMembersMsgOnly = {
+      message: 'relation "public.loyalty_members" does not exist',
+    };
+
+    expect(isMissingRelationError(missingMembersTable)).toBe(true);
+    expect(isMissingRelationError(missingMembersSchemaCache)).toBe(true);
+    expect(isMissingRelationError(missingMembersMsgOnly)).toBe(true);
+    expect(isMissingRpcError(missingMembersTable)).toBe(false);
+  });
+
+  it("enforces two-layer housekeeping security: revokes direct RPC execute and verifies serverKeyHash before worker housekeeping", () => {
+    for (const file of [
+      "supabase/migrations/202611110001_line_loyalty.sql",
+      "supabase/migrations/202611110002_loyalty_admin_rpcs.sql",
+    ]) {
+      const sql = readFileSync(join(process.cwd(), file), "utf8");
+
+      // Layer 1: Direct RPC execution must be revoked from public, anon, authenticated (and never granted to anon/authenticated)
+      expect(sql).toContain(
+        "revoke all on function public.run_loyalty_housekeeping(uuid) from public, anon, authenticated;",
+      );
+      expect(sql).not.toContain("grant execute on function public.run_loyalty_housekeeping");
+
+      // Layer 2: Inside claim_due_loyalty_push_jobs_batch, serverKeyHash must be verified against public.settings BEFORE run_loyalty_housekeeping(null)
+      const batchFnStart = sql.indexOf("create or replace function public.claim_due_loyalty_push_jobs_batch");
+      expect(batchFnStart).toBeGreaterThan(-1);
+      const batchFnBody = sql.slice(batchFnStart, batchFnStart + 2500);
+      const verifyIdx = batchFnBody.indexOf("if not exists (");
+      const housekeepingIdx = batchFnBody.indexOf("v_housekeeping := public.run_loyalty_housekeeping(null);");
+      expect(verifyIdx).toBeGreaterThan(0);
+      expect(housekeepingIdx).toBeGreaterThan(verifyIdx);
+    }
   });
 });
