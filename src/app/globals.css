@@ -5886,11 +5886,20 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .loyalty-hub-wrap {
   display: grid;
   gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.loyalty-hub-wrap > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .loyalty-hub-top-panel {
   padding-bottom: 0;
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .loyalty-hub-top-row {
@@ -6565,4 +6574,120 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+
+/* ============================================================
+   3. Mobile Overflow Protection & 5-Column Compact Tabs (/rewards)
+   ============================================================ */
+
+.loyalty-admin-banner {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.loyalty-admin-banner > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.loyalty-admin-banner > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.loyalty-admin-banner code,
+.loyalty-admin-banner p,
+.loyalty-copy-code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.loyalty-tab-content,
+.loyalty-tab-content > *,
+.loyalty-section-card,
+.loyalty-section-card > *,
+.loyalty-kpi-grid,
+.loyalty-kpi-card,
+.loyalty-overview-two-col,
+.loyalty-overview-two-col > *,
+.loyalty-quick-actions-grid,
+.loyalty-admin-form-grid,
+.loyalty-qr-grid,
+.loyalty-search-box {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.loyalty-overview-two-col {
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+}
+
+.loyalty-kpi-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+}
+
+.loyalty-quick-actions-grid,
+.loyalty-admin-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+}
+
+.loyalty-qr-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(185px, 100%), 1fr));
+}
+
+.loyalty-hub-tabs {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.loyalty-hub-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .loyalty-hub-tabs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    overflow-x: hidden;
+    padding-top: 6px;
+  }
+
+  .loyalty-hub-tab {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 2px 9px;
+    font-size: 11.5px;
+    font-weight: 750;
+    text-align: center;
+    position: relative;
+    min-width: 0;
+  }
+
+  .loyalty-hub-tab span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .loyalty-hub-tab .hide-on-mobile-tab {
+    display: none;
+  }
+
+  .loyalty-hub-tab-badge {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    font-size: 9.5px;
+    padding: 1px 4.5px;
+    line-height: 1.2;
+  }
+
+  .loyalty-search-box {
+    min-width: 100%;
+  }
 }

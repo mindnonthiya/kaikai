@@ -230,7 +230,7 @@ export function AppShell({
     itemByHref.get("/dashboard")!,
     itemByHref.get("/sales")!,
     { ...itemByHref.get("/sales/new")!, label: "เปิดบิล" },
-    { ...itemByHref.get("/menus")!, label: "เมนู" },
+    { ...itemByHref.get("/rewards")!, label: "แต้มสะสม" },
   ].filter(Boolean);
 
   const normalizedShops: ShopSummary[] =

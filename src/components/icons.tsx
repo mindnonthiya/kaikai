@@ -7,12 +7,12 @@ export const navItems = [
   { href: "/dashboard", label: "ภาพรวม", icon: LayoutDashboard, inBottomBar: true },
   { href: "/sales/new", label: "เปิดบิล", icon: PlusCircle, accent: true, inBottomBar: true },
   { href: "/sales", label: "การขาย", icon: ShoppingBag, inBottomBar: true },
-  { href: "/bank-check", label: "เทียบยอดธนาคาร", icon: CircleDollarSign },
-  { href: "/menus", label: "เมนูและสูตร", icon: ChefHat, inBottomBar: true },
+  { href: "/rewards", label: "ระบบสะสมแต้ม", icon: Gift, inBottomBar: true },
+  { href: "/menus", label: "เมนูและสูตร", icon: ChefHat },
   { href: "/ingredients", label: "วัตถุดิบ", icon: PackageOpen },
   { href: "/expenses", label: "ค่าใช้จ่าย", icon: WalletCards },
+  { href: "/bank-check", label: "เทียบยอดธนาคาร", icon: CircleDollarSign },
   { href: "/reports", label: "รายงาน", icon: BarChart3 },
-  { href: "/rewards", label: "ระบบสะสมแต้ม", icon: Gift },
   { href: "/settings", label: "ตั้งค่า", icon: Settings },
 ];
 

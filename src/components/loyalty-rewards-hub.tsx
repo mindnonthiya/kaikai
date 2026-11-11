@@ -520,8 +520,8 @@ export function LoyaltyRewardsHub({
             onClick={() => setActiveTab("qr")}
           >
             <QrCode size={17} />
-            <span>QR สะสมแต้ม</span>
-            <span className="loyalty-hub-tab-badge">1–10</span>
+            <span>QR โค้ด</span>
+            <span className="loyalty-hub-tab-badge hide-on-mobile-tab">1–10</span>
           </button>
           <button
             type="button"
@@ -551,7 +551,7 @@ export function LoyaltyRewardsHub({
             onClick={() => setActiveTab("settings")}
           >
             <Settings2 size={17} />
-            <span>ตั้งค่าระบบ</span>
+            <span>ตั้งค่า</span>
           </button>
         </div>
       </section>
