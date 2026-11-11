@@ -1,5 +1,5 @@
 import {
-  BarChart3, ChefHat, CircleDollarSign, ClipboardList, LayoutDashboard,
+  BarChart3, ChefHat, CircleDollarSign, ClipboardList, Gift, LayoutDashboard,
   PackageOpen, PlusCircle, Settings, ShoppingBag, WalletCards,
 } from "lucide-react";
 
@@ -12,7 +12,8 @@ export const navItems = [
   { href: "/ingredients", label: "วัตถุดิบ", icon: PackageOpen },
   { href: "/expenses", label: "ค่าใช้จ่าย", icon: WalletCards },
   { href: "/reports", label: "รายงาน", icon: BarChart3 },
+  { href: "/rewards", label: "ระบบสะสมแต้ม", icon: Gift },
   { href: "/settings", label: "ตั้งค่า", icon: Settings },
 ];
 
-export { CircleDollarSign, ClipboardList };
+export { CircleDollarSign, ClipboardList, Gift };

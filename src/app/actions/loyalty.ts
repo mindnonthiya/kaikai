@@ -32,6 +32,10 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export interface LoyaltyPushQueueSummary {
   id: string;
+  memberId?: string;
+  lineUserId?: string;
+  displayName?: string;
+  pictureUrl?: string | null;
   eventType: "stamp_claim" | "coupon_redeem";
   status: string;
   attempts: number;
@@ -40,13 +44,56 @@ export interface LoyaltyPushQueueSummary {
   sentAt: string | null;
 }
 
+export interface LoyaltyActivityLogItem {
+  id: string;
+  memberId: string;
+  lineUserId: string;
+  displayName: string;
+  pictureUrl: string | null;
+  action: string;
+  pointsDelta: number;
+  balanceAfter: number;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface LoyaltyOverviewMetrics {
+  totalMembers: number;
+  scansTodayCount: number;
+  pointsTodayCount: number;
+  scans7dCount: number;
+  points7dCount: number;
+  readyCouponsCount: number;
+  usedCouponsCount: number;
+  failedPushCount: number;
+  pendingPushCount: number;
+}
+
+export interface LoyaltyAdminCouponItem extends LoyaltyCouponRecord {
+  memberId: string;
+  lineUserId: string;
+  displayName: string;
+  pictureUrl: string | null;
+}
+
 export interface LoyaltyAdminSnapshot {
   config: LoyaltyConfig;
   persisted: boolean;
   isTableReady: boolean;
   members: LoyaltyMemberSummary[];
-  recentCoupons: Array<LoyaltyCouponRecord & { displayName: string }>;
+  recentCoupons: LoyaltyAdminCouponItem[];
   recentPushJobs?: LoyaltyPushQueueSummary[];
+  recentLogs?: LoyaltyActivityLogItem[];
+  metrics?: LoyaltyOverviewMetrics;
+}
+
+export interface LoyaltySettingsSummary {
+  config: LoyaltyConfig;
+  persisted: boolean;
+  isTableReady: boolean;
+  totalMembers: number;
+  readyCouponsCount: number;
+  failedPushCount: number;
 }
 
 function isMissingRelationError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -63,11 +110,128 @@ function isMissingRpcError(error: { code?: string; message?: string } | null | u
   return msg.includes("Could not find the function") || msg.includes("does not exist");
 }
 
+function getBangkokStartOfDayMs(now = new Date()): number {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const dateStr = formatter.format(now); // YYYY-MM-DD in Asia/Bangkok
+  return new Date(`${dateStr}T00:00:00+07:00`).getTime();
+}
+
+export async function fetchLoyaltySettingsSummary(
+  rawShopId: string,
+  fallbackShopName = "GaiTomNamPla 🐔",
+): Promise<LoyaltySettingsSummary> {
+  const shopId = normalizeShopId(rawShopId || DEFAULT_SHOP_ID);
+  if (!hasSupabaseEnv) {
+    return {
+      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      persisted: false,
+      isTableReady: true,
+      totalMembers: 0,
+      readyCouponsCount: 0,
+      failedPushCount: 0,
+    };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return {
+      config: normalizeLoyaltyConfig(null, fallbackShopName),
+      persisted: false,
+      isTableReady: true,
+      totalMembers: 0,
+      readyCouponsCount: 0,
+      failedPushCount: 0,
+    };
+  }
+
+  const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
+  const { data: settingRow } = await supabase
+    .from("settings")
+    .select("value")
+    .eq("owner_id", user.id)
+    .eq("key", settingKey)
+    .maybeSingle();
+
+  const persisted = Boolean(settingRow?.value && typeof settingRow.value === "object");
+  const normalized = normalizeLoyaltyConfig(settingRow?.value, fallbackShopName);
+  const config: LoyaltyConfig = {
+    ...normalized,
+    channelSecret: decryptLoyaltySecret(normalized.channelSecret),
+    channelAccessToken: decryptLoyaltySecret(normalized.channelAccessToken),
+    serverKeyHash: getLoyaltyServerKeyHash(),
+  };
+
+  const [
+    { count: memberCount, error: memberErr },
+    { count: readyCouponsCount, error: couponErr },
+    { count: failedPushCount },
+  ] = await Promise.all([
+    supabase
+      .from("loyalty_members")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId),
+    supabase
+      .from("loyalty_coupons")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .eq("status", "unclaimed"),
+    supabase
+      .from("loyalty_push_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .in("status", ["failed_network", "failed_quota", "failed_auth", "failed_recipient"]),
+  ]);
+
+  if (isMissingRelationError(memberErr) || isMissingRelationError(couponErr)) {
+    return {
+      config,
+      persisted,
+      isTableReady: false,
+      totalMembers: 0,
+      readyCouponsCount: 0,
+      failedPushCount: 0,
+    };
+  }
+
+  return {
+    config,
+    persisted,
+    isTableReady: true,
+    totalMembers: memberCount ?? 0,
+    readyCouponsCount: readyCouponsCount ?? 0,
+    failedPushCount: failedPushCount ?? 0,
+  };
+}
+
 export async function fetchLoyaltyAdminData(
   rawShopId: string,
   fallbackShopName = "GaiTomNamPla 🐔",
 ): Promise<LoyaltyAdminSnapshot> {
   const shopId = normalizeShopId(rawShopId || DEFAULT_SHOP_ID);
+  const emptyMetrics: LoyaltyOverviewMetrics = {
+    totalMembers: 0,
+    scansTodayCount: 0,
+    pointsTodayCount: 0,
+    scans7dCount: 0,
+    points7dCount: 0,
+    readyCouponsCount: 0,
+    usedCouponsCount: 0,
+    failedPushCount: 0,
+    pendingPushCount: 0,
+  };
+
   if (!hasSupabaseEnv) {
     return {
       config: normalizeLoyaltyConfig(null, fallbackShopName),
@@ -76,6 +240,8 @@ export async function fetchLoyaltyAdminData(
       members: [],
       recentCoupons: [],
       recentPushJobs: [],
+      recentLogs: [],
+      metrics: emptyMetrics,
     };
   }
 
@@ -92,6 +258,8 @@ export async function fetchLoyaltyAdminData(
       members: [],
       recentCoupons: [],
       recentPushJobs: [],
+      recentLogs: [],
+      metrics: emptyMetrics,
     };
   }
 
@@ -144,6 +312,7 @@ export async function fetchLoyaltyAdminData(
     { data: memberRows, error: memberErr },
     { data: couponRows, error: couponErr },
     { data: pushRows },
+    { data: logRows },
   ] = await Promise.all([
     supabase
       .from("loyalty_members")
@@ -151,21 +320,28 @@ export async function fetchLoyaltyAdminData(
       .eq("owner_id", user.id)
       .eq("shop_scope_id", shopId)
       .order("updated_at", { ascending: false })
-      .limit(100),
+      .limit(300),
     supabase
       .from("loyalty_coupons")
       .select("id,member_id,line_user_id,code,title,status,issued_at,claimed_at")
       .eq("owner_id", user.id)
       .eq("shop_scope_id", shopId)
       .order("issued_at", { ascending: false })
-      .limit(100),
+      .limit(200),
     supabase
       .from("loyalty_push_queue")
-      .select("id,event_type,status,attempts,last_error,created_at,sent_at")
+      .select("id,member_id,line_user_id,event_type,status,attempts,last_error,created_at,sent_at")
       .eq("owner_id", user.id)
       .eq("shop_scope_id", shopId)
       .order("created_at", { ascending: false })
-      .limit(10),
+      .limit(25),
+    supabase
+      .from("loyalty_logs")
+      .select("id,member_id,line_user_id,action,points_delta,balance_after,note,created_at")
+      .eq("owner_id", user.id)
+      .eq("shop_scope_id", shopId)
+      .order("created_at", { ascending: false })
+      .limit(200),
   ]);
 
   if (isMissingRelationError(memberErr) || isMissingRelationError(couponErr)) {
@@ -176,6 +352,8 @@ export async function fetchLoyaltyAdminData(
       members: [],
       recentCoupons: [],
       recentPushJobs: [],
+      recentLogs: [],
+      metrics: emptyMetrics,
     };
   }
 
@@ -192,24 +370,42 @@ export async function fetchLoyaltyAdminData(
 
   const unclaimedByMember = new Map<string, number>();
   const claimedByMember = new Map<string, number>();
+  let readyCouponsCount = 0;
+  let usedCouponsCount = 0;
+
   for (const c of couponsList) {
     if (c.status === "unclaimed") {
+      readyCouponsCount += 1;
       unclaimedByMember.set(c.memberId, (unclaimedByMember.get(c.memberId) ?? 0) + 1);
     } else {
+      usedCouponsCount += 1;
       claimedByMember.set(c.memberId, (claimedByMember.get(c.memberId) ?? 0) + 1);
     }
   }
 
   const memberNameById = new Map<string, string>();
+  const memberPicById = new Map<string, string | null>();
+  const memberNameByLineId = new Map<string, string>();
+  const memberPicByLineId = new Map<string, string | null>();
+
   const members: LoyaltyMemberSummary[] = ((memberRows ?? []) as Array<Record<string, unknown>>).map((row) => {
     const id = String(row.id);
+    const lineUserId = String(row.line_user_id ?? "");
     const displayName = String(row.display_name ?? "ลูกค้า LINE");
+    const pictureUrl = row.picture_url ? String(row.picture_url) : null;
+
     memberNameById.set(id, displayName);
+    memberPicById.set(id, pictureUrl);
+    if (lineUserId) {
+      memberNameByLineId.set(lineUserId, displayName);
+      memberPicByLineId.set(lineUserId, pictureUrl);
+    }
+
     return {
       id,
-      lineUserId: String(row.line_user_id ?? ""),
+      lineUserId,
       displayName,
-      pictureUrl: row.picture_url ? String(row.picture_url) : null,
+      pictureUrl,
       stamps: Math.max(0, Number(row.stamps ?? 0)),
       lifetimeStamps: Math.max(0, Number(row.lifetime_stamps ?? 0)),
       expiresAt: row.expires_at ? String(row.expires_at) : null,
@@ -219,32 +415,104 @@ export async function fetchLoyaltyAdminData(
     };
   });
 
-  const recentCoupons = couponsList.slice(0, 30).map((c) => ({
+  const recentCoupons: LoyaltyAdminCouponItem[] = couponsList.slice(0, 100).map((c) => ({
     id: c.id,
+    memberId: c.memberId,
+    lineUserId: c.lineUserId,
     code: c.code,
     title: c.title,
     status: c.status,
     issuedAt: c.issuedAt,
     claimedAt: c.claimedAt,
-    displayName: memberNameById.get(c.memberId) ?? "ลูกค้า LINE",
+    displayName:
+      memberNameById.get(c.memberId) ??
+      memberNameByLineId.get(c.lineUserId) ??
+      "ลูกค้า LINE",
+    pictureUrl:
+      memberPicById.get(c.memberId) ??
+      memberPicByLineId.get(c.lineUserId) ??
+      null,
   }));
 
   const recentPushJobs: LoyaltyPushQueueSummary[] = ((pushRows ?? []) as Array<Record<string, unknown>>).map(
-    (row) => ({
-      id: String(row.id),
-      eventType: row.event_type === "coupon_redeem" ? "coupon_redeem" : "stamp_claim",
-      status: String(row.status ?? "pending"),
-      attempts: Number(row.attempts ?? 0),
-      lastError: row.last_error ? String(row.last_error) : null,
-      createdAt: String(row.created_at ?? new Date().toISOString()),
-      sentAt: row.sent_at ? String(row.sent_at) : null,
-    }),
+    (row) => {
+      const memberId = String(row.member_id ?? "");
+      const lineUserId = String(row.line_user_id ?? "");
+      return {
+        id: String(row.id),
+        memberId,
+        lineUserId,
+        displayName:
+          memberNameById.get(memberId) ??
+          memberNameByLineId.get(lineUserId) ??
+          "ลูกค้า LINE",
+        pictureUrl:
+          memberPicById.get(memberId) ??
+          memberPicByLineId.get(lineUserId) ??
+          null,
+        eventType: row.event_type === "coupon_redeem" ? "coupon_redeem" : "stamp_claim",
+        status: String(row.status ?? "pending"),
+        attempts: Number(row.attempts ?? 0),
+        lastError: row.last_error ? String(row.last_error) : null,
+        createdAt: String(row.created_at ?? new Date().toISOString()),
+        sentAt: row.sent_at ? String(row.sent_at) : null,
+      };
+    },
   );
 
-  const hasPendingPush = recentPushJobs.some(
+  const todayStartMs = getBangkokStartOfDayMs();
+  const sevenDaysAgoMs = todayStartMs - 6 * 24 * 60 * 60 * 1000;
+
+  let scansTodayCount = 0;
+  let pointsTodayCount = 0;
+  let scans7dCount = 0;
+  let points7dCount = 0;
+
+  const recentLogs: LoyaltyActivityLogItem[] = ((logRows ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const memberId = String(row.member_id ?? "");
+    const lineUserId = String(row.line_user_id ?? "");
+    const action = String(row.action ?? "qr_claim");
+    const pointsDelta = Number(row.points_delta ?? 0);
+    const createdAt = String(row.created_at ?? new Date().toISOString());
+    const createdMs = new Date(createdAt).getTime();
+
+    if (action === "qr_claim" && Number.isFinite(createdMs)) {
+      if (createdMs >= todayStartMs) {
+        scansTodayCount += 1;
+        pointsTodayCount += Math.max(0, pointsDelta);
+      }
+      if (createdMs >= sevenDaysAgoMs) {
+        scans7dCount += 1;
+        points7dCount += Math.max(0, pointsDelta);
+      }
+    }
+
+    return {
+      id: String(row.id),
+      memberId,
+      lineUserId,
+      displayName:
+        memberNameById.get(memberId) ??
+        memberNameByLineId.get(lineUserId) ??
+        "ลูกค้า LINE",
+      pictureUrl:
+        memberPicById.get(memberId) ??
+        memberPicByLineId.get(lineUserId) ??
+        null,
+      action,
+      pointsDelta,
+      balanceAfter: Number(row.balance_after ?? 0),
+      note: row.note ? String(row.note) : null,
+      createdAt,
+    };
+  });
+
+  const failedPushCount = recentPushJobs.filter((j) => j.status.startsWith("failed")).length;
+  const pendingPushCount = recentPushJobs.filter(
     (j) => j.status === "pending" || j.status === "processing",
-  );
-  if (hasPendingPush && config.channelAccessToken) {
+  ).length;
+
+  if (pendingPushCount > 0 && config.channelAccessToken) {
     after(async () => {
       try {
         const bgSupabase = await createSupabaseServerClient();
@@ -266,6 +534,18 @@ export async function fetchLoyaltyAdminData(
     members,
     recentCoupons,
     recentPushJobs,
+    recentLogs,
+    metrics: {
+      totalMembers: members.length,
+      scansTodayCount,
+      pointsTodayCount,
+      scans7dCount,
+      points7dCount,
+      readyCouponsCount,
+      usedCouponsCount,
+      failedPushCount,
+      pendingPushCount,
+    },
   };
 }
 
@@ -358,14 +638,75 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
     if (upsertErr) dbError(upsertErr);
 
     invalidateQueryCache();
+    revalidatePath("/rewards");
     revalidatePath("/settings");
     revalidatePath("/loyalty");
     return {
       ok: true,
       message: enabled
-        ? "บันทึกและเข้ารหัส Token ระบบสะสมแต้ม LINE OA สำหรับร้านนี้เรียบร้อยแล้ว"
-        : "บันทึกการตั้งค่าระบบสะสมแต้ม LINE OA แล้ว (สถานะ: ปิดใช้งานสำหรับร้านนี้)",
+        ? "บันทึกการตั้งค่าระบบสะสมแต้มเรียบร้อยแล้ว"
+        : "บันทึกการตั้งค่าแล้ว (สถานะ: ปิดใช้งานสำหรับร้านนี้)",
     };
+  });
+}
+
+export async function testLineConnectionAction(form: FormData): Promise<ActionState> {
+  return runAction(async ({ supabase, user, shopId }) => {
+    const rawTokenFromForm = String(form.get("channel_access_token") ?? "").trim();
+    let accessToken = rawTokenFromForm;
+
+    if (!accessToken) {
+      const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
+      const { data: existingRow } = await supabase
+        .from("settings")
+        .select("value")
+        .eq("owner_id", user.id)
+        .eq("key", settingKey)
+        .maybeSingle();
+
+      const config = normalizeLoyaltyConfig(existingRow?.value);
+      accessToken = decryptLoyaltySecret(config.channelAccessToken);
+    }
+
+    if (!accessToken) {
+      throw new InputError("กรุณากรอก Channel Access Token ก่อนกดทดสอบการเชื่อมต่อ");
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch("https://api.line.me/v2/bot/info", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          throw new InputError("Channel Access Token ไม่ถูกต้องหรือหมดอายุ (HTTP 401)");
+        }
+        throw new InputError(`เชื่อมต่อ LINE Messaging API ไม่สำเร็จ (HTTP ${res.status})`);
+      }
+
+      const data = (await res.json()) as Record<string, unknown>;
+      const botName = String(data.displayName ?? "LINE Official Account");
+      const basicId = data.basicId ? ` (${String(data.basicId)})` : "";
+
+      return {
+        ok: true,
+        message: `เชื่อมต่อสำเร็จ: บัญชี LINE OA “${botName}”${basicId} พร้อมส่งข้อความแจ้งเตือน`,
+      };
+    } catch (err) {
+      if (err instanceof InputError) throw err;
+      throw new InputError(
+        err instanceof Error ? `เชื่อมต่อ LINE API ไม่สำเร็จ: ${err.message}` : "เชื่อมต่อ LINE API ไม่สำเร็จ",
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   });
 }
 
@@ -403,11 +744,12 @@ export async function regenerateLoyaltyQrTokensAction(): Promise<ActionState> {
     if (upsertErr) dbError(upsertErr);
 
     invalidateQueryCache();
+    revalidatePath("/rewards");
     revalidatePath("/settings");
     revalidatePath("/loyalty");
     return {
       ok: true,
-      message: "รีเซ็ตรหัส QR Code ทั้ง 1–10 กล่องเรียบร้อยแล้ว (แต้มและคูปองของลูกค้าทุกคนยังอยู่ครบเหมือนเดิม)",
+      message: "รีเซ็ตรหัส QR Code ทั้ง 1–10 กล่องเรียบร้อยแล้ว (แต้มและคูปองของลูกค้ายังอยู่ครบเหมือนเดิม)",
     };
   });
 }
@@ -438,6 +780,7 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
       const issuedCouponsCount = Number(res.issuedCouponsCount ?? 0);
 
       invalidateQueryCache();
+      revalidatePath("/rewards");
       revalidatePath("/settings");
       return {
         ok: true,
@@ -545,6 +888,7 @@ export async function adjustMemberStampsAction(form: FormData): Promise<ActionSt
     if (logErr) dbError(logErr);
 
     invalidateQueryCache();
+    revalidatePath("/rewards");
     revalidatePath("/settings");
     return {
       ok: true,
@@ -581,17 +925,18 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
       const claimedAtText = formatThaiDateTime(res.claimedAt ? String(res.claimedAt) : new Date());
 
       invalidateQueryCache();
+      revalidatePath("/rewards");
       revalidatePath("/settings");
 
       if (alreadyClaimed) {
         return {
           ok: true,
-          message: `ℹ️ คูปอง #${code} (${title}) ของ “${displayName}” ถูกกดใช้สิทธิ์ไปแล้วเมื่อ ${claimedAtText}`,
+          message: `คูปอง #${code} (${title}) ของ “${displayName}” ถูกใช้สิทธิ์ไปแล้วเมื่อ ${claimedAtText}`,
         };
       }
       return {
         ok: true,
-        message: `✅ ยืนยันและตัดสิทธิ์คูปอง #${code} (${title}) ของ “${displayName}” เรียบร้อยแล้ว (${claimedAtText})`,
+        message: `ยืนยันและตัดสิทธิ์คูปอง #${code} (${title}) ของ “${displayName}” เรียบร้อยแล้ว (${claimedAtText})`,
       };
     }
 
@@ -625,7 +970,7 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
     if (couponRow.status === "claimed") {
       return {
         ok: true,
-        message: `ℹ️ คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” ถูกใช้สิทธิ์ไปแล้วเมื่อ ${formatThaiDateTime(String(couponRow.claimed_at))}`,
+        message: `คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” ถูกใช้สิทธิ์ไปแล้วเมื่อ ${formatThaiDateTime(String(couponRow.claimed_at))}`,
       };
     }
 
@@ -652,10 +997,11 @@ export async function verifyOrRedeemCouponByCodeAction(form: FormData): Promise<
     });
 
     invalidateQueryCache();
+    revalidatePath("/rewards");
     revalidatePath("/settings");
     return {
       ok: true,
-      message: `✅ ยืนยันและตัดสิทธิ์คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” เรียบร้อยแล้ว`,
+      message: `ยืนยันและตัดสิทธิ์คูปอง #${String(couponRow.code)} (${String(couponRow.title)}) ของ “${displayName}” เรียบร้อยแล้ว`,
     };
   });
 }
@@ -714,6 +1060,7 @@ export async function retryFailedLoyaltyPushJobsAction(form: FormData): Promise<
 
     const resetCount = Number((rpcData as Record<string, unknown> | null)?.resetCount ?? 1);
     invalidateQueryCache();
+    revalidatePath("/rewards");
     revalidatePath("/settings");
     return {
       ok: true,

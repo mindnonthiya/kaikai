@@ -268,8 +268,20 @@ export async function POST(request: Request) {
     delete safeResult.channelAccessToken;
 
     if (safeResult.member && typeof safeResult.member === "object") {
+      const memberRaw = safeResult.member as Record<string, unknown>;
+      const rawDisplayName = String(memberRaw.displayName ?? "").trim();
+      const finalDisplayName =
+        rawDisplayName && rawDisplayName !== "ลูกค้า LINE"
+          ? rawDisplayName
+          : verifiedDisplayName || "ลูกค้า LINE";
+      const finalPictureUrl = memberRaw.pictureUrl
+        ? String(memberRaw.pictureUrl)
+        : verifiedPictureUrl;
+
       safeResult.member = {
-        ...(safeResult.member as Record<string, unknown>),
+        ...memberRaw,
+        displayName: finalDisplayName,
+        pictureUrl: finalPictureUrl,
         validTillFormatted: validTill,
       };
     }
