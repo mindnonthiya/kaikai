@@ -77,7 +77,7 @@ export function RewardsMemberModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="ig-sheet-header">
-          <strong>ข้อมูลสมาชิกสะสมแต้ม</strong>
+          <strong>ข้อมูลลูกค้า</strong>
           <button
             type="button"
             className="icon-button ig-sheet-close"
@@ -95,17 +95,17 @@ export function RewardsMemberModal({
               pictureUrl={member.pictureUrl}
               displayName={member.displayName}
               lineUserId={member.lineUserId}
-              size={64}
+              size={58}
             />
             <div className="loyalty-member-profile-meta">
               <div className="loyalty-member-name-row">
                 <h3>{member.displayName}</h3>
                 {member.lineUserId.startsWith("U") && (
-                  <span className="loyalty-line-tag">เชื่อมต่อ LINE แล้ว</span>
+                  <span className="loyalty-line-tag">LINE</span>
                 )}
               </div>
               <span className="loyalty-member-meta">
-                รหัสอ้างอิง: <code>{member.lineUserId}</code>
+                <code>{member.lineUserId}</code>
               </span>
             </div>
           </div>
@@ -119,7 +119,7 @@ export function RewardsMemberModal({
               </strong>
             </div>
             <div className="loyalty-member-stat-box">
-              <span>สะสมตลอดชีพ</span>
+              <span>สะสมรวม</span>
               <strong>{member.lifetimeStamps.toLocaleString()} แต้ม</strong>
             </div>
             <div className="loyalty-member-stat-box">
@@ -127,14 +127,14 @@ export function RewardsMemberModal({
               <strong>{member.unclaimedCount.toLocaleString()} ใบ</strong>
             </div>
             <div className="loyalty-member-stat-box">
-              <span>วันหมดอายุแต้ม</span>
+              <span>หมดอายุ</span>
               <strong>{formatValidTillDate(member.expiresAt)}</strong>
             </div>
           </div>
 
           {/* Manual Stamp Adjustment Box */}
           <div className="loyalty-adjust-box">
-            <strong>ปรับเพิ่ม / ลดแต้มของลูกค้า</strong>
+            <strong>ปรับแต้มลูกค้า</strong>
             <div className="loyalty-adjust-quick-row">
               {[1, 2, 3, 5].map((pts) => (
                 <button
@@ -144,7 +144,7 @@ export function RewardsMemberModal({
                   disabled={isPending}
                   onClick={() => onQuickAdjustMember(member.id, pts)}
                 >
-                  +{pts} แต้ม
+                  +{pts}
                 </button>
               ))}
               {[-1, -2].map((pts) => (
@@ -155,7 +155,7 @@ export function RewardsMemberModal({
                   disabled={isPending || member.stamps <= 0}
                   onClick={() => onQuickAdjustMember(member.id, pts)}
                 >
-                  {pts} แต้ม
+                  {pts}
                 </button>
               ))}
             </div>
@@ -176,29 +176,23 @@ export function RewardsMemberModal({
                 max={30}
                 value={customDeltaInput}
                 onChange={(e) => setCustomDeltaInput(e.target.value)}
-                placeholder="ระบุจำนวนแต้ม เช่น 4 หรือ -3"
+                placeholder="เช่น 4 หรือ -3"
               />
               <button type="submit" className="button primary" disabled={isPending}>
-                บันทึกการปรับแต้ม
+                บันทึกแต้ม
               </button>
             </form>
           </div>
 
-          {/* Customer's Coupons (loaded directly from DB, up to 100 latest) */}
+          {/* Customer's Coupons */}
           <div className="loyalty-modal-section">
             <strong>
-              คูปองของลูกค้ารายนี้ (
-              {isLoadingDetail
-                ? "กำลังโหลด..."
-                : couponsTotal > coupons.length
-                  ? `แสดง ${coupons.length} ใบล่าสุด จากทั้งหมด ${couponsTotal.toLocaleString()} ใบ`
-                  : `${coupons.length} ใบ · สูงสุด 100 รายการล่าสุด`}
-              )
+              คูปอง ({isLoadingDetail ? "กำลังโหลด..." : `${couponsTotal.toLocaleString()} ใบ`})
             </strong>
             {isLoadingDetail ? (
-              <p className="field-hint">กำลังโหลดข้อมูลคูปองของลูกค้า...</p>
+              <p className="field-hint">กำลังโหลดคูปอง...</p>
             ) : coupons.length === 0 ? (
-              <p className="field-hint">ยังไม่มีคูปองส่วนลด</p>
+              <p className="field-hint">ยังไม่มีคูปอง</p>
             ) : (
               <div className="loyalty-clean-list">
                 {coupons.map((c) => (
@@ -220,7 +214,7 @@ export function RewardsMemberModal({
                         disabled={isPending}
                         onClick={() => onRedeemCouponCode(c.code)}
                       >
-                        ตัดสิทธิ์คูปอง
+                        ตัดสิทธิ์
                       </button>
                     ) : (
                       <span className="loyalty-coupon-status claimed">ใช้แล้ว</span>
@@ -231,21 +225,15 @@ export function RewardsMemberModal({
             )}
           </div>
 
-          {/* Customer's Recent Logs (loaded directly from DB, up to 100 latest) */}
+          {/* Customer's Recent Logs */}
           <div className="loyalty-modal-section">
             <strong>
-              ประวัติของลูกค้ารายนี้ (
-              {isLoadingDetail
-                ? "กำลังโหลด..."
-                : logsTotal > logs.length
-                  ? `แสดง ${logs.length} รายการล่าสุด จากทั้งหมด ${logsTotal.toLocaleString()} รายการ`
-                  : `${logs.length} รายการ · สูงสุด 100 รายการล่าสุด`}
-              )
+              ประวัติแต้ม ({isLoadingDetail ? "กำลังโหลด..." : `${logsTotal.toLocaleString()} รายการ`})
             </strong>
             {isLoadingDetail ? (
-              <p className="field-hint">กำลังโหลดประวัติแต้มของลูกค้า...</p>
+              <p className="field-hint">กำลังโหลดประวัติ...</p>
             ) : logs.length === 0 ? (
-              <p className="field-hint">ยังไม่มีประวัติการทำรายการ</p>
+              <p className="field-hint">ยังไม่มีประวัติ</p>
             ) : (
               <div className="loyalty-clean-list">
                 {logs.map((log) => (

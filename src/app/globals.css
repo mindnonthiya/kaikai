@@ -6257,9 +6257,9 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .loyalty-member-cell {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 200px;
 }
 
 .loyalty-member-cell.clickable {
@@ -6860,4 +6860,92 @@ body,
 .page-content {
   max-width: 100%;
   overflow-x: clip;
+}
+
+/* ============================================================
+   5. Grouped Desktop Sidebar & Compact Customer Row Controls
+   ============================================================ */
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.side-nav > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side-nav-group-label {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #7f9186;
+  letter-spacing: 0.4px;
+  padding: 11px 12px 3px;
+  user-select: none;
+}
+
+.side-nav > div:first-child .side-nav-group-label {
+  padding-top: 2px;
+}
+
+.side-nav a {
+  min-height: 39px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  border-radius: 10px;
+}
+
+.side-nav-logout {
+  min-height: 39px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  border-radius: 10px;
+  margin-top: 8px;
+}
+
+.button.loyalty-compact-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  border-radius: 9px;
+  gap: 3px;
+}
+
+.loyalty-member-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.loyalty-member-meta,
+.loyalty-member-coupons {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.loyalty-member-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.loyalty-member-name-row strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }

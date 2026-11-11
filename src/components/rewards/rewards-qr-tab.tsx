@@ -124,10 +124,8 @@ export function RewardsQrTab({
       <section className="panel loyalty-section-card">
         <div className="loyalty-section-head">
           <div>
-            <h3>คิวอาร์โค้ดสะสมแต้มตามจำนวนกล่อง (1–10 กล่อง)</h3>
-            <p className="field-hint">
-              ดาวน์โหลดรูป QR Code เก็บไว้ในเครื่องหรืออัลบั้มแชท เมื่อลูกค้าซื้อกี่กล่องให้ส่งรูปตามจำนวนกล่องนั้นได้เลย
-            </p>
+            <h3>QR โค้ดสะสมแต้ม (1–10 กล่อง)</h3>
+            <p className="field-hint">บันทึกรูปเก็บไว้ส่งให้ลูกค้าสแกนตามจำนวนกล่องที่ซื้อ</p>
           </div>
         </div>
 
@@ -135,7 +133,7 @@ export function RewardsQrTab({
           {qrCards.map((item) => (
             <div key={item.points} className="loyalty-qr-card">
               <div className="loyalty-qr-card-top">
-                <span className="loyalty-qr-box-badge">ซื้อ {item.points} กล่อง</span>
+                <span className="loyalty-qr-box-badge">{item.points} กล่อง</span>
                 <span className="loyalty-qr-point-badge">+{item.points} แต้ม</span>
               </div>
 
@@ -157,7 +155,7 @@ export function RewardsQrTab({
                   onClick={() => handleDownloadQrPng(item.points, item.url)}
                 >
                   <Download size={14} />
-                  ดาวน์โหลด PNG ({item.points} กล่อง)
+                  ดาวน์โหลด PNG
                 </button>
                 <div className="loyalty-qr-sub-actions">
                   <button
@@ -174,7 +172,7 @@ export function RewardsQrTab({
                     rel="noreferrer"
                     className="button ghost"
                   >
-                    ทดสอบสแกน
+                    เปิดดู
                   </a>
                 </div>
               </div>
@@ -184,9 +182,9 @@ export function RewardsQrTab({
 
         <div className="loyalty-qr-rotate-bar">
           <div>
-            <strong>ต้องการเปลี่ยนรหัส QR Code ทั้งหมดใหม่หรือไม่?</strong>
+            <strong>รีเซ็ตรหัส QR ใหม่ทั้งหมด</strong>
             <p className="field-hint" style={{ margin: "2px 0 0" }}>
-              ใช้ในกรณีที่รูป QR เดิมหลุดออกไปภายนอก เมื่อรีเซ็ตแล้วรูป QR เดิมจะสแกนไม่ได้ แต่แต้มและคูปองของลูกค้ายังอยู่ครบ
+              ใช้กรณีรูป QR เดิมหลุด (แต้มและคูปองลูกค้ายังอยู่ครบ)
             </p>
           </div>
           {!confirmResetQr ? (
@@ -197,7 +195,7 @@ export function RewardsQrTab({
               disabled={isPending}
             >
               <RefreshCw size={15} />
-              รีเซ็ตรหัส QR ทั้งหมด
+              รีเซ็ตรหัส QR
             </button>
           ) : (
             <div className="loyalty-confirm-inline">
@@ -210,7 +208,7 @@ export function RewardsQrTab({
                 }}
                 disabled={isPending}
               >
-                ยืนยันเปลี่ยนรหัส QR ใหม่
+                ยืนยันรีเซ็ต
               </button>
               <button
                 type="button"

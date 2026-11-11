@@ -29,9 +29,8 @@ export default async function RewardsPage({
   return (
     <>
       <PageTitle
-        eyebrow="ความภักดีลูกค้า"
-        title="ระบบสะสมแต้ม"
-        description="จัดการบัตรสะสมแต้ม LINE OA คิวอาร์โค้ด 1–10 กล่อง รายชื่อลูกค้า และคูปองส่วนลด"
+        eyebrow="ระบบสมาชิก"
+        title="แต้มสะสม"
       />
 
       <LoyaltyRewardsHub

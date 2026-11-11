@@ -215,17 +215,17 @@ export function LoyaltyRewardsHub({
             <div className="loyalty-hub-badges">
               <span className={`loyalty-status-pill ${config.enabled ? "on" : "off"}`}>
                 <span className="loyalty-status-dot" />
-                {config.enabled ? "เปิดใช้งานสะสมแต้ม" : "ปิดใช้งานชั่วคราว"}
+                {config.enabled ? "เปิดใช้งาน" : "ปิดใช้งาน"}
               </span>
               <span className={`loyalty-status-pill ${isLineReady ? "line-ok" : "line-warn"}`}>
-                {isLineReady ? "เชื่อมต่อ LINE OA & LIFF แล้ว" : "รอตั้งค่าการเชื่อมต่อ LINE"}
+                {isLineReady ? "เชื่อม LINE แล้ว" : "ยังไม่เชื่อม LINE"}
               </span>
             </div>
             <h2 className="loyalty-hub-title">
               {config.cardTitle || shopName} · {config.cardHeadline}
             </h2>
             <p className="loyalty-hub-subtitle">
-              สะสมครบ {config.stampsPerReward} แต้ม รับสิทธิ์ “{config.rewardTitle}” · อายุแต้ม{" "}
+              ครบ {config.stampsPerReward} แต้ม รับ “{config.rewardTitle}” · อายุแต้ม{" "}
               {config.validityMonths} เดือน
             </p>
           </div>
@@ -237,35 +237,32 @@ export function LoyaltyRewardsHub({
               rel="noreferrer"
               className="button ghost"
             >
-              <ExternalLink size={16} />
-              ดูหน้าบัตรลูกค้า
+              <ExternalLink size={15} />
+              ดูบัตรลูกค้า
             </a>
           </div>
         </div>
 
         {/* Warning Banners if DB migration or first save is needed */}
         {!isTableReady && (
-          <div className="loyalty-admin-banner warn" style={{ marginTop: 14, marginBottom: 0 }}>
+          <div className="loyalty-admin-banner warn" style={{ marginTop: 12, marginBottom: 0 }}>
             <AlertCircle size={18} />
             <div>
-              <strong>ยังไม่ได้สร้างตารางระบบสะสมแต้มในฐานข้อมูล</strong>
+              <strong>ยังไม่ได้สร้างตารางแต้มสะสมในฐานข้อมูล</strong>
               <p>
-                กรุณานำไฟล์ <code>supabase/migrations/202611110001_line_loyalty.sql</code> และ{" "}
-                <code>supabase/migrations/202611110002_loyalty_admin_rpcs.sql</code> ไปรันใน Supabase
-                SQL Editor ก่อนเริ่มใช้งานจริง
+                รันไฟล์ <code>202611110001_line_loyalty.sql</code> และ{" "}
+                <code>202611110002_loyalty_admin_rpcs.sql</code> ใน Supabase SQL Editor ก่อนใช้งาน
               </p>
             </div>
           </div>
         )}
 
         {!persisted && (
-          <div className="loyalty-admin-banner info" style={{ marginTop: 14, marginBottom: 0 }}>
+          <div className="loyalty-admin-banner info" style={{ marginTop: 12, marginBottom: 0 }}>
             <AlertCircle size={18} />
             <div>
-              <strong>เริ่มใช้งานครั้งแรกสำหรับร้าน {shopName}</strong>
-              <p>
-                กรุณาไปที่แท็บ “ตั้งค่า” แล้วกดบันทึกการตั้งค่า 1 ครั้ง เพื่อเปิดใช้งานลิงก์บัตรสะสมแต้มและรหัส QR Code ของร้านนี้
-              </p>
+              <strong>เริ่มใช้งานร้าน {shopName}</strong>
+              <p>ไปที่แท็บ “ตั้งค่า” แล้วกดบันทึก 1 ครั้งเพื่อเปิดใช้งาน QR Code</p>
             </div>
           </div>
         )}

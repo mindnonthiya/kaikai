@@ -47,45 +47,44 @@ export function RewardsOverviewTab({
     <div className="loyalty-tab-content">
       <div className="loyalty-kpi-grid">
         <div className="panel loyalty-kpi-card">
-          <span className="loyalty-kpi-label">สมาชิกสะสมแต้มทั้งหมด</span>
+          <span className="loyalty-kpi-label">ลูกค้าทั้งหมด</span>
           <strong className="loyalty-kpi-value">{metrics.totalMembers.toLocaleString()} คน</strong>
-          <span className="loyalty-kpi-sub">ซิงก์ชื่อและรูปโปรไฟล์จาก LINE</span>
+          <span className="loyalty-kpi-sub">ซิงก์จากบัญชี LINE</span>
         </div>
 
         <div className="panel loyalty-kpi-card">
-          <span className="loyalty-kpi-label">การสแกนรับแต้มวันนี้</span>
+          <span className="loyalty-kpi-label">สแกนวันนี้</span>
           <strong className="loyalty-kpi-value">
             {metrics.scansTodayCount.toLocaleString()} ครั้ง{" "}
             <small>(+{metrics.pointsTodayCount} แต้ม)</small>
           </strong>
           <span className="loyalty-kpi-sub">
-            7 วันล่าสุด: {metrics.scans7dCount.toLocaleString()} ครั้ง (+{metrics.points7dCount.toLocaleString()} แต้ม)
+            7 วันล่าสุด {metrics.scans7dCount.toLocaleString()} ครั้ง (+{metrics.points7dCount.toLocaleString()})
           </span>
         </div>
 
         <div className="panel loyalty-kpi-card">
-          <span className="loyalty-kpi-label">คูปองส่วนลดพร้อมใช้</span>
+          <span className="loyalty-kpi-label">คูปองพร้อมใช้</span>
           <strong className="loyalty-kpi-value">{metrics.readyCouponsCount.toLocaleString()} ใบ</strong>
           <span className="loyalty-kpi-sub">
-            ใช้สิทธิ์ไปแล้วทั้งหมด {metrics.usedCouponsCount.toLocaleString()} ใบ
+            ใช้แล้ว {metrics.usedCouponsCount.toLocaleString()} ใบ
           </span>
         </div>
 
         <div className="panel loyalty-kpi-card">
-          <span className="loyalty-kpi-label">สถานะส่งแจ้งเตือน LINE OA</span>
+          <span className="loyalty-kpi-label">แจ้งเตือน LINE</span>
           <strong
             className={`loyalty-kpi-value ${metrics.failedPushCount > 0 ? "text-danger" : "text-ok"}`}
           >
             {metrics.failedPushCount > 0
-              ? `ส่งไม่สำเร็จ ${metrics.failedPushCount.toLocaleString()} รายการ`
-              : "ทำงานปกติ"}
+              ? `ค้างส่ง ${metrics.failedPushCount.toLocaleString()} รายการ`
+              : "ปกติ"}
           </strong>
           <span className="loyalty-kpi-sub">
-            โหมดแจ้งเตือน:{" "}
             {config.notifyMode === "all"
-              ? "แจ้งเตือนทุกครั้งที่สแกน"
+              ? "แจ้งทุกครั้งที่สแกน"
               : config.notifyMode === "reward_only"
-                ? "เฉพาะเมื่อครบรับคูปอง"
+                ? "เฉพาะเมื่อได้คูปอง"
                 : "ปิดการส่งข้อความ"}
           </span>
         </div>
@@ -95,10 +94,7 @@ export function RewardsOverviewTab({
       <div className="loyalty-overview-two-col">
         <section className="panel loyalty-section-card">
           <div className="loyalty-section-head">
-            <div>
-              <h3>ทางลัดการใช้งานประจำวัน</h3>
-              <p className="field-hint">กดเลือกงานที่ใช้บ่อยสำหรับหน้าร้านและแชท LINE</p>
-            </div>
+            <h3>ทางลัด</h3>
           </div>
           <div className="loyalty-quick-actions-grid">
             <button
@@ -106,10 +102,10 @@ export function RewardsOverviewTab({
               className="loyalty-quick-btn"
               onClick={() => onSelectTab("qr")}
             >
-              <QrCode size={20} />
+              <QrCode size={19} />
               <div>
-                <strong>ดาวน์โหลด QR 1–10 กล่อง</strong>
-                <small>บันทึกรูปส่งให้ลูกค้าในแชท</small>
+                <strong>QR โค้ด 1–10 กล่อง</strong>
+                <small>บันทึกรูปส่งให้ลูกค้า</small>
               </div>
             </button>
 
@@ -118,10 +114,10 @@ export function RewardsOverviewTab({
               className="loyalty-quick-btn"
               onClick={() => onSelectTab("coupons")}
             >
-              <Ticket size={20} />
+              <Ticket size={19} />
               <div>
-                <strong>ตรวจและตัดสิทธิ์รหัสคูปอง</strong>
-                <small>ค้นหารหัส #GT-XXXXXX ของลูกค้า</small>
+                <strong>ตรวจรหัสคูปอง</strong>
+                <small>ค้นหาและตัดสิทธิ์ส่วนลด</small>
               </div>
             </button>
 
@@ -130,10 +126,10 @@ export function RewardsOverviewTab({
               className="loyalty-quick-btn"
               onClick={() => onSelectTab("members")}
             >
-              <Users size={20} />
+              <Users size={19} />
               <div>
-                <strong>ดูรายชื่อและปรับแต้มลูกค้า</strong>
-                <small>ค้นหาชื่อ LINE และเพิ่ม/ลดแต้ม</small>
+                <strong>รายชื่อลูกค้า</strong>
+                <small>ดูแต้มและเพิ่ม/ลดแต้ม</small>
               </div>
             </button>
 
@@ -142,12 +138,12 @@ export function RewardsOverviewTab({
               className="loyalty-quick-btn"
               onClick={() => onCopyText("card-link", cardPreviewUrl)}
             >
-              {copiedKey === "card-link" ? <Check size={20} /> : <Copy size={20} />}
+              {copiedKey === "card-link" ? <Check size={19} /> : <Copy size={19} />}
               <div>
                 <strong>
-                  {copiedKey === "card-link" ? "คัดลอกลิงก์บัตรแล้ว" : "คัดลอกลิงก์หน้าบัตร"}
+                  {copiedKey === "card-link" ? "คัดลอกลิงก์แล้ว" : "คัดลอกลิงก์หน้าบัตร"}
                 </strong>
-                <small>สำหรับส่งให้ลูกค้าเช็กแต้ม</small>
+                <small>ส่งให้ลูกค้าเช็กแต้ม</small>
               </div>
             </button>
           </div>
@@ -155,10 +151,7 @@ export function RewardsOverviewTab({
 
         <section className="panel loyalty-section-card">
           <div className="loyalty-section-head">
-            <div>
-              <h3>สถานะการเชื่อมต่อ LINE OA</h3>
-              <p className="field-hint">ตรวจสอบความพร้อมของระบบเชื่อมต่อบัญชี LINE</p>
-            </div>
+            <h3>การเชื่อมต่อ LINE</h3>
             <button
               type="button"
               className="button ghost"
@@ -170,25 +163,25 @@ export function RewardsOverviewTab({
 
           <div className="loyalty-health-list">
             <div className="loyalty-health-row">
-              <span>LIFF ID (ซิงก์รูปและชื่อ LINE ลูกค้า)</span>
+              <span>LIFF ID</span>
               <strong className={config.liffId ? "text-ok" : "text-warn"}>
-                {config.liffId ? `เชื่อมต่อแล้ว (${config.liffId})` : "ยังไม่ได้ระบุ LIFF ID"}
+                {config.liffId ? config.liffId : "ยังไม่ระบุ"}
               </strong>
             </div>
             <div className="loyalty-health-row">
-              <span>Channel Access Token (ส่งข้อความแจ้งแต้ม)</span>
+              <span>Access Token</span>
               <strong className={hasAccessToken ? "text-ok" : "text-warn"}>
-                {hasAccessToken ? "ตั้งค่าและเข้ารหัสบนเซิร์ฟเวอร์แล้ว" : "ยังไม่ได้ระบุ Token"}
+                {hasAccessToken ? "เชื่อมต่อแล้ว" : "ยังไม่ระบุ"}
               </strong>
             </div>
             <div className="loyalty-health-row">
-              <span>LINE OA Basic ID</span>
+              <span>LINE OA</span>
               <strong>{config.botBasicId || "—"}</strong>
             </div>
             <div className="loyalty-health-row">
-              <span>การบันทึกตั้งค่าร้าน</span>
+              <span>สถานะระบบ</span>
               <strong className={persisted ? "text-ok" : "text-warn"}>
-                {persisted ? "พร้อมใช้งาน" : "รอกดบันทึกครั้งแรก"}
+                {persisted ? "พร้อมใช้งาน" : "รอกดบันทึก"}
               </strong>
             </div>
           </div>
@@ -284,10 +277,7 @@ export function RewardsOverviewTab({
       {/* Recent Activity Log Preview */}
       <section className="panel loyalty-section-card">
         <div className="loyalty-section-head">
-          <div>
-            <h3>ความเคลื่อนไหวล่าสุด</h3>
-            <p className="field-hint">รายการสแกนรับแต้มและใช้คูปองล่าสุดของลูกค้า</p>
-          </div>
+          <h3>ความเคลื่อนไหวล่าสุด</h3>
           <button
             type="button"
             className="button ghost"
@@ -296,12 +286,12 @@ export function RewardsOverviewTab({
               onSelectCouponSubTab("logs");
             }}
           >
-            ดูประวัติทั้งหมด
+            ดูทั้งหมด
           </button>
         </div>
 
         {recentLogs.length === 0 ? (
-          <div className="loyalty-empty-box">ยังไม่มีประวัติการสแกนสะสมแต้มในร้านนี้</div>
+          <div className="loyalty-empty-box">ยังไม่มีประวัติการสะสมแต้ม</div>
         ) : (
           <div className="loyalty-clean-list">
             {recentLogs.slice(0, 6).map((log) => (

@@ -139,6 +139,15 @@ function sanitizePostgrestSearch(raw: string): string {
   return raw.replace(/[,()*%\\]/g, " ").trim();
 }
 
+// Cache whether migration 0002 RPCs exist so we don't waste a failed RPC round-trip on every request
+let adminRpcsMissingUntilMs = 0;
+function shouldTryAdminRpcs(): boolean {
+  return Date.now() >= adminRpcsMissingUntilMs;
+}
+function markAdminRpcsMissing(): void {
+  adminRpcsMissingUntilMs = Date.now() + 60_000;
+}
+
 async function fetchMemberProfilesByIds(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   ownerId: string,
@@ -232,7 +241,7 @@ async function queryMembersPageWithClient(
   const selectCols: string =
     filter === "has_coupon"
       ? "id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at,loyalty_coupons!inner(status)"
-      : "id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at";
+      : "id,line_user_id,display_name,picture_url,stamps,lifetime_stamps,expires_at,last_stamped_at,loyalty_coupons(status)";
 
   let dbQuery = supabase
     .from("loyalty_members")
@@ -269,7 +278,24 @@ async function queryMembersPageWithClient(
   const unclaimedByMember = new Map<string, number>();
   const claimedByMember = new Map<string, number>();
 
-  if (pageMemberIds.length > 0) {
+  const hasEmbeddedCoupons =
+    filter !== "has_coupon" &&
+    rowsList.every((r) => Array.isArray(r.loyalty_coupons));
+
+  if (hasEmbeddedCoupons) {
+    for (const row of rowsList) {
+      const mId = String(row.id ?? "");
+      if (!mId) continue;
+      const embedded = (row.loyalty_coupons ?? []) as Array<Record<string, unknown>>;
+      for (const c of embedded) {
+        if (c.status === "claimed") {
+          claimedByMember.set(mId, (claimedByMember.get(mId) ?? 0) + 1);
+        } else {
+          unclaimedByMember.set(mId, (unclaimedByMember.get(mId) ?? 0) + 1);
+        }
+      }
+    }
+  } else if (pageMemberIds.length > 0) {
     const { data: memberCoupons } = await supabase
       .from("loyalty_coupons")
       .select("member_id,status")
@@ -332,35 +358,39 @@ async function queryCouponsPageWithClient(
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_coupons", {
-    p_shop_scope_id: shopId,
-    p_status: status,
-    p_query: cleanSearch,
-    p_limit: pageSize,
-    p_offset: from,
-  });
+  if (shouldTryAdminRpcs()) {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_coupons", {
+      p_shop_scope_id: shopId,
+      p_status: status,
+      p_query: cleanSearch,
+      p_limit: pageSize,
+      p_offset: from,
+    });
 
-  if (!rpcErr && rpcData && typeof rpcData === "object") {
-    const payload = rpcData as Record<string, unknown>;
-    if (payload.ok) {
-      const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
-      return {
-        items: rpcItems.map((row) => ({
-          id: String(row.id ?? ""),
-          memberId: String(row.memberId ?? ""),
-          lineUserId: String(row.lineUserId ?? ""),
-          code: String(row.code ?? ""),
-          title: String(row.title ?? rewardTitleFallback),
-          status: row.status === "claimed" ? "claimed" : "unclaimed",
-          issuedAt: String(row.issuedAt ?? new Date().toISOString()),
-          claimedAt: row.claimedAt ? String(row.claimedAt) : null,
-          displayName: String(row.displayName ?? "ลูกค้า LINE"),
-          pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
-        })),
-        total: Math.max(0, Number(payload.total ?? 0)),
-        page,
-        pageSize,
-      };
+    if (rpcErr && isMissingRpcError(rpcErr)) {
+      markAdminRpcsMissing();
+    } else if (!rpcErr && rpcData && typeof rpcData === "object") {
+      const payload = rpcData as Record<string, unknown>;
+      if (payload.ok) {
+        const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
+        return {
+          items: rpcItems.map((row) => ({
+            id: String(row.id ?? ""),
+            memberId: String(row.memberId ?? ""),
+            lineUserId: String(row.lineUserId ?? ""),
+            code: String(row.code ?? ""),
+            title: String(row.title ?? rewardTitleFallback),
+            status: row.status === "claimed" ? "claimed" : "unclaimed",
+            issuedAt: String(row.issuedAt ?? new Date().toISOString()),
+            claimedAt: row.claimedAt ? String(row.claimedAt) : null,
+            displayName: String(row.displayName ?? "ลูกค้า LINE"),
+            pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
+          })),
+          total: Math.max(0, Number(payload.total ?? 0)),
+          page,
+          pageSize,
+        };
+      }
     }
   }
 
@@ -455,34 +485,38 @@ async function queryLogsPageWithClient(
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_logs", {
-    p_shop_scope_id: shopId,
-    p_query: cleanSearch,
-    p_limit: pageSize,
-    p_offset: from,
-  });
+  if (shouldTryAdminRpcs()) {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc("admin_query_loyalty_logs", {
+      p_shop_scope_id: shopId,
+      p_query: cleanSearch,
+      p_limit: pageSize,
+      p_offset: from,
+    });
 
-  if (!rpcErr && rpcData && typeof rpcData === "object") {
-    const payload = rpcData as Record<string, unknown>;
-    if (payload.ok) {
-      const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
-      return {
-        items: rpcItems.map((row) => ({
-          id: String(row.id ?? ""),
-          memberId: String(row.memberId ?? ""),
-          lineUserId: String(row.lineUserId ?? ""),
-          displayName: String(row.displayName ?? "ลูกค้า LINE"),
-          pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
-          action: String(row.action ?? "qr_claim"),
-          pointsDelta: Number(row.pointsDelta ?? 0),
-          balanceAfter: Number(row.balanceAfter ?? 0),
-          note: row.note ? String(row.note) : null,
-          createdAt: String(row.createdAt ?? new Date().toISOString()),
-        })),
-        total: Math.max(0, Number(payload.total ?? 0)),
-        page,
-        pageSize,
-      };
+    if (rpcErr && isMissingRpcError(rpcErr)) {
+      markAdminRpcsMissing();
+    } else if (!rpcErr && rpcData && typeof rpcData === "object") {
+      const payload = rpcData as Record<string, unknown>;
+      if (payload.ok) {
+        const rpcItems = Array.isArray(payload.items) ? (payload.items as Array<Record<string, unknown>>) : [];
+        return {
+          items: rpcItems.map((row) => ({
+            id: String(row.id ?? ""),
+            memberId: String(row.memberId ?? ""),
+            lineUserId: String(row.lineUserId ?? ""),
+            displayName: String(row.displayName ?? "ลูกค้า LINE"),
+            pictureUrl: row.pictureUrl ? String(row.pictureUrl) : null,
+            action: String(row.action ?? "qr_claim"),
+            pointsDelta: Number(row.pointsDelta ?? 0),
+            balanceAfter: Number(row.balanceAfter ?? 0),
+            note: row.note ? String(row.note) : null,
+            createdAt: String(row.createdAt ?? new Date().toISOString()),
+          })),
+          total: Math.max(0, Number(payload.total ?? 0)),
+          page,
+          pageSize,
+        };
+      }
     }
   }
 
@@ -719,6 +753,12 @@ export async function fetchLoyaltyAdminData(
     };
   }
 
+  const snapshotCacheKey = `${user.id}:loyalty_admin_snapshot:${shopId}`;
+  const cachedSnapshot = getCached<LoyaltyAdminSnapshot>(snapshotCacheKey);
+  if (cachedSnapshot) {
+    return cachedSnapshot;
+  }
+
   const settingKey = scopedSettingsKey(LOYALTY_SETTINGS_KEY, shopId);
   const { data: settingRow } = await supabase
     .from("settings")
@@ -772,19 +812,21 @@ export async function fetchLoyaltyAdminData(
   const sevenDaysAgoMs = todayStartMs - 6 * 24 * 60 * 60 * 1000;
   const sevenDaysAgoIso = new Date(sevenDaysAgoMs).toISOString();
 
-  // 1. Try single-query database aggregate RPC (`get_loyalty_admin_overview_stats`) alongside tab-specific data
+  // Fetch overview stats + first page of members, coupons, and logs in parallel so all tabs switch instantly
   const [
-    { data: overviewRpcData, error: overviewRpcErr },
+    overviewRpcResult,
     { data: pushRows },
     overviewLogsRes,
     initialMembersRes,
     initialCouponsRes,
   ] = await Promise.all([
-    supabase.rpc("get_loyalty_admin_overview_stats", {
-      p_shop_scope_id: shopId,
-      p_today_start: todayStartIso,
-      p_seven_days_ago: sevenDaysAgoIso,
-    }),
+    shouldTryAdminRpcs()
+      ? supabase.rpc("get_loyalty_admin_overview_stats", {
+          p_shop_scope_id: shopId,
+          p_today_start: todayStartIso,
+          p_seven_days_ago: sevenDaysAgoIso,
+        })
+      : Promise.resolve({ data: null, error: { code: "PGRST202", message: "skipped" } }),
     supabase
       .from("loyalty_push_queue")
       .select("id,member_id,line_user_id,event_type,status,attempts,last_error,created_at,sent_at")
@@ -794,23 +836,24 @@ export async function fetchLoyaltyAdminData(
       .limit(15),
     queryLogsPageWithClient(supabase, user.id, shopId, {
       page: 1,
-      pageSize: initialTab === "coupons" ? LOYALTY_ADMIN_PAGE_SIZE : 8,
+      pageSize: LOYALTY_ADMIN_PAGE_SIZE,
     }),
-    initialTab === "members"
-      ? queryMembersPageWithClient(supabase, user.id, shopId, {
-          page: 1,
-          pageSize: LOYALTY_ADMIN_PAGE_SIZE,
-          stampsPerReward: config.stampsPerReward,
-        })
-      : Promise.resolve({ items: [] as LoyaltyMemberSummary[], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE }),
-    initialTab === "coupons"
-      ? queryCouponsPageWithClient(supabase, user.id, shopId, config.rewardTitle, {
-          status: "unclaimed",
-          page: 1,
-          pageSize: LOYALTY_ADMIN_PAGE_SIZE,
-        })
-      : Promise.resolve({ items: [] as LoyaltyAdminCouponItem[], total: 0, page: 1, pageSize: LOYALTY_ADMIN_PAGE_SIZE }),
+    queryMembersPageWithClient(supabase, user.id, shopId, {
+      page: 1,
+      pageSize: LOYALTY_ADMIN_PAGE_SIZE,
+      stampsPerReward: config.stampsPerReward,
+    }),
+    queryCouponsPageWithClient(supabase, user.id, shopId, config.rewardTitle, {
+      status: "unclaimed",
+      page: 1,
+      pageSize: LOYALTY_ADMIN_PAGE_SIZE,
+    }),
   ]);
+
+  const { data: overviewRpcData, error: overviewRpcErr } = overviewRpcResult;
+  if (overviewRpcErr && isMissingRpcError(overviewRpcErr)) {
+    markAdminRpcsMissing();
+  }
 
   let exactTotalMembers = 0;
   let exactReadyCoupons = 0;
@@ -971,7 +1014,7 @@ export async function fetchLoyaltyAdminData(
     });
   }
 
-  return {
+  const snapshot: LoyaltyAdminSnapshot = {
     config,
     persisted,
     isTableReady: true,
@@ -990,11 +1033,13 @@ export async function fetchLoyaltyAdminData(
       failedPushCount: exactFailedPush,
       pendingPushCount: exactPendingPush,
     },
-    membersTotal: initialTab === "members" ? initialMembersRes.total : exactTotalMembers,
-    couponsTotal: initialTab === "coupons" ? initialCouponsRes.total : exactReadyCoupons,
+    membersTotal: initialMembersRes.total || exactTotalMembers,
+    couponsTotal: initialCouponsRes.total || exactReadyCoupons,
     logsTotal: overviewLogsRes.total,
-    loadedTabs: [initialTab],
+    loadedTabs: ["overview", "qr", "members", "coupons", "settings"],
   };
+
+  return setCached(snapshotCacheKey, snapshot, 15_000);
 }
 
 export async function queryLoyaltyMembersPageAction(input: {
