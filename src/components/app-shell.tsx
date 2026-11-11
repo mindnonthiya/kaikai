@@ -12,7 +12,6 @@ import {
   getAvatarRemovedKey,
   getAvatarStorageKey,
 } from "./profile-avatar-field";
-import { PwaDrawerInstallButton } from "./pwa-install";
 import { DEFAULT_UNIT_LABEL, UNIT_LABEL_OPTIONS } from "@/lib/data/types";
 import { hasSupabaseEnv } from "@/lib/env";
 import { DEFAULT_SHOP_ID, resolveInventoryShopId, type ShopSummary } from "@/lib/shop-scope";
@@ -263,18 +262,25 @@ export function AppShell({
 
         <div className="mobile-drawer-label mobile-only">เมนูเพิ่มเติม</div>
         <nav className="side-nav" aria-label="เมนูหลัก">
-          {navItems.map(({ href, label, icon: Icon, inBottomBar }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setOpen(false)}
-              className={`${active(href) ? "active" : ""} ${inBottomBar ? "hide-in-mobile-drawer" : ""}`}
-            >
-              <Icon size={20} strokeWidth={2} />
-              <span>{label}</span>
-            </Link>
-          ))}
-          <PwaDrawerInstallButton onNavigate={() => setOpen(false)} />
+          {navItems.map(({ href, label, icon: Icon, inBottomBar, group }, idx) => {
+            const prevGroup = idx > 0 ? navItems[idx - 1]?.group : null;
+            const showGroupHeader = Boolean(group && group !== prevGroup);
+            return (
+              <div key={href} className={inBottomBar ? "hide-in-mobile-drawer" : ""}>
+                {showGroupHeader && (
+                  <div className="side-nav-group-label desktop-only">{group}</div>
+                )}
+                <Link
+                  href={href}
+                  onClick={() => setOpen(false)}
+                  className={active(href) ? "active" : ""}
+                >
+                  <Icon size={19} strokeWidth={2} />
+                  <span>{label}</span>
+                </Link>
+              </div>
+            );
+          })}
           <button
             type="button"
             className="side-nav-logout"
@@ -282,7 +288,7 @@ export function AppShell({
             disabled={loggingOut}
             aria-label="ออกจากระบบ"
           >
-            <LogOut size={20} strokeWidth={2} />
+            <LogOut size={19} strokeWidth={2} />
             <span>{loggingOut ? "กำลังออกจากระบบ…" : "ออกจากระบบ"}</span>
           </button>
         </nav>

@@ -47,18 +47,13 @@ export function RewardsSettingsTab({
     <div className="loyalty-tab-content">
       <section className="panel loyalty-section-card">
         <div className="loyalty-section-head">
-          <div>
-            <h3>ตั้งค่ากติกาบัตรสะสมแต้มและการเชื่อมต่อ LINE</h3>
-            <p className="field-hint">
-              กำหนดเงื่อนไขการสะสมแต้ม การแจ้งเตือน และการผูกบัญชี LINE OA ของร้าน {shopName}
-            </p>
-          </div>
+          <h3>ตั้งค่าแต้มสะสม ({shopName})</h3>
         </div>
 
         <ActionForm
           action={saveLoyaltyConfigAction}
-          submitLabel="บันทึกการตั้งค่าระบบสะสมแต้ม"
-          pendingLabel="กำลังบันทึกการตั้งค่า…"
+          submitLabel="บันทึกการตั้งค่า"
+          pendingLabel="กำลังบันทึก…"
           className="settings-form"
           resetOnSuccess={false}
         >
@@ -87,16 +82,16 @@ export function RewardsSettingsTab({
               defaultChecked={config.enabled}
             />
             <div>
-              <strong>เปิดใช้งานระบบบัตรสะสมแต้มสำหรับร้านนี้</strong>
-              <small className="muted-hint" style={{ display: "block", marginTop: "3px" }}>
-                เมื่อเปิดใช้งาน ลูกค้าสามารถสแกน QR Code เพื่อสะสมแต้มและกดใช้คูปองส่วนลดได้
+              <strong>เปิดใช้งานระบบสะสมแต้มสำหรับร้านนี้</strong>
+              <small className="muted-hint" style={{ display: "block", marginTop: "2px" }}>
+                ลูกค้าสแกน QR Code เพื่อสะสมแต้มและใช้คูปองส่วนลดได้ทันที
               </small>
             </div>
           </label>
 
           <div className="loyalty-admin-form-grid">
             <label>
-              ชื่อร้าน / ชื่อบนหัวบัตร
+              ชื่อบนบัตร
               <input
                 name="card_title"
                 defaultValue={config.cardTitle}
@@ -106,7 +101,7 @@ export function RewardsSettingsTab({
               />
             </label>
             <label>
-              ข้อความโปรโมชั่นหลักบนบัตร
+              ข้อความโปรโมชั่น
               <input
                 name="card_headline"
                 defaultValue={config.cardHeadline}
@@ -116,7 +111,7 @@ export function RewardsSettingsTab({
               />
             </label>
             <label>
-              ชื่อรางวัลเมื่อสะสมครบ
+              รางวัลเมื่อสะสมครบ
               <input
                 name="reward_title"
                 defaultValue={config.rewardTitle}
@@ -126,7 +121,7 @@ export function RewardsSettingsTab({
               />
             </label>
             <label>
-              จำนวนแต้มที่ต้องสะสมต่อ 1 รางวัล
+              แต้มต่อ 1 รางวัล
               <input
                 name="stamps_per_reward"
                 type="number"
@@ -137,7 +132,7 @@ export function RewardsSettingsTab({
               />
             </label>
             <label>
-              อายุแต้มสะสม (เดือน นับจากสแกนครั้งล่าสุด)
+              อายุแต้ม (เดือน)
               <input
                 name="validity_months"
                 type="number"
@@ -148,7 +143,7 @@ export function RewardsSettingsTab({
               />
             </label>
             <label>
-              ระยะห่างขั้นต่ำในการสแกนซ้ำของคนเดิม (นาที)
+              สแกนซ้ำขั้นต่ำ (นาที)
               <input
                 name="cooldown_minutes"
                 type="number"
@@ -161,25 +156,25 @@ export function RewardsSettingsTab({
           </div>
 
           <label>
-            โหมดการส่งข้อความแจ้งเตือนเข้าแชท LINE (ช่วยควบคุมโควตารายเดือน)
+            การแจ้งเตือนเข้าแชท LINE
             <select name="notify_mode" defaultValue={config.notifyMode || "all"}>
               <option value="all">
-                ส่งแจ้งเตือนทุกครั้งที่สแกนรับแต้ม และเมื่อใช้คูปอง
+                แจ้งเตือนทุกครั้งที่สแกน และเมื่อใช้คูปอง
               </option>
               <option value="reward_only">
-                ประหยัดโควตา: ส่งแจ้งเตือนเฉพาะเมื่อสะสมครบรับคูปองใหม่ และเมื่อใช้คูปอง
+                เฉพาะเมื่อได้คูปองใหม่ และเมื่อใช้คูปอง (ประหยัดโควตา)
               </option>
               <option value="off">
-                ปิดการส่งข้อความ Push (ลูกค้าดูแต้มและคูปองบนหน้าบัตรได้ตามปกติ)
+                ปิดการส่งข้อความแจ้งเตือน
               </option>
             </select>
           </label>
 
           <label>
-            เงื่อนไขและกติกาที่แสดงบนหน้าบัตร (ขึ้นบรรทัดใหม่เพื่อแยกข้อ)
+            เงื่อนไขบนหน้าบัตร
             <textarea
               name="rules_text"
-              rows={5}
+              rows={4}
               defaultValue={config.rulesText}
               placeholder="ระบุกติกาการสะสมแต้มและการใช้คูปอง..."
             />
@@ -189,9 +184,9 @@ export function RewardsSettingsTab({
           <div className="loyalty-line-config-box">
             <div className="loyalty-line-config-head">
               <div>
-                <strong>การเชื่อมต่อ LINE OA และ LIFF (ขั้นสูง)</strong>
+                <strong>เชื่อมต่อ LINE OA & LIFF</strong>
                 <span className="field-hint" style={{ display: "block", marginTop: 2 }}>
-                  ใช้สำหรับดึงรูปโปรไฟล์ + ชื่อ LINE จริงของลูกค้า และส่งข้อความแจ้งเตือนเข้าแชทอัตโนมัติ
+                  ซิงก์ชื่อ/รูป LINE ลูกค้า และส่งแจ้งเตือนแต้มเข้าแชท
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -201,14 +196,14 @@ export function RewardsSettingsTab({
                   onClick={() => onTestLineConnection(accessTokenDraft)}
                   disabled={isPending}
                 >
-                  ทดสอบการเชื่อมต่อ LINE
+                  ทดสอบเชื่อมต่อ
                 </button>
                 <button
                   type="button"
                   className="button ghost"
                   onClick={() => setShowAdvancedLine((prev) => !prev)}
                 >
-                  {showAdvancedLine ? "ซ่อนค่าเชื่อมต่อ" : "เปิดดู / แก้ไขค่าเชื่อมต่อ"}
+                  {showAdvancedLine ? "ซ่อน" : "ตั้งค่า LINE"}
                   <ChevronDown
                     size={15}
                     style={{
@@ -224,7 +219,7 @@ export function RewardsSettingsTab({
               <div className="loyalty-advanced-body">
                 <div className="loyalty-admin-form-grid">
                   <label>
-                    LIFF ID (สำหรับซิงก์รูปโปรไฟล์และชื่อ LINE ของลูกค้า)
+                    LIFF ID
                     <input
                       name="liff_id"
                       value={liffIdDraft}

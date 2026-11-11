@@ -59,6 +59,22 @@ export function RewardsCouponsTab({
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
   const skipInitialUnclaimedFetchRef = useRef(initiallyLoadedCoupons);
+  const skipInitialLogsFetchRef = useRef(initiallyLoadedCoupons);
+  const prevRefreshVersionRef = useRef(refreshVersion);
+
+  useEffect(() => {
+    if (subTab === "unclaimed" && couponPage === 1) {
+      setCoupons(initialCoupons);
+      setCouponsTotal(metrics.readyCouponsCount);
+    }
+  }, [initialCoupons, metrics.readyCouponsCount, subTab, couponPage]);
+
+  useEffect(() => {
+    if (logPage === 1) {
+      setLogs(initialLogs);
+      setLogsTotal(initialLogsTotal);
+    }
+  }, [initialLogs, initialLogsTotal, logPage]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -137,12 +153,15 @@ export function RewardsCouponsTab({
   );
 
   useEffect(() => {
+    const refreshChanged = refreshVersion !== prevRefreshVersionRef.current;
+    prevRefreshVersionRef.current = refreshVersion;
+
     if (subTab === "unclaimed" || subTab === "claimed") {
       if (
         skipInitialUnclaimedFetchRef.current &&
         subTab === "unclaimed" &&
         couponPage === 1 &&
-        refreshVersion === 0
+        !refreshChanged
       ) {
         skipInitialUnclaimedFetchRef.current = false;
         return;
@@ -150,6 +169,15 @@ export function RewardsCouponsTab({
       skipInitialUnclaimedFetchRef.current = false;
       void loadCouponsPage(subTab, couponPage);
     } else if (subTab === "logs") {
+      if (
+        skipInitialLogsFetchRef.current &&
+        logPage === 1 &&
+        !refreshChanged
+      ) {
+        skipInitialLogsFetchRef.current = false;
+        return;
+      }
+      skipInitialLogsFetchRef.current = false;
       void loadLogsPage(logPage);
     }
   }, [subTab, couponPage, logPage, refreshVersion, loadCouponsPage, loadLogsPage]);
@@ -165,12 +193,7 @@ export function RewardsCouponsTab({
       {/* Instant Verify / Redeem Box */}
       <section className="panel loyalty-section-card loyalty-coupon-verify-panel">
         <div className="loyalty-section-head">
-          <div>
-            <h3>ตรวจสอบและยืนยันการใช้คูปองส่วนลด</h3>
-            <p className="field-hint">
-              กรอกรหัสคูปอง (เช่น <code>GT-XXXXXX</code>) หรือชื่อ LINE ลูกค้า เพื่อค้นหาจากฐานข้อมูลทั้งหมดและกดยืนยันตัดสิทธิ์
-            </p>
-          </div>
+          <h3>ตรวจและตัดสิทธิ์คูปอง</h3>
         </div>
 
         <form
@@ -187,7 +210,7 @@ export function RewardsCouponsTab({
             <Ticket size={17} className="loyalty-search-icon" />
             <input
               type="text"
-              placeholder="กรอกรหัสคูปอง เช่น GT-8F4K2A หรือพิมพ์ชื่อลูกค้า..."
+              placeholder="กรอกรหัสคูปอง เช่น GT-8F4K2A หรือชื่อลูกค้า..."
               value={couponCodeInput}
               onChange={(e) => setCouponCodeInput(e.target.value)}
             />
@@ -198,7 +221,7 @@ export function RewardsCouponsTab({
             disabled={isPending || couponCodeInput.trim().length < 4}
           >
             <CheckCircle2 size={16} />
-            ตรวจสอบ / ตัดสิทธิ์คูปอง
+            ตัดสิทธิ์คูปอง
           </button>
         </form>
 
@@ -273,7 +296,7 @@ export function RewardsCouponsTab({
                 setCouponPage(1);
               }}
             >
-              คูปองพร้อมใช้ ({metrics.readyCouponsCount.toLocaleString()})
+              พร้อมใช้ ({metrics.readyCouponsCount.toLocaleString()})
             </button>
             <button
               type="button"
@@ -283,7 +306,7 @@ export function RewardsCouponsTab({
                 setCouponPage(1);
               }}
             >
-              ใช้สิทธิ์แล้ว ({metrics.usedCouponsCount.toLocaleString()})
+              ใช้แล้ว ({metrics.usedCouponsCount.toLocaleString()})
             </button>
             <button
               type="button"
@@ -293,7 +316,7 @@ export function RewardsCouponsTab({
                 setLogPage(1);
               }}
             >
-              ประวัติการรับแต้มและคูปอง ({logsTotal.toLocaleString()})
+              ประวัติแต้ม ({logsTotal.toLocaleString()})
             </button>
           </div>
 
