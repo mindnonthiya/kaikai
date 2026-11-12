@@ -7,6 +7,7 @@ import {
   verifyLineLiffAccessToken,
 } from "@/lib/line-messaging";
 import {
+  DEFAULT_LOYALTY_CARD_TITLE,
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
   formatThaiDateTime,
@@ -50,14 +51,14 @@ export async function POST(request: Request) {
       const nowIso = new Date().toISOString();
       const claimedAtText = formatThaiDateTime(nowIso);
       const flexMessage = buildCouponRedeemFlexMessage({
-        cardTitle: "GaiTomNamPla 🐔",
+        cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         couponCode: "GT-DEMO01",
         displayName: clientDisplayName,
         claimedAtText,
       });
       const plainText = buildCouponRedeemPlainText({
-        cardTitle: "GaiTomNamPla 🐔",
+        cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         couponCode: "GT-DEMO01",
         displayName: clientDisplayName,
@@ -143,7 +144,7 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status: 404 });
     }
 
-    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔");
+    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE);
     const rewardTitle = String(result.title ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
     const couponCode = String(result.code ?? "GT-COUPON");
     const claimedAt = String(result.claimedAt ?? new Date().toISOString());

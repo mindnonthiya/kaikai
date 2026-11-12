@@ -4502,7 +4502,7 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 
 /* ============================================================
    LINE OA Stamp Card Customer Page (/loyalty)
-   Matches GaiTomNamPla 🐔 LINE Stamp Card UI
+   Customer Loyalty Stamp Card UI (Rich Menu Theme)
    ============================================================ */
 
 .line-stamp-shell {
@@ -5566,38 +5566,48 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
    Clean, calm UI + LINE Profile Avatar integration
    ============================================================ */
 
-/* 1. Customer Card (/loyalty) Top Scan Banner & Compact Hero */
+/* 1. Customer Card (/loyalty) Rich Menu Theme & Calm UI */
+.line-stamp-shell {
+  background: #F6F0E0;
+  color: #2E231E;
+}
+
+.line-stamp-container {
+  background: #FFFDF7;
+  box-shadow: 0 10px 36px rgba(46, 35, 30, 0.08);
+}
+
 .line-stamp-top-banner {
-  margin: 12px 14px 10px;
-  padding: 13px 15px;
-  border-radius: 12px;
+  margin: 12px 16px 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
   font-size: 13.5px;
   line-height: 1.45;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 14px rgba(46, 35, 30, 0.06);
 }
 
 .line-stamp-top-banner.info {
-  background: #eff6ff;
-  border: 1.5px solid #93c5fd;
-  color: #1e3a8a;
+  background: #EFF8FF;
+  border: 1.5px solid #7DD3FC;
+  color: #0C4A6E;
 }
 
 .line-stamp-top-banner.success {
-  background: #ecfdf5;
-  border: 1.5px solid #34d399;
-  color: #065f46;
+  background: #ECFDF5;
+  border: 1.5px solid #34D399;
+  color: #065F46;
 }
 
 .line-stamp-top-banner.warning {
-  background: #fffbeb;
-  border: 1.5px solid #fbbf24;
-  color: #92400e;
+  background: #FFFBEB;
+  border: 1.5px solid #FBBF24;
+  color: #92400E;
 }
 
 .line-stamp-top-banner.error {
-  background: #fef2f2;
-  border: 1.5px solid #f87171;
-  color: #991b1b;
+  background: #FEF2F2;
+  border: 1.5px solid #F87171;
+  color: #991B1B;
 }
 
 .line-stamp-top-banner p {
@@ -5605,39 +5615,64 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   font-size: 13px;
 }
 
+.line-stamp-alert-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .line-stamp-hero {
-  height: 132px;
+  height: 128px;
+  background: #FA5B5A;
+  border-bottom: 2.5px solid #2E231E;
 }
 
 .line-stamp-hero-img {
-  height: 132px;
+  height: 128px;
 }
 
 .line-stamp-card-wrap {
-  margin-top: -42px;
+  margin-top: -38px;
   padding: 0 16px;
+}
+
+.line-stamp-card {
+  background: #FCE254;
+  border: 2.5px solid #2E231E;
+  border-radius: 20px;
+  padding: 0 16px 16px;
+  color: #2E231E;
+  text-align: center;
+  box-shadow: 0 5px 0 #2E231E, 0 12px 26px rgba(46, 35, 30, 0.12);
 }
 
 .line-stamp-avatar-ring {
   width: 68px;
   height: 68px;
-  transform: translateY(-32px);
-  margin-bottom: -20px;
-  border: 2.5px solid #ffffff;
+  transform: translateY(-34px);
+  margin-bottom: -22px;
+  border: 2.5px solid #2E231E;
+  background: #FFFDF7;
+  box-shadow: 0 3px 0 #2E231E;
 }
 
 .line-stamp-title {
-  font-size: 19.5px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #2E231E;
 }
 
-.line-stamp-valid {
-  margin-top: 3px;
-  font-size: 12.5px;
-}
-
-.line-stamp-headline {
-  margin-top: 6px;
-  font-size: 15px;
+.line-stamp-headline-pill {
+  display: inline-block;
+  margin-top: 8px;
+  background: #FFFFFF;
+  color: #2E231E;
+  border: 2px solid #2E231E;
+  border-radius: 999px;
+  padding: 4px 16px;
+  font-size: 13.5px;
+  font-weight: 800;
+  box-shadow: 0 2px 0 #2E231E;
 }
 
 /* Customer LINE Profile Bar on Stamp Card */
@@ -5645,14 +5680,36 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   margin-top: 10px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.2);
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  background: rgba(255, 253, 247, 0.86);
+  border: 1.5px solid rgba(46, 35, 30, 0.22);
   padding: 4px 12px 4px 5px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 700;
-  color: #ffffff;
+  color: #2E231E;
   max-width: 100%;
+}
+
+.line-stamp-valid-inline {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #6B574C;
+  padding-left: 7px;
+  border-left: 1px solid rgba(46, 35, 30, 0.2);
+}
+
+.line-stamp-edit-name-btn {
+  border: 1px solid rgba(46, 35, 30, 0.25);
+  background: #FFFFFF;
+  color: #2E231E;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
 }
 
 .line-customer-avatar {
@@ -5661,8 +5718,8 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   display: inline-grid;
   place-items: center;
   flex-shrink: 0;
-  background: #ffffff;
-  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  background: #FFFFFF;
+  border: 1.5px solid #2E231E;
 }
 
 .line-customer-avatar-img {
@@ -5678,7 +5735,7 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   display: grid;
   place-items: center;
   background: #06C755;
-  color: #ffffff;
+  color: #FFFFFF;
   font-weight: 800;
 }
 
@@ -5686,12 +5743,12 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 190px;
+  max-width: 150px;
 }
 
 .line-stamp-line-pill {
   background: #06C755;
-  color: #ffffff;
+  color: #FFFFFF;
   font-size: 10px;
   font-weight: 800;
   padding: 2px 6px;
@@ -5700,12 +5757,106 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   line-height: 1.1;
 }
 
+.line-stamp-board {
+  margin-top: 14px;
+  background: #FFFDF7;
+  border: 2px solid #2E231E;
+  border-radius: 16px;
+  padding: 12px 12px 15px;
+}
+
+.line-stamp-progress-row {
+  margin-top: 0;
+  padding: 2px 2px 10px;
+  border-bottom: 1px solid #EFE6CE;
+  color: #2E231E;
+}
+
+.line-stamp-reward-badge {
+  background: #5BC0F8;
+  color: #2E231E;
+  border: 1.5px solid #2E231E;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.line-stamp-progress-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2E231E;
+}
+
+.line-stamp-progress-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.line-stamp-remaining-pill {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6B574C;
+}
+
+.line-stamp-chevron {
+  color: #6B574C;
+  display: inline-flex;
+  align-items: center;
+}
+
+.line-stamp-grid {
+  margin-top: 14px;
+  gap: 12px 8px;
+}
+
+.line-stamp-slot {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.line-stamp-slot.empty {
+  background: #F6EFE0;
+  border: 1.5px dashed #CBBBA0;
+  color: #8C7A6B;
+}
+
+.line-stamp-slot.empty.final {
+  background: #E0F4FE;
+  border: 2px dashed #0284C7;
+  color: #0284C7;
+}
+
+.line-stamp-slot.filled {
+  background: #FA5B5A;
+  border: 2px solid #2E231E;
+  color: #FFFFFF;
+  box-shadow: 0 2px 0 #2E231E;
+}
+
+.line-stamp-slot.filled.final {
+  background: #10B981;
+  border: 2px solid #2E231E;
+  color: #FFFFFF;
+  box-shadow: 0 2px 0 #2E231E;
+}
+
+.line-stamp-slot-num {
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+}
+
 .line-stamp-auth-box {
   margin-top: 14px;
   padding: 16px;
   border-radius: 14px;
-  background: rgba(0, 0, 0, 0.22);
-  color: #ffffff;
+  background: #FFFDF7;
+  border: 2px solid #2E231E;
+  color: #2E231E;
   text-align: center;
 }
 
@@ -5717,14 +5868,14 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 
 .line-stamp-auth-box p {
   font-size: 13px;
-  opacity: 0.92;
+  color: #6B574C;
   margin: 0 0 12px;
 }
 
 .line-stamp-auth-btn {
   background: #06C755;
-  color: #ffffff;
-  border: 0;
+  color: #FFFFFF;
+  border: 2px solid #2E231E;
   border-radius: 999px;
   padding: 10px 20px;
   font-size: 13.5px;
@@ -5736,21 +5887,23 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .line-stamp-loading-box {
   margin-top: 14px;
   padding: 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  border-radius: 14px;
+  background: #FFFDF7;
+  border: 2px solid #2E231E;
+  color: #2E231E;
   text-align: center;
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* Ready-to-use Coupon Callout Bar below Card */
 .line-ready-coupon-callout {
-  margin: 14px 16px 0;
+  margin: 16px 16px 0;
   padding: 12px 14px;
-  border-radius: 12px;
-  background: #ecfdf5;
-  border: 1.5px solid #1FC879;
+  border-radius: 16px;
+  background: #ECFDF5;
+  border: 2px solid #2E231E;
+  box-shadow: 0 3px 0 #2E231E;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5767,7 +5920,7 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .line-ready-coupon-callout-info strong {
   font-size: 13.5px;
   font-weight: 800;
-  color: #065f46;
+  color: #065F46;
 }
 
 .line-ready-coupon-callout-info span {
@@ -5776,9 +5929,10 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 
 .line-ready-coupon-callout-btn {
-  background: #059669;
-  color: #ffffff;
-  border: 0;
+  background: #10B981;
+  color: #FFFFFF;
+  border: 1.5px solid #2E231E;
+  box-shadow: 0 2px 0 #2E231E;
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 12.5px;
@@ -5788,7 +5942,114 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   flex-shrink: 0;
 }
 
+/* Tabs & Rewards List */
+.line-stamp-tabs {
+  border-bottom: 2px solid #EAE0C8;
+  margin-top: 18px;
+}
+
+.line-stamp-tab {
+  color: #8C7A6B;
+}
+
+.line-stamp-tab.active {
+  color: #2E231E;
+  border-bottom-color: #FA5B5A;
+}
+
+.line-stamp-tab-count {
+  background: #FA5B5A;
+  color: #FFFFFF;
+}
+
+.line-reward-item.unlocked {
+  padding: 14px;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  border: 2px solid #2E231E;
+  background: #FFFFFF;
+  box-shadow: 0 3px 0 rgba(46, 35, 30, 0.12);
+}
+
+.line-reward-item.next-target {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1.5px solid #E6D8B5;
+  background: #FFF8E6;
+}
+
+.line-reward-item.claimed {
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  border-radius: 16px;
+  border: 1.5px solid #E5DFD0;
+  background: #FAF6EC;
+}
+
+.line-reward-thumb-wrap {
+  width: 84px;
+  height: 84px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(46, 35, 30, 0.14);
+}
+
+.line-reward-ready-pill {
+  background: #10B981;
+}
+
+.line-reward-title {
+  color: #2E231E;
+}
+
+.line-reward-required {
+  color: #6B574C;
+  font-weight: 600;
+}
+
+.line-reward-use-btn {
+  background: #FA5B5A;
+  color: #FFFFFF;
+  border: 1.5px solid #2E231E;
+  box-shadow: 0 2px 0 #2E231E;
+  padding: 7px 14px;
+}
+
+.line-stamp-how h2 {
+  color: #2E231E;
+}
+
+.line-stamp-rules p {
+  color: #5C4738;
+}
+
+.line-stamp-help-link {
+  color: #2E231E;
+}
+
+.line-stamp-scan-btn {
+  background: #2E231E;
+  color: #FCE254;
+  border: 2px solid #2E231E;
+  box-shadow: 0 6px 20px rgba(46, 35, 30, 0.28);
+}
+
 /* Coupon Presentation & Receipt Modal Profile Row */
+.line-modal-sheet {
+  background: #FFFDF7;
+  border: 2.5px solid #2E231E;
+  border-radius: 20px;
+}
+
+.line-modal-badge {
+  background: #FCE254;
+  color: #2E231E;
+  border: 1.5px solid #2E231E;
+}
+
+.line-modal-sheet h3 {
+  color: #2E231E;
+}
+
 .line-modal-profile-row,
 .line-receipt-profile-row {
   display: flex;
@@ -5796,8 +6057,8 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   gap: 10px;
   padding: 9px 12px;
   border-radius: 12px;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: #FAF5E8;
+  border: 1px solid #E5DFD0;
   margin-bottom: 12px;
   text-align: left;
 }
@@ -5813,25 +6074,25 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .line-receipt-profile-row strong {
   font-size: 13.5px;
   font-weight: 800;
-  color: #111827;
+  color: #2E231E;
 }
 
 .line-modal-profile-text span,
 .line-receipt-profile-row span {
   font-size: 11.5px;
-  color: #6b7280;
+  color: #6B574C;
 }
 
 .line-modal-code-box.large {
   padding: 12px 14px;
-  background: #fff5f5;
-  border: 1.5px dashed #E62134;
+  background: #FFF7D6;
+  border: 2px dashed #2E231E;
 }
 
 .line-modal-code-label {
   display: block;
   font-size: 11px;
-  color: #6b7280;
+  color: #6B574C;
   text-align: left;
 }
 
@@ -5841,12 +6102,13 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   display: block;
   text-align: left;
   margin-top: 2px;
+  color: #FA5B5A;
 }
 
 .line-modal-copy-btn {
-  background: #ffffff;
-  color: #111827;
-  border: 1px solid #d1d5db;
+  background: #FFFFFF;
+  color: #2E231E;
+  border: 1.5px solid #2E231E;
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 12px;
@@ -5855,12 +6117,36 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   font-family: inherit;
 }
 
+.line-modal-primary-btn {
+  background: #2E231E;
+  color: #FCE254;
+}
+
+.line-modal-secondary-btn {
+  background: #F3EFE4;
+  color: #5C4738;
+}
+
+.line-receipt-ticket {
+  background: #FFF7D6;
+  border: 2px dashed #2E231E;
+}
+
+.line-receipt-reward-title {
+  color: #2E231E;
+  border-bottom: 1px solid #E6D8B5;
+}
+
+.line-receipt-live-clock {
+  border-top: 1px dashed #D6C59E;
+}
+
 .line-modal-warn-note {
   padding: 9px 12px;
   border-radius: 10px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #92400e;
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  color: #92400E;
   font-size: 12px;
   line-height: 1.45;
   margin-bottom: 14px;
@@ -5870,7 +6156,7 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 .line-scanner-fallback-toggle {
   border: 0;
   background: transparent;
-  color: #4b5563;
+  color: #5C4738;
   font-size: 12.5px;
   font-weight: 700;
   text-decoration: underline;

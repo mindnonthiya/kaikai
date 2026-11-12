@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { bahtToSatang, calculateLine, calculateNetProfit, calculateSale, formatBaht, weightedAverageCost } from "./money";
+import {
+  bahtToSatang,
+  calculateLine,
+  calculateNetProfit,
+  calculateSale,
+  computeHalfPriceMainDishDiscountSatang,
+  formatBaht,
+  reconcileSlipAmountWithOrder,
+  weightedAverageCost,
+} from "./money";
 
 describe("money utilities", () => {
   it("converts baht without floating point drift", () => { expect(bahtToSatang("60.25")).toBe(6025); expect(bahtToSatang("0.10")).toBe(10); expect(() => bahtToSatang("1.999")).toThrow(); });
@@ -17,6 +26,42 @@ describe("money utilities", () => {
   it("adds tip/overtransferred amount to net revenue and gross profit", () => {
     expect(calculateSale({ items: [{ unitPrice: 6000, unitCost: 3000, quantity: 1 }], deliveryCharged: 1500, tip: 1000 }))
       .toMatchObject({ productRevenue: 6000, netRevenue: 8500, cogs: 3000, grossProfit: 5500 });
+  });
+  it("computes 50% discount from the lowest-priced main dish box", () => {
+    expect(
+      computeHalfPriceMainDishDiscountSatang([
+        { unitPriceSatang: 8000, quantity: 1, isMainDish: true },
+        { unitPriceSatang: 9000, quantity: 2, isMainDish: true },
+        { unitPriceSatang: 1500, quantity: 1, isMainDish: false },
+      ]),
+    ).toEqual({
+      discountSatang: 4000,
+      targetUnitPriceSatang: 8000,
+    });
+  });
+  it("reconciles slip amount with order food + delivery into discount or tip", () => {
+    // 1 box 80฿ + 15฿ delivery = 95฿ full, customer paid 55฿ (50% off 80฿ = -40฿ discount)
+    expect(
+      reconcileSlipAmountWithOrder({
+        slipAmountSatang: 5500,
+        foodRevenueSatang: 8000,
+        deliveryChargedSatang: 1500,
+      }),
+    ).toEqual({
+      discountSatang: 4000,
+      tipSatang: 0,
+    });
+    // Overpayment becomes tip
+    expect(
+      reconcileSlipAmountWithOrder({
+        slipAmountSatang: 10000,
+        foodRevenueSatang: 8000,
+        deliveryChargedSatang: 1500,
+      }),
+    ).toEqual({
+      discountSatang: 0,
+      tipSatang: 500,
+    });
   });
   it("guards invalid values and division by zero", () => { expect(() => calculateSale({ items: [] })).toThrow(); expect(() => calculateLine(100, 50, 0)).toThrow(); });
   it("keeps old sale snapshots independent from changed menu cost", () => { const snapshot = calculateLine(6000, 3000, 1); calculateLine(6000, 4000, 1); expect(snapshot.cost).toBe(3000); });

@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  DEFAULT_LOYALTY_CARD_TITLE,
   DEFAULT_LOYALTY_RULES_TEXT,
   type LoyaltyConfig,
   type LoyaltyCouponRecord,
   formatThaiDateTime,
   formatValidTillDate,
   parseLoyaltyQueryParams,
+  stripEmoji,
 } from "@/lib/loyalty";
 
 const LOCAL_USER_ID_KEY = "kaikai_loyalty_line_uid_v1";
@@ -200,9 +202,9 @@ export function LoyaltyStampCardClient({
 }) {
   const [shopSecret, setShopSecret] = useState(initialShopSecret);
   const [config, setConfig] = useState<CardConfigState>({
-    cardTitle: initialConfig?.cardTitle ?? "GaiTomNamPla 🐔",
-    cardHeadline: initialConfig?.cardHeadline ?? "สะสม 10 กล่อง ลด 50%",
-    rewardTitle: initialConfig?.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง",
+    cardTitle: stripEmoji(initialConfig?.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE) || DEFAULT_LOYALTY_CARD_TITLE,
+    cardHeadline: stripEmoji(initialConfig?.cardHeadline ?? "สะสม 10 กล่อง ลด 50%") || "สะสม 10 กล่อง ลด 50%",
+    rewardTitle: stripEmoji(initialConfig?.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง") || "ลด 50% เมนูหลัก 1 กล่อง",
     stampsPerReward: initialConfig?.stampsPerReward ?? 10,
     validityMonths: initialConfig?.validityMonths ?? 3,
     cooldownMinutes: initialConfig?.cooldownMinutes ?? 5,
@@ -316,13 +318,13 @@ export function LoyaltyStampCardClient({
 
       const cfg = (data.config ?? {}) as Record<string, unknown>;
       const nextConfig: CardConfigState = {
-        cardTitle: String(cfg.cardTitle ?? "GaiTomNamPla 🐔"),
-        cardHeadline: String(cfg.cardHeadline ?? "สะสม 10 กล่อง ลด 50%"),
-        rewardTitle: String(cfg.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
+        cardTitle: stripEmoji(String(cfg.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE)) || DEFAULT_LOYALTY_CARD_TITLE,
+        cardHeadline: stripEmoji(String(cfg.cardHeadline ?? "สะสม 10 กล่อง ลด 50%")) || "สะสม 10 กล่อง ลด 50%",
+        rewardTitle: stripEmoji(String(cfg.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง")) || "ลด 50% เมนูหลัก 1 กล่อง",
         stampsPerReward: Math.max(1, Number(cfg.stampsPerReward ?? 10)),
         validityMonths: Math.max(1, Number(cfg.validityMonths ?? 3)),
         cooldownMinutes: Math.max(0, Number(cfg.cooldownMinutes ?? 5)),
-        rulesText: String(cfg.rulesText ?? DEFAULT_LOYALTY_RULES_TEXT),
+        rulesText: stripEmoji(String(cfg.rulesText ?? DEFAULT_LOYALTY_RULES_TEXT)) || DEFAULT_LOYALTY_RULES_TEXT,
         liffId: String(cfg.liffId ?? initialLiffId ?? ""),
         botBasicId: String(cfg.botBasicId ?? ""),
       };
@@ -856,35 +858,42 @@ export function LoyaltyStampCardClient({
 
   const totalSlots = Math.max(1, Math.min(30, config.stampsPerReward));
   const isLineConnected = Boolean(member.lineUserId.startsWith("U") || isInLineClient);
+  const cleanCardTitle = stripEmoji(config.cardTitle) || DEFAULT_LOYALTY_CARD_TITLE;
+  const cleanCardHeadline = stripEmoji(config.cardHeadline) || "สะสม 10 กล่อง ลด 50%";
+  const cleanRewardTitle = stripEmoji(config.rewardTitle) || "ลด 50% เมนูหลัก 1 กล่อง";
+  const cleanMemberName = stripEmoji(member.displayName) || "ลูกค้า LINE";
 
   return (
     <div className="line-stamp-shell">
       <div className="line-stamp-container">
-        {/* TOP NOTIFICATION BANNER (Above hero & card so customer sees scan result immediately) */}
+        {/* TOP NOTIFICATION BANNER */}
         {claiming && (
           <div className="line-stamp-top-banner info">
-            <strong>กำลังบันทึกแต้มสะสมของคุณ...</strong>
-            <p>กรุณารอสักครู่ ระบบกำลังอัปเดตบัตรสะสมแต้ม</p>
+            <strong>กำลังบันทึกแต้มสะสม...</strong>
+            <p>กรุณารอสักครู่ ระบบกำลังอัปเดตบัตรของคุณ</p>
           </div>
         )}
 
         {claimBanner && !claiming && (
           <div className={`line-stamp-top-banner ${claimBanner.type}`}>
             <div className="line-stamp-alert-head">
-              <strong>{claimBanner.title}</strong>
+              <strong>{stripEmoji(claimBanner.title)}</strong>
               <button
                 type="button"
                 className="line-stamp-alert-close"
                 onClick={() => setClaimBanner(null)}
                 aria-label="ปิดแจ้งเตือน"
               >
-                ✕
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             </div>
-            <p>{claimBanner.subtitle}</p>
+            <p>{stripEmoji(claimBanner.subtitle)}</p>
             {claimBanner.type === "success" && claimBanner.chatNotified && (
               <div className="line-stamp-alert-foot">
-                <span>ส่งข้อความสรุปแต้มไปยังแชท LINE ของคุณแล้ว</span>
+                <span>ส่งสรุปแต้มเข้าแชท LINE ของคุณแล้ว</span>
               </div>
             )}
           </div>
@@ -893,7 +902,7 @@ export function LoyaltyStampCardClient({
         {errorMessage && (
           <div className="line-stamp-top-banner error">
             <strong>แจ้งเตือนระบบ</strong>
-            <p>{errorMessage}</p>
+            <p>{stripEmoji(errorMessage)}</p>
           </div>
         )}
 
@@ -902,12 +911,12 @@ export function LoyaltyStampCardClient({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/loyalty/banner-chicken.jpg"
-            alt={config.cardTitle}
+            alt={cleanCardTitle}
             className="line-stamp-hero-img"
           />
         </div>
 
-        {/* Red Stamp Card (#E62134) */}
+        {/* Rich Menu Themed Stamp Card */}
         <div className="line-stamp-card-wrap">
           <div className="line-stamp-card">
             {/* Overlapping Circular Bowl Avatar */}
@@ -915,39 +924,40 @@ export function LoyaltyStampCardClient({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/loyalty/avatar-bowl.png"
-                alt={config.cardTitle}
+                alt={cleanCardTitle}
                 className="line-stamp-avatar-img"
               />
             </div>
 
-            <h1 className="line-stamp-title">{config.cardTitle}</h1>
-            <p className="line-stamp-valid">
-              {memberLoaded ? `ใช้ได้ถึง ${member.validTillFormatted}` : "บัตรสะสมแต้มสมาชิก"}
-            </p>
-            <p className="line-stamp-headline">{config.cardHeadline}</p>
+            <h1 className="line-stamp-title">{cleanCardTitle}</h1>
 
-            {/* Customer LINE Profile Bar (Shows real LINE Profile Picture + LINE Display Name) */}
+            <div className="line-stamp-headline-pill">{cleanCardHeadline}</div>
+
+            {/* Customer LINE Profile & Validity Bar */}
             {(memberLoaded || member.lineUserId) && (
               <div className="line-stamp-user-bar">
                 <CustomerLineAvatar
                   pictureUrl={member.pictureUrl}
-                  displayName={member.displayName}
-                  size={28}
+                  displayName={cleanMemberName}
+                  size={26}
                 />
-                <span className="line-stamp-user-name">{member.displayName}</span>
+                <span className="line-stamp-user-name">{cleanMemberName}</span>
                 {isLineConnected && (
                   <span className="line-stamp-line-pill">LINE</span>
                 )}
+                <span className="line-stamp-valid-inline">
+                  {memberLoaded ? `ใช้ได้ถึง ${member.validTillFormatted}` : "สมาชิก"}
+                </span>
                 {!isLineConnected && !config.liffId && (
                   <button
                     type="button"
                     className="line-stamp-edit-name-btn"
                     onClick={() => {
-                      setNameDraft(member.displayName === "ลูกค้า LINE" ? "" : member.displayName);
+                      setNameDraft(cleanMemberName === "ลูกค้า LINE" ? "" : cleanMemberName);
                       setShowNameModal(true);
                     }}
                   >
-                    เปลี่ยนชื่อ
+                    แก้ไขชื่อ
                   </button>
                 )}
               </div>
@@ -955,10 +965,8 @@ export function LoyaltyStampCardClient({
 
             {lineAuthError ? (
               <div className="line-stamp-auth-box">
-                <strong>{lineAuthError}</strong>
-                <p>
-                  กรุณากดปุ่มด้านล่างเพื่อเข้าสู่ระบบด้วยบัญชี LINE ของคุณและแสดงแต้มสะสม
-                </p>
+                <strong>{stripEmoji(lineAuthError)}</strong>
+                <p>กรุณาเข้าสู่ระบบด้วยบัญชี LINE เพื่อดูแต้มสะสมของคุณ</p>
                 <button
                   type="button"
                   className="line-stamp-auth-btn"
@@ -975,10 +983,10 @@ export function LoyaltyStampCardClient({
               </div>
             ) : !memberLoaded && (loading || claiming) ? (
               <div className="line-stamp-loading-box">
-                กำลังซิงก์ข้อมูลบัญชี LINE และแต้มสะสมของคุณ...
+                กำลังโหลดข้อมูลแต้มสะสมของคุณ...
               </div>
             ) : (
-              <>
+              <div className="line-stamp-board">
                 {/* Stamp Progress Row */}
                 <button
                   type="button"
@@ -987,17 +995,23 @@ export function LoyaltyStampCardClient({
                   aria-expanded={gridExpanded ? "true" : "false"}
                 >
                   <div className="line-stamp-progress-left">
-                    <span className="line-stamp-reward-badge">รางวัล</span>
+                    <span className="line-stamp-reward-badge">แต้มสะสม</span>
                     <span className="line-stamp-progress-text">
-                      สะสมแล้ว {member.stamps}/{totalSlots} แต้ม ·{" "}
-                      {stampsRemaining > 0
-                        ? `เหลืออีก ${stampsRemaining} แต้ม`
-                        : "ครบรับรางวัลแล้ว"}
+                      <strong>{member.stamps} / {totalSlots}</strong> แต้ม
                     </span>
                   </div>
-                  <span className={`line-stamp-chevron ${gridExpanded ? "open" : ""}`} aria-hidden>
-                    ⌃
-                  </span>
+                  <div className="line-stamp-progress-right">
+                    <span className="line-stamp-remaining-pill">
+                      {stampsRemaining > 0
+                        ? `อีก ${stampsRemaining} แต้มรับสิทธิ์`
+                        : "ครบรับรางวัลแล้ว"}
+                    </span>
+                    <span className={`line-stamp-chevron ${gridExpanded ? "open" : ""}`} aria-hidden>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="18 15 12 9 6 15" />
+                      </svg>
+                    </span>
+                  </div>
                 </button>
 
                 {/* 2x5 Circular Stamp Grid */}
@@ -1014,21 +1028,27 @@ export function LoyaltyStampCardClient({
                           className={`line-stamp-slot ${isFilled ? "filled" : "empty"} ${isFinalSlot ? "final" : ""}`}
                           aria-label={`แต้มที่ ${slotNumber} จาก ${totalSlots}${isFilled ? " (สะสมแล้ว)" : ""}`}
                         >
-                          <div className="line-stamp-emblem">
-                            <div className="line-stamp-emblem-inner">
-                              {isFinalSlot && !isFilled ? (
-                                <span className="line-stamp-star">★</span>
-                              ) : (
-                                <span className="line-stamp-word">STAMP</span>
-                              )}
-                            </div>
-                          </div>
+                          {isFilled ? (
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          ) : isFinalSlot ? (
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 12 20 22 4 22 4 12" />
+                              <rect x="2" y="7" width="20" height="5" rx="1" />
+                              <line x1="12" y1="22" x2="12" y2="7" />
+                              <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+                              <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+                            </svg>
+                          ) : (
+                            <span className="line-stamp-slot-num">{slotNumber}</span>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -1037,8 +1057,8 @@ export function LoyaltyStampCardClient({
         {unclaimedCoupons.length > 0 && (
           <div className="line-ready-coupon-callout">
             <div className="line-ready-coupon-callout-info">
-              <strong>คุณมีคูปองส่วนลดพร้อมใช้ {unclaimedCoupons.length} ใบ</strong>
-              <span>{config.rewardTitle}</span>
+              <strong>มีคูปองส่วนลดพร้อมใช้ {unclaimedCoupons.length} ใบ</strong>
+              <span>{cleanRewardTitle}</span>
             </div>
             <button
               type="button"
@@ -1048,12 +1068,12 @@ export function LoyaltyStampCardClient({
                 setConfirmRedeemCoupon(unclaimedCoupons[0]);
               }}
             >
-              แสดงคูปอง
+              ใช้คูปอง
             </button>
           </div>
         )}
 
-        {/* Thai Rewards Tabs: คูปองพร้อมใช้ | ประวัติการใช้คูปอง */}
+        {/* Thai Rewards Tabs: คูปองพร้อมใช้ | ประวัติการใช้สิทธิ์ */}
         <div className="line-stamp-tabs" ref={rewardsSectionRef}>
           <button
             type="button"
@@ -1070,7 +1090,7 @@ export function LoyaltyStampCardClient({
             className={`line-stamp-tab ${activeTab === "claimed" ? "active" : ""}`}
             onClick={() => setActiveTab("claimed")}
           >
-            ประวัติการใช้คูปอง
+            ประวัติการใช้สิทธิ์
             {claimedCoupons.length > 0 && (
               <span className="line-stamp-tab-count muted">{claimedCoupons.length}</span>
             )}
@@ -1087,14 +1107,14 @@ export function LoyaltyStampCardClient({
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src="/loyalty/reward-bowl.png"
-                      alt={coupon.title}
+                      alt={stripEmoji(coupon.title)}
                       className="line-reward-thumb"
                     />
                     <span className="line-reward-ready-pill">พร้อมใช้</span>
                   </div>
                   <div className="line-reward-info">
-                    <div className="line-reward-title">{coupon.title}</div>
-                    <div className="line-reward-code">รหัสคูปอง #{coupon.code}</div>
+                    <div className="line-reward-title">{stripEmoji(coupon.title)}</div>
+                    <div className="line-reward-code">รหัส #{coupon.code}</div>
                     <button
                       type="button"
                       className="line-reward-use-btn"
@@ -1103,19 +1123,19 @@ export function LoyaltyStampCardClient({
                         setConfirmRedeemCoupon(coupon);
                       }}
                     >
-                      แสดงคูปองให้ร้าน / ใช้สิทธิ์
+                      กดใช้คูปอง
                     </button>
                   </div>
                 </div>
               ))}
 
               {/* Next Reward Progress Item */}
-              <div className="line-reward-item">
+              <div className="line-reward-item next-target">
                 <div className="line-reward-thumb-wrap">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src="/loyalty/reward-bowl.png"
-                    alt={config.rewardTitle}
+                    alt={cleanRewardTitle}
                     className="line-reward-thumb"
                   />
                   <span className="line-reward-lock-badge" aria-label="กำลังสะสม">
@@ -1125,16 +1145,16 @@ export function LoyaltyStampCardClient({
                   </span>
                 </div>
                 <div className="line-reward-info">
-                  <div className="line-reward-title">{config.rewardTitle}</div>
+                  <div className="line-reward-title">{cleanRewardTitle}</div>
                   <div className="line-reward-required">
-                    สะสมเพิ่มอีก {stampsRemaining} แต้ม เพื่อรับคูปองใบใหม่
+                    สะสมอีก {stampsRemaining} แต้ม รับคูปองใบใหม่
                   </div>
                 </div>
               </div>
             </>
           ) : claimedCoupons.length === 0 ? (
             <div className="line-reward-empty">
-              ยังไม่มีประวัติการใช้คูปองส่วนลด
+              ยังไม่มีประวัติการใช้คูปอง
             </div>
           ) : (
             claimedCoupons.map((coupon) => (
@@ -1143,15 +1163,15 @@ export function LoyaltyStampCardClient({
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src="/loyalty/reward-bowl.png"
-                    alt={coupon.title}
+                    alt={stripEmoji(coupon.title)}
                     className="line-reward-thumb grayscale"
                   />
                   <span className="line-reward-used-pill">ใช้แล้ว</span>
                 </div>
                 <div className="line-reward-info">
-                  <div className="line-reward-title">{coupon.title}</div>
+                  <div className="line-reward-title">{stripEmoji(coupon.title)}</div>
                   <div className="line-reward-code">
-                    รหัส #{coupon.code} · ใช้เมื่อ {formatThaiDateTime(coupon.claimedAt)}
+                    รหัส #{coupon.code} · {formatThaiDateTime(coupon.claimedAt)}
                   </div>
                   <button
                     type="button"
@@ -1159,9 +1179,9 @@ export function LoyaltyStampCardClient({
                     onClick={() =>
                       setReceiptCoupon({
                         code: coupon.code,
-                        title: coupon.title,
+                        title: stripEmoji(coupon.title),
                         claimedAtFormatted: formatThaiDateTime(coupon.claimedAt),
-                        displayName: member.displayName,
+                        displayName: cleanMemberName,
                         pictureUrl: member.pictureUrl,
                         chatNotified: false,
                         isFreshRedemption: isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt),
@@ -1169,8 +1189,8 @@ export function LoyaltyStampCardClient({
                     }
                   >
                     {isRecentlyClaimedWithinFiveMinutes(coupon.claimedAt)
-                      ? "ดูใบยืนยันคูปอง (สำหรับแคปส่งร้าน)"
-                      : "ดูรายละเอียดการใช้สิทธิ์"}
+                      ? "เปิดใบยืนยันคูปอง"
+                      : "ดูรายละเอียด"}
                   </button>
                 </div>
               </div>
@@ -1180,10 +1200,10 @@ export function LoyaltyStampCardClient({
 
         {/* Thai Rules Section */}
         <div className="line-stamp-how">
-          <h2>กติกาและเงื่อนไขการสะสมแต้ม</h2>
+          <h2>เงื่อนไขการสะสมแต้ม</h2>
           <div className="line-stamp-rules">
             {rulesLines.map((line, index) => (
-              <p key={index}>{line}</p>
+              <p key={index}>{stripEmoji(line)}</p>
             ))}
           </div>
           <button
@@ -1191,7 +1211,7 @@ export function LoyaltyStampCardClient({
             className="line-stamp-help-link"
             onClick={() => setShowHelpModal(true)}
           >
-            ดูวิธีใช้งานบัตรสะสมแต้ม <span aria-hidden>›</span>
+            วิธีใช้งานบัตรสะสมแต้ม <span aria-hidden>›</span>
           </button>
         </div>
 
@@ -1219,25 +1239,25 @@ export function LoyaltyStampCardClient({
       {confirmRedeemCoupon && (
         <div className="line-modal-backdrop" onClick={() => !redeemingCouponId && setConfirmRedeemCoupon(null)}>
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="line-modal-badge">คูปองส่วนลดของคุณ</div>
-            <h3>{confirmRedeemCoupon.title}</h3>
+            <div className="line-modal-badge">คูปองส่วนลด</div>
+            <h3>{stripEmoji(confirmRedeemCoupon.title)}</h3>
 
             {/* Customer LINE Profile on Coupon */}
             <div className="line-modal-profile-row">
               <CustomerLineAvatar
                 pictureUrl={member.pictureUrl}
-                displayName={member.displayName}
+                displayName={cleanMemberName}
                 size={36}
               />
               <div className="line-modal-profile-text">
-                <strong>{member.displayName}</strong>
-                <span>{config.cardTitle}</span>
+                <strong>{cleanMemberName}</strong>
+                <span>{cleanCardTitle}</span>
               </div>
             </div>
 
             <div className="line-modal-code-box large">
               <div>
-                <span className="line-modal-code-label">รหัสคูปองสำหรับแจ้งร้านค้า</span>
+                <span className="line-modal-code-label">รหัสคูปอง</span>
                 <strong>#{confirmRedeemCoupon.code}</strong>
               </div>
               <button
@@ -1250,11 +1270,11 @@ export function LoyaltyStampCardClient({
             </div>
 
             <p className="line-modal-desc">
-              แจ้งรหัส <strong>#{confirmRedeemCoupon.code}</strong> ให้ทางร้านตรวจสอบ หรือกดปุ่มยืนยันด้านล่างเพื่อตัดสิทธิ์และแสดงใบยืนยันสำหรับแคปหน้าจอส่งในแชทร้าน
+              แจ้งรหัส <strong>#{confirmRedeemCoupon.code}</strong> ให้ร้าน หรือกดยืนยันด้านล่างเพื่อแสดงใบยืนยันคูปอง
             </p>
 
             <div className="line-modal-warn-note">
-              หมายเหตุ: เมื่อกดปุ่มยืนยันใช้สิทธิ์ด้านล่าง คูปองจะถูกเปลี่ยนเป็นสถานะ “ใช้แล้ว” ทันทีและไม่สามารถย้อนกลับได้
+              เมื่อกดยืนยันแล้ว คูปองจะเปลี่ยนเป็นสถานะ “ใช้แล้ว” ทันที
             </div>
 
             <div className="line-modal-actions">
@@ -1264,7 +1284,7 @@ export function LoyaltyStampCardClient({
                 disabled={Boolean(redeemingCouponId)}
                 onClick={handleConfirmRedeem}
               >
-                {redeemingCouponId ? "กำลังยืนยันการใช้สิทธิ์..." : "ยืนยันใช้สิทธิ์คูปองตอนนี้"}
+                {redeemingCouponId ? "กำลังยืนยัน..." : "ยืนยันใช้คูปองตอนนี้"}
               </button>
               <button
                 type="button"
@@ -1272,7 +1292,7 @@ export function LoyaltyStampCardClient({
                 disabled={Boolean(redeemingCouponId)}
                 onClick={() => setConfirmRedeemCoupon(null)}
               >
-                ปิดหน้าต่าง (เก็บไว้ใช้ภายหลัง)
+                เก็บไว้ใช้ภายหลัง
               </button>
             </div>
           </div>
@@ -1292,28 +1312,37 @@ export function LoyaltyStampCardClient({
               }
             >
               <div className="line-receipt-check">
-                {receiptCoupon.isFreshRedemption ? "✓" : "⏱"}
+                {receiptCoupon.isFreshRedemption ? (
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                )}
               </div>
               <span className="line-receipt-status">
                 {receiptCoupon.isFreshRedemption
-                  ? "ยืนยันการใช้คูปองสำเร็จ"
-                  : "ประวัติคูปองที่ใช้สิทธิ์ไปแล้ว"}
+                  ? "ใช้คูปองส่วนลดสำเร็จ"
+                  : "ประวัติการใช้คูปอง"}
               </span>
-              <h3>{config.cardTitle}</h3>
+              <h3>{cleanCardTitle}</h3>
             </div>
 
             <div className="line-receipt-ticket">
-              <div className="line-receipt-reward-title">{receiptCoupon.title}</div>
+              <div className="line-receipt-reward-title">{stripEmoji(receiptCoupon.title)}</div>
 
               <div className="line-receipt-profile-row">
                 <CustomerLineAvatar
                   pictureUrl={receiptCoupon.pictureUrl}
-                  displayName={receiptCoupon.displayName}
+                  displayName={stripEmoji(receiptCoupon.displayName)}
                   size={34}
                 />
                 <div>
-                  <strong>{receiptCoupon.displayName}</strong>
-                  <span>บัญชี LINE ลูกค้า</span>
+                  <strong>{stripEmoji(receiptCoupon.displayName)}</strong>
+                  <span>สมาชิก LINE</span>
                 </div>
               </div>
 
@@ -1334,7 +1363,7 @@ export function LoyaltyStampCardClient({
                   className="line-receipt-live-clock"
                   style={{ background: "#fef2f2", color: "#991b1b", borderColor: "#fecaca" }}
                 >
-                  <span>คูปองใบนี้ถูกใช้สิทธิ์ไปแล้วเมื่อ {receiptCoupon.claimedAtFormatted}</span>
+                  <span>ใช้สิทธิ์แล้วเมื่อ {receiptCoupon.claimedAtFormatted}</span>
                 </div>
               )}
             </div>
@@ -1342,13 +1371,10 @@ export function LoyaltyStampCardClient({
             {receiptCoupon.isFreshRedemption ? (
               <p className="line-receipt-instruction">
                 <strong>แคปหน้าจอนี้ส่งในแชท LINE ให้ทางร้านได้เลย</strong>
-                {receiptCoupon.chatNotified
-                  ? " (ระบบได้ส่งข้อความยืนยันเข้าแชท LINE ให้อัตโนมัติแล้ว)"
-                  : ""}
               </p>
             ) : (
               <p className="line-receipt-instruction">
-                หน้าต่างนี้แสดงประวัติคูปองที่เคยใช้สิทธิ์ไปแล้ว (รหัสอ้างอิง <strong>#{receiptCoupon.code}</strong>)
+                รหัสอ้างอิง <strong>#{receiptCoupon.code}</strong>
               </p>
             )}
 
@@ -1357,7 +1383,7 @@ export function LoyaltyStampCardClient({
               className="line-modal-primary-btn"
               onClick={() => setReceiptCoupon(null)}
             >
-              ปิดหน้าต่างนี้
+              ปิดหน้าต่าง
             </button>
           </div>
         </div>
@@ -1455,16 +1481,16 @@ export function LoyaltyStampCardClient({
       {showHelpModal && (
         <div className="line-modal-backdrop" onClick={() => setShowHelpModal(false)}>
           <div className="line-modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <h3>วิธีใช้งานบัตรสะสมแต้ม {config.cardTitle}</h3>
+            <h3>วิธีใช้งานบัตรสะสมแต้ม {cleanCardTitle}</h3>
             <div className="line-modal-desc" style={{ textAlign: "left" }}>
               <p>
-                <strong>1. การสะสมแต้ม:</strong> เมื่อสั่งซื้อเมนูหลัก ทางร้านจะส่งรูป QR Code ตามจำนวนกล่อง (1–10 กล่อง) ให้ในแชท เมื่อสแกนแล้วแต้มจะขึ้นบนบัตรทันทีพร้อมแจ้งเตือนในแชท
+                <strong>1. สะสมแต้ม:</strong> สแกน QR Code ที่ได้รับจากทางร้านตามจำนวนกล่องที่สั่งซื้อ แต้มจะเข้าบัตรทันที
               </p>
               <p style={{ marginTop: 8 }}>
-                <strong>2. การใช้คูปองส่วนลด:</strong> เมื่อสะสมครบ {config.stampsPerReward} แต้ม ระบบจะออกคูปองไว้ในแถบ <strong>คูปองพร้อมใช้</strong> คุณสามารถกดดูรหัสคูปองเพื่อแจ้งร้าน หรือกดยืนยันใช้สิทธิ์แล้วแคปหน้าจอส่งให้ร้านในแชทได้เลย
+                <strong>2. ใช้คูปองส่วนลด:</strong> เมื่อสะสมครบ {config.stampsPerReward} แต้ม กดใช้คูปองในแถบ <strong>คูปองพร้อมใช้</strong> แล้วแจ้งรหัสหรือแคปหน้าจอส่งให้ร้านในแชท
               </p>
               <p style={{ marginTop: 8 }}>
-                <strong>3. อายุแต้มสะสม:</strong> แต้มมีอายุ {config.validityMonths} เดือนนับจากวันที่สะสมแต้มครั้งล่าสุด
+                <strong>3. อายุแต้มสะสม:</strong> แต้มมีอายุ {config.validityMonths} เดือนนับจากการสแกนครั้งล่าสุด
               </p>
             </div>
             <button

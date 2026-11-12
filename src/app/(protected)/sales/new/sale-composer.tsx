@@ -5,9 +5,17 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Bike, Check, ImagePlus, Minus, Plus, RotateCcw, ShieldCheck, Sparkles, Store, Trash2, X } from "lucide-react";
 import { revalidateSalesAction } from "@/app/actions/sales";
+import { redeemCouponFromSaleIfPresentAction } from "@/app/actions/loyalty";
 import { defaultOrderPackaging, packagingLinesCost } from "@/lib/analytics";
 import { DEFAULT_UNIT_LABEL, type Fulfillment, type PricePreset } from "@/lib/data/types";
-import { calculateSale, formatBaht, formatUnitCost, tryBahtToSatang } from "@/lib/money";
+import {
+  calculateSale,
+  computeHalfPriceMainDishDiscountSatang,
+  formatBaht,
+  formatUnitCost,
+  reconcileSlipAmountWithOrder,
+  tryBahtToSatang,
+} from "@/lib/money";
 import { hasSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
 import { compressSlipImage } from "@/lib/image-compression";
@@ -85,6 +93,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   const [delivery, setDelivery] = useState(defaultDelivery);
   const [discount, setDiscount] = useState("0");
+  const [couponCode, setCouponCode] = useState("");
   const [tip, setTip] = useState("0");
   const [fee, setFee] = useState("0");
   const [payment, setPayment] = useState("transfer");
@@ -158,6 +167,19 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
   const paymentAmount = paymentStatus === "paid" ? amountDue : paymentStatus === "unpaid" ? 0 : (paidSatang ?? 0);
   const partialError = paymentStatus === "partial" && (paidSatang === null || paidSatang <= 0 || paidSatang >= amountDue) ? "ยอดที่รับแล้วต้องมากกว่า 0 และน้อยกว่ายอดที่ต้องรับ" : null;
 
+  const halfPriceInfo = computeHalfPriceMainDishDiscountSatang([
+    ...selected.map((m) => ({
+      unitPriceSatang: m.price,
+      quantity: cart[m.id] ?? 0,
+      isMainDish: !m.isAddon && !m.isService,
+    })),
+    ...customItems.map((c) => ({
+      unitPriceSatang: c.price,
+      quantity: c.quantity,
+      isMainDish: false,
+    })),
+  ]);
+
   // Smart round up target (e.g. 135 -> 150)
   const roundStepSatang = baseDue > 20000 ? 10000 : 5000;
   const nextRoundSatang = Math.ceil((baseDue + 100) / roundStepSatang) * roundStepSatang;
@@ -174,6 +196,32 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
     const current = tryBahtToSatang(tip) ?? 0;
     const next = current + deltaSatang;
     setTip(formatBaht(next, false));
+  }
+
+  function applyHalfPriceDiscount() {
+    if (halfPriceInfo.discountSatang <= 0) return;
+    setDiscount(formatBaht(halfPriceInfo.discountSatang, false));
+    if (totalAttachedSlipSatang > 0) {
+      const expectedAfterDiscount = summary.productRevenue - halfPriceInfo.discountSatang + (deliverySatang ?? 0);
+      const nextTip = Math.max(0, totalAttachedSlipSatang - expectedAfterDiscount);
+      setTip(nextTip > 0 ? formatBaht(nextTip, false) : "0");
+    }
+  }
+
+  function applySlipDiffAsDiscount() {
+    if (totalAttachedSlipSatang <= 0 || summary.productRevenue <= 0) return;
+    const reconciled = reconcileSlipAmountWithOrder({
+      slipAmountSatang: totalAttachedSlipSatang,
+      foodRevenueSatang: summary.productRevenue,
+      deliveryChargedSatang: deliverySatang ?? 0,
+    });
+    if (reconciled.discountSatang > 0) {
+      setDiscount(formatBaht(reconciled.discountSatang, false));
+      setTip("0");
+    } else if (reconciled.tipSatang > 0) {
+      setDiscount("0");
+      setTip(formatBaht(reconciled.tipSatang, false));
+    }
   }
 
   function addCustomItem() {
@@ -240,6 +288,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       }
       const deliveryFee = matched.fulfillment === "delivery" ? matched.deliveryChargedSatang : 0;
       const diff = totalSlipSatang - (presetItemsTotal + deliveryFee);
+      setDiscount("0");
       setTip(diff > 0 ? formatBaht(diff, false) : "0");
       setResult({
         ok: true,
@@ -254,13 +303,43 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         cartFoodTotal += c.price * c.quantity;
       }
       const delFee = fulfillment === "delivery" ? (tryBahtToSatang(delivery) ?? 0) : 0;
-      const diff = totalSlipSatang - (cartFoodTotal + delFee);
-      if (cartFoodTotal > 0 && diff >= 0) {
-        setTip(diff > 0 ? formatBaht(diff, false) : "0");
+      if (cartFoodTotal > 0) {
+        const reconciled = reconcileSlipAmountWithOrder({
+          slipAmountSatang: totalSlipSatang,
+          foodRevenueSatang: cartFoodTotal,
+          deliveryChargedSatang: delFee,
+        });
+        if (reconciled.discountSatang > 0) {
+          setDiscount(formatBaht(reconciled.discountSatang, false));
+          setTip("0");
+          const isHalfMatch =
+            halfPriceInfo.discountSatang > 0 &&
+            reconciled.discountSatang === halfPriceInfo.discountSatang;
+          setResult({
+            ok: true,
+            text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText} · ${
+              isHalfMatch
+                ? `หักส่วนลดโปร 50% (1 กล่อง −${formatBaht(reconciled.discountSatang)}) ให้อัตโนมัติ`
+                : `คำนวณส่วนลดให้อัตโนมัติ (−${formatBaht(reconciled.discountSatang)}) ตรงตามยอดสลิป`
+            }`,
+          });
+          return;
+        }
+        if (reconciled.tipSatang > 0) {
+          setDiscount("0");
+          setTip(formatBaht(reconciled.tipSatang, false));
+          setResult({
+            ok: true,
+            text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText} (คำนวณทิปให้อัตโนมัติ +${formatBaht(reconciled.tipSatang)})`,
+          });
+          return;
+        }
+        setDiscount("0");
+        setTip("0");
       }
       setResult({
         ok: true,
-        text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText}${cartFoodTotal > 0 && diff > 0 ? ` (คำนวณทิปให้อัตโนมัติ +${formatBaht(diff)})` : ""}`,
+        text: `ตรวจพบยอดสลิป ${formatBaht(totalSlipSatang)}${breakdownText}`,
       });
     }
   }
@@ -377,7 +456,7 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
 
   function resetForm() {
     setCart({}); setAdjust({}); setCustomItems([]); setShowCustomForm(false);
-    setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setTip("0"); setFee("0");
+    setFulfillment("pickup"); setDelivery(defaultDelivery); setDiscount("0"); setCouponCode(""); setTip("0"); setFee("0");
     setPaymentStatus("paid"); setPaidAmount(""); setCustomer(""); setAttachedSlips([]);
     setSoldAt(toBangkokDateTimeInput());
   }
@@ -425,9 +504,20 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
           ? collectSlipReferenceNumbers(primarySlip.referenceNumber, extraSlips)
           : [];
 
+      const normalizedCoupon = couponCode.trim().replace(/^#/, "").toUpperCase();
+      const discountNote =
+        discountSatang && discountSatang > 0
+          ? normalizedCoupon
+            ? `คูปองลด #${normalizedCoupon} (−${formatBaht(discountSatang)})`
+            : halfPriceInfo.discountSatang > 0 && discountSatang === halfPriceInfo.discountSatang
+            ? `โปรลด 50% 1 กล่อง (−${formatBaht(discountSatang)})`
+            : `ส่วนลด −${formatBaht(discountSatang)}`
+          : null;
+
       const notesParts = [
         multiSlipNote,
         allRefs.length > 0 ? `เลขอ้างอิง: ${allRefs.join(", ")}` : null,
+        discountNote,
         tipSatang && tipSatang > 0 ? `ทิป/โอนเกิน ${formatBaht(tipSatang)}` : null,
         customItems.length ? `รายการพิเศษ: ${customItems.map((c) => `${c.name} x${c.quantity}`).join(", ")}` : null,
       ].filter(Boolean);
@@ -530,8 +620,20 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         }
       }
 
+      let couponSuffix = "";
+      if (normalizedCoupon) {
+        const couponRes = await redeemCouponFromSaleIfPresentAction(normalizedCoupon);
+        couponSuffix = couponRes.ok
+          ? ` · ตัดสิทธิ์คูปอง #${normalizedCoupon} แล้ว`
+          : ` · (${couponRes.message ?? "ตัดสิทธิ์คูปองไม่สำเร็จ"})`;
+      }
+
       await revalidateSalesAction();
-      setResult({ ok: true, text: `บันทึกแล้ว · ยอด ${formatBaht(Number((data as { net_revenue_satang: number }).net_revenue_satang))} · กำไรขั้นต้น ${formatBaht(Number((data as { gross_profit_satang: number }).gross_profit_satang))}`, saleId });
+      setResult({
+        ok: true,
+        text: `บันทึกแล้ว · ยอด ${formatBaht(Number((data as { net_revenue_satang: number }).net_revenue_satang))} · กำไรขั้นต้น ${formatBaht(Number((data as { gross_profit_satang: number }).gross_profit_satang))}${couponSuffix}`,
+        saleId,
+      });
       resetForm();
       router.refresh();
     } catch (error) {
@@ -547,6 +649,15 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
     attachedSlips.length > 0
       ? sumSlipAmountsSatang(attachedSlips[0].amountSatang, attachedSlips.slice(1))
       : 0;
+
+  const slipReconcileCandidate =
+    totalAttachedSlipSatang > 0 && summary.productRevenue > 0
+      ? reconcileSlipAmountWithOrder({
+          slipAmountSatang: totalAttachedSlipSatang,
+          foodRevenueSatang: summary.productRevenue,
+          deliveryChargedSatang: deliverySatang ?? 0,
+        })
+      : { discountSatang: 0, tipSatang: 0 };
 
   const hasItemsOrService = items.length > 0 || (deliverySatang && deliverySatang > 0) || (tipSatang && tipSatang > 0);
   let step = 1;
@@ -701,6 +812,78 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         )}
         <div className="tip-input-wrap">
           <div className="label-row">
+            <label htmlFor="sale-discount">ส่วนลด / โปรลด 50% (บาท)</label>
+            {slipReconcileCandidate.discountSatang > 0 &&
+              discountSatang !== slipReconcileCandidate.discountSatang && (
+                <button
+                  type="button"
+                  className="chip-btn round-up"
+                  onClick={applySlipDiffAsDiscount}
+                >
+                  ปรับลดตามสลิป (−{formatBaht(slipReconcileCandidate.discountSatang, false)} ฿)
+                </button>
+              )}
+          </div>
+          <div className="tip-input-group">
+            <input
+              id="sale-discount"
+              inputMode="decimal"
+              value={discount}
+              onChange={(e) => setDiscount(e.target.value)}
+              aria-invalid={discountSatang === null}
+              placeholder="0"
+            />
+            <div className="tip-chips">
+              <button
+                type="button"
+                className={`chip-btn ${
+                  halfPriceInfo.discountSatang > 0 &&
+                  discountSatang === halfPriceInfo.discountSatang
+                    ? "round-up"
+                    : ""
+                }`}
+                onClick={applyHalfPriceDiscount}
+                disabled={halfPriceInfo.discountSatang <= 0}
+                title={
+                  halfPriceInfo.discountSatang > 0
+                    ? `ลด 50% ของเมนูหลัก 1 กล่อง (${formatBaht(halfPriceInfo.targetUnitPriceSatang)} -> ลด ${formatBaht(halfPriceInfo.discountSatang)})`
+                    : "เลือกเมนูหลักก่อนเพื่อคำนวณส่วนลด 50%"
+                }
+              >
+                ลด 50% 1 กล่อง
+                {halfPriceInfo.discountSatang > 0
+                  ? ` (−${formatBaht(halfPriceInfo.discountSatang, false)} ฿)`
+                  : ""}
+              </button>
+              {discountSatang !== null && discountSatang > 0 && (
+                <button
+                  type="button"
+                  className="chip-btn clear"
+                  onClick={() => {
+                    setDiscount("0");
+                    setCouponCode("");
+                  }}
+                >
+                  ล้าง
+                </button>
+              )}
+            </div>
+          </div>
+          {(discountSatang ?? 0) > 0 && (
+            <div style={{ marginTop: "6px" }}>
+              <input
+                id="sale-coupon-code"
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                placeholder="รหัสคูปอง เช่น GT-8899AA (ไม่บังคับ — กรอกเพื่อตัดสิทธิ์คูปองพร้อมบิล)"
+                maxLength={32}
+                style={{ fontSize: "12.5px", padding: "6px 10px" }}
+              />
+            </div>
+          )}
+        </div>
+        <div className="tip-input-wrap">
+          <div className="label-row">
             <label htmlFor="sale-tip">ทิป / ลูกค้าโอนเกิน (บาท)</label>
             {roundUpDiffSatang > 0 && (
               <button type="button" className="chip-btn round-up" onClick={() => setTip(formatBaht(roundUpDiffSatang, false))}>
@@ -744,7 +927,6 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
         <label>ชื่อลูกค้า (ไม่บังคับ)<input id="sale-customer" value={customer} onChange={(e) => setCustomer(e.target.value)} maxLength={120} placeholder="เช่น คุณเมย์" /></label>
         <label>สถานะการรับเงิน<select id="sale-payment-status" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}><option value="paid">ชำระครบแล้ว</option><option value="partial">ชำระบางส่วน</option><option value="unpaid">ยังไม่ชำระ</option></select></label>
         {paymentStatus === "partial" && <label>ยอดที่รับแล้ว (บาท)<input id="sale-paid-amount" inputMode="decimal" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} placeholder={`น้อยกว่า ${formatBaht(amountDue, false)}`} aria-invalid={!!partialError} /></label>}
-        <label>ส่วนลด (บาท)<input id="sale-discount" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} aria-invalid={discountSatang === null} /></label>
         <label>ค่าธรรมเนียมที่ร้านจ่าย (บาท)<input id="sale-fee" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} aria-invalid={feeSatang === null} /></label>
       </div>
       {payment === "transfer" && (attachedSlips.length > 0 ? (
@@ -831,7 +1013,15 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
       </div>
       <div className="summary-row"><span>ยอดสินค้า/บริการ</span><strong>{formatBaht(summary.productRevenue)}</strong></div>
       {fulfillment === "delivery" && <div className="summary-row"><span>ค่าส่ง</span><strong>+{formatBaht(deliverySatang ?? 0)}</strong></div>}
-      {(discountSatang ?? 0) > 0 && <div className="summary-row"><span>ส่วนลด</span><strong>−{formatBaht(discountSatang!)}</strong></div>}
+      {(discountSatang ?? 0) > 0 && (
+        <div className="summary-row">
+          <span>
+            ส่วนลด
+            {halfPriceInfo.discountSatang > 0 && discountSatang === halfPriceInfo.discountSatang ? " (โปรลด 50%)" : ""}
+          </span>
+          <strong>−{formatBaht(discountSatang!)}</strong>
+        </div>
+      )}
       {(tipSatang ?? 0) > 0 && <div className="summary-row green"><span>ทิป / ได้รับเพิ่ม</span><strong>+{formatBaht(tipSatang!)}</strong></div>}
       <div className="summary-total"><span>ยอดที่ต้องรับ (ตรงสลิป)</span><strong>{formatBaht(Math.max(0, amountDue))}</strong></div>
       {attachedSlips.length > 0 && totalAttachedSlipSatang > 0 && (
@@ -840,6 +1030,23 @@ export function SaleComposer({ menus, packaging, defaultDeliveryFee, deliveryFee
           <strong>{formatBaht(totalAttachedSlipSatang)}</strong>
         </div>
       )}
+      {attachedSlips.length > 0 &&
+        totalAttachedSlipSatang > 0 &&
+        amountDue !== totalAttachedSlipSatang &&
+        (slipReconcileCandidate.discountSatang > 0 || slipReconcileCandidate.tipSatang > 0) && (
+          <div style={{ margin: "6px 0" }}>
+            <button
+              type="button"
+              className="chip-btn round-up"
+              style={{ width: "100%", justifyContent: "center", padding: "7px 10px" }}
+              onClick={applySlipDiffAsDiscount}
+            >
+              {slipReconcileCandidate.discountSatang > 0
+                ? `ปรับหักส่วนลด −${formatBaht(slipReconcileCandidate.discountSatang)} ให้ตรงสลิป (${formatBaht(totalAttachedSlipSatang)})`
+                : `ปรับเพิ่มทิป +${formatBaht(slipReconcileCandidate.tipSatang)} ให้ตรงสลิป (${formatBaht(totalAttachedSlipSatang)})`}
+            </button>
+          </div>
+        )}
       {paymentStatus !== "paid" && <div className="summary-row"><span>ค้างรับ</span><strong>{formatBaht(Math.max(0, amountDue - paymentAmount))}</strong></div>}
       <div className="summary-row muted-row"><span>ต้นทุนสินค้า/วัตถุดิบ (ประมาณ)</span><strong>{formatBaht(Math.max(0, summary.cogs - packagingCost))}</strong></div>
       {packaging.length > 0 && <div className="summary-row muted-row"><span>ต้นทุนบรรจุภัณฑ์</span><strong>{formatBaht(packagingCost)}</strong></div>}

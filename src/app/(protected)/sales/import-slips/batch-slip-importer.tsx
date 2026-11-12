@@ -22,9 +22,21 @@ import {
 } from "lucide-react";
 import { saveAllPricePresets } from "@/app/actions/presets";
 import { revalidateSalesAction } from "@/app/actions/sales";
-import type { Fulfillment, MenuRecord, PricePreset } from "@/lib/data/types";
+import { redeemCouponFromSaleIfPresentAction } from "@/app/actions/loyalty";
+import {
+  isAddonCategory,
+  isServiceCategory,
+  type Fulfillment,
+  type MenuRecord,
+  type PricePreset,
+} from "@/lib/data/types";
 import { compressSlipImage } from "@/lib/image-compression";
-import { formatBaht, tryBahtToSatang } from "@/lib/money";
+import {
+  computeHalfPriceMainDishDiscountSatang,
+  formatBaht,
+  reconcileSlipAmountWithOrder,
+  tryBahtToSatang,
+} from "@/lib/money";
 import { matchPresetStrictly } from "@/lib/preset-matcher";
 import { checkIntraBatchDuplicate } from "@/lib/slip-duplicate";
 import {
@@ -79,6 +91,7 @@ export type BatchSlipRow = {
 
   // Inline order item editor toggle
   isEditingItems?: boolean;
+  couponCode?: string;
 };
 
 type Props = {
@@ -757,6 +770,43 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
     });
   }
 
+  function handleApplyHalfPriceDiscountToRow(rowId: string) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const itemsFoodTotalSatang = r.items.reduce((sum, it) => {
+          const m = menuMap.get(it.menuId);
+          return sum + (m ? m.price * it.quantity : 0);
+        }, 0);
+        const halfPrice = computeHalfPriceMainDishDiscountSatang(
+          r.items.map((it) => {
+            const m = menuMap.get(it.menuId);
+            return {
+              unitPriceSatang: m?.price ?? 0,
+              quantity: it.quantity,
+              isMainDish: m ? !isAddonCategory(m.category) && !isServiceCategory(m.category) : true,
+            };
+          }),
+        );
+        if (halfPrice.discountSatang <= 0 || itemsFoodTotalSatang <= 0) return r;
+        const deliveryFee = r.fulfillment === "delivery" ? r.deliveryChargedSatang : 0;
+        const fullTotal = itemsFoodTotalSatang + deliveryFee;
+        const discountedNet = Math.max(0, fullTotal - halfPrice.discountSatang);
+        // If row didn't have a slip amount yet or was set to full total from a preset, update amountSatang to discountedNet
+        const shouldUpdateAmount = r.amountSatang <= 0 || r.amountSatang === fullTotal;
+        const nextAmount = shouldUpdateAmount ? discountedNet : r.amountSatang;
+        const extraSum = (r.extraSlips ?? []).reduce((s, ex) => s + ex.amountSatang, 0);
+        return {
+          ...r,
+          amountSatang: nextAmount,
+          primaryAmountSatang: shouldUpdateAmount ? Math.max(0, nextAmount - extraSum) : r.primaryAmountSatang,
+          matchedPresetId: null,
+          statusText: `โปรลด 50% 1 กล่อง (−${formatBaht(halfPrice.discountSatang)})`,
+        };
+      }),
+    );
+  }
+
   async function handleQuickSaveAsPreset(row: BatchSlipRow) {
     if (row.items.length === 0) {
       alert("กรุณาเลือกรายการเมนูอย่างน้อย 1 รายการก่อนบันทึกเป็นสูตร");
@@ -884,14 +934,38 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             }
           : undefined;
 
-        // Calculate items food total + delivery and tip
+        // Calculate items food total + delivery, discount, and tip
         const itemsFoodTotalSatang = row.items.reduce((sum, it) => {
           const m = menuMap.get(it.menuId);
           return sum + (m ? m.price * it.quantity : 0);
         }, 0);
         const deliveryChargedSatang = row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0;
-        const expectedOrderTotalSatang = itemsFoodTotalSatang + deliveryChargedSatang;
-        const rowTipSatang = Math.max(0, row.amountSatang - expectedOrderTotalSatang);
+        const reconciled = reconcileSlipAmountWithOrder({
+          slipAmountSatang: row.amountSatang,
+          foodRevenueSatang: itemsFoodTotalSatang,
+          deliveryChargedSatang,
+        });
+        const rowDiscountSatang = reconciled.discountSatang;
+        const rowTipSatang = reconciled.tipSatang;
+        const rowHalfPrice = computeHalfPriceMainDishDiscountSatang(
+          row.items.map((it) => {
+            const m = menuMap.get(it.menuId);
+            return {
+              unitPriceSatang: m?.price ?? 0,
+              quantity: it.quantity,
+              isMainDish: m ? !isAddonCategory(m.category) && !isServiceCategory(m.category) : true,
+            };
+          }),
+        );
+        const normalizedCoupon = (row.couponCode ?? "").trim().replace(/^#/, "").toUpperCase();
+        const discountNote =
+          rowDiscountSatang > 0
+            ? normalizedCoupon
+              ? `คูปองลด #${normalizedCoupon} (−${formatBaht(rowDiscountSatang)})`
+              : rowHalfPrice.discountSatang > 0 && rowDiscountSatang === rowHalfPrice.discountSatang
+              ? `โปรลด 50% 1 กล่อง (−${formatBaht(rowDiscountSatang)})`
+              : `ส่วนลด −${formatBaht(rowDiscountSatang)}`
+            : null;
 
         const extraSlips = row.extraSlips ?? [];
         const primarySatang =
@@ -909,7 +983,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             fulfillment: row.fulfillment,
             pooled_ingredient_bps: pooledBps,
             delivery_charged_satang: deliveryChargedSatang,
-            discount_satang: 0,
+            discount_satang: rowDiscountSatang,
             tip_satang: rowTipSatang,
             payment_fee_satang: 0,
             payment_amount_satang: row.amountSatang,
@@ -920,6 +994,7 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
             notes: encodeSaleNotesForShop([
               multiSlipNote,
               allRefs.length > 0 ? `เลขอ้างอิง: ${allRefs.join(", ")}` : null,
+              discountNote,
               rowTipSatang > 0 ? `ทิป/โอนเกิน: ${formatBaht(rowTipSatang)}` : null,
             ].filter(Boolean).join(" · ") || null, getClientActiveShopId()),
             reference_number: allRefs.join(", ") || null,
@@ -988,6 +1063,10 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
               });
             }
           }
+        }
+
+        if (normalizedCoupon) {
+          await redeemCouponFromSaleIfPresentAction(normalizedCoupon);
         }
 
         successCount++;
@@ -1133,10 +1212,31 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                 const m = menuMap.get(it.menuId);
                 return sum + (m ? m.price * it.quantity : 0);
               }, 0);
-              const orderTotalSatang =
-                itemsFoodTotalSatang + (row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0);
+              const rowDeliveryFeeSatang =
+                row.fulfillment === "delivery" ? row.deliveryChargedSatang : 0;
+              const orderTotalSatang = itemsFoodTotalSatang + rowDeliveryFeeSatang;
               const isAmountMatchingFood = row.amountSatang > 0 && orderTotalSatang === row.amountSatang;
-              const rowTipSatang = Math.max(0, row.amountSatang - orderTotalSatang);
+              const rowReconciled = reconcileSlipAmountWithOrder({
+                slipAmountSatang: row.amountSatang,
+                foodRevenueSatang: itemsFoodTotalSatang,
+                deliveryChargedSatang: rowDeliveryFeeSatang,
+              });
+              const rowDiscountSatang = rowReconciled.discountSatang;
+              const rowTipSatang = rowReconciled.tipSatang;
+              const rowHalfPrice = computeHalfPriceMainDishDiscountSatang(
+                row.items.map((it) => {
+                  const m = menuMap.get(it.menuId);
+                  return {
+                    unitPriceSatang: m?.price ?? 0,
+                    quantity: it.quantity,
+                    isMainDish: m ? !isAddonCategory(m.category) && !isServiceCategory(m.category) : true,
+                  };
+                }),
+              );
+              const isHalfPriceDiscountMatch =
+                rowDiscountSatang > 0 &&
+                rowHalfPrice.discountSatang > 0 &&
+                rowDiscountSatang === rowHalfPrice.discountSatang;
 
               const extraSlips = row.extraSlips ?? [];
               const primarySatang =
@@ -1206,6 +1306,13 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                         <span className="badge-preset-matched">
                           <Check size={12} /> ตรงสูตร: {matchedPreset.name}
                           {rowTipSatang > 0 ? ` (ทิป/โอนเกิน +${formatBaht(rowTipSatang)})` : ""}
+                        </span>
+                      ) : row.amountSatang > 0 && hasItems && rowDiscountSatang > 0 ? (
+                        <span className="badge-preset-matched">
+                          <Check size={12} />{" "}
+                          {isHalfPriceDiscountMatch
+                            ? `โปรลด 50% 1 กล่อง (−${formatBaht(rowDiscountSatang)})`
+                            : `หักส่วนลด −${formatBaht(rowDiscountSatang)} · ตรงยอดสลิป`}
                         </span>
                       ) : row.amountSatang > 0 ? (
                         <span className="badge-preset-unmatched">
@@ -1497,6 +1604,11 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                             })
                             .filter(Boolean)
                             .join(", ")}
+                          {rowDiscountSatang > 0
+                            ? isHalfPriceDiscountMatch
+                              ? ` · โปรลด 50% (−${formatBaht(rowDiscountSatang)})`
+                              : ` · ส่วนลด −${formatBaht(rowDiscountSatang)}`
+                            : ""}
                           {rowTipSatang > 0 ? ` · ทิป/โอนเกิน +${formatBaht(rowTipSatang)}` : ""}
                         </span>
                       </div>
@@ -1590,11 +1702,62 @@ export function BatchSlipImporter({ menus, presets, defaultDeliveryFee, delivery
                           </div>
                         </div>
 
+                        {/* 50% Discount / Loyalty Coupon Helper */}
+                        {hasItems && (
+                          <div
+                            className="slip-editor-fulfillment"
+                            style={{ flexWrap: "wrap", gap: "8px", marginTop: "6px" }}
+                          >
+                            <label className="picker-label">ส่วนลด / คูปอง:</label>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", flex: 1 }}>
+                              {rowHalfPrice.discountSatang > 0 && (
+                                <button
+                                  type="button"
+                                  className={`seg-btn ${isHalfPriceDiscountMatch ? "active" : ""}`}
+                                  onClick={() => handleApplyHalfPriceDiscountToRow(row.id)}
+                                  title="คำนวณส่วนลด 50% สำหรับเมนูหลัก 1 กล่อง"
+                                >
+                                  ลด 50% 1 กล่อง (−{formatBaht(rowHalfPrice.discountSatang)})
+                                </button>
+                              )}
+                              <input
+                                value={row.couponCode ?? ""}
+                                onChange={(e) =>
+                                  updateRow(row.id, { couponCode: e.target.value.toUpperCase() })
+                                }
+                                placeholder="รหัสคูปอง เช่น GT-8899AA (ไม่บังคับ)"
+                                maxLength={32}
+                                style={{
+                                  fontSize: "12px",
+                                  padding: "4px 10px",
+                                  minWidth: "220px",
+                                  borderRadius: "8px",
+                                  border: "1px solid rgba(0,0,0,0.14)",
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
                         {/* Calculation Comparison Banner */}
                         {hasItems && (
-                          <div className={`slip-calc-banner ${isAmountMatchingFood || rowTipSatang > 0 ? "match" : "diff"}`}>
+                          <div
+                            className={`slip-calc-banner ${
+                              isAmountMatchingFood || rowTipSatang > 0 || rowDiscountSatang > 0
+                                ? "match"
+                                : "diff"
+                            }`}
+                          >
                             {isAmountMatchingFood ? (
                               <>ยอดอาหารรวมค่าส่งตรงกับสลิปพอดี ({formatBaht(orderTotalSatang)})</>
+                            ) : rowDiscountSatang > 0 ? (
+                              <>
+                                ราคาเต็มรวมค่าส่ง {formatBaht(orderTotalSatang)} ·{" "}
+                                {isHalfPriceDiscountMatch
+                                  ? `หักโปรลด 50% 1 กล่อง (−${formatBaht(rowDiscountSatang)})`
+                                  : `หักส่วนลดอัตโนมัติ (−${formatBaht(rowDiscountSatang)})`}{" "}
+                                = ยอดสุทธิตรงสลิป {formatBaht(row.amountSatang)} พอดี (หรือหากโอนขาด กด &ldquo;+ บวกสลิปโอนเพิ่ม&rdquo; ด้านบนได้)
+                              </>
                             ) : rowTipSatang > 0 ? (
                               <>
                                 ยอดอาหารรวม {formatBaht(orderTotalSatang)} · ยอดสลิป {formatBaht(row.amountSatang)} (มีทิป/โอนเกิน +{formatBaht(rowTipSatang)})

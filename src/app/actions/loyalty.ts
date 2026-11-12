@@ -1829,3 +1829,23 @@ export async function retryFailedLoyaltyPushJobsAction(form: FormData): Promise<
     };
   });
 }
+
+export async function redeemCouponFromSaleIfPresentAction(
+  rawCode?: string | null,
+): Promise<{ ok: boolean; message?: string }> {
+  const clean = String(rawCode ?? "")
+    .replace(/^#/, "")
+    .trim()
+    .toUpperCase();
+  if (clean.length < 4) {
+    return { ok: false };
+  }
+  try {
+    const form = new FormData();
+    form.set("coupon_code", clean);
+    const res = await verifyOrRedeemCouponByCodeAction(form);
+    return { ok: Boolean(res.ok), message: res.message };
+  } catch {
+    return { ok: false };
+  }
+}

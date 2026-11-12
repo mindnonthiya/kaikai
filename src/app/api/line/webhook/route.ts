@@ -6,6 +6,7 @@ import {
   verifyLineWebhookSignature,
 } from "@/lib/line-messaging";
 import {
+  DEFAULT_LOYALTY_CARD_TITLE,
   buildLoyaltyCardUrl,
   buildStampAwardFlexMessage,
   formatValidTillDate,
@@ -95,7 +96,7 @@ export async function POST(request: Request) {
         if (claim.ok) {
           const validTill = formatValidTillDate(claim.expiresAt ? String(claim.expiresAt) : null);
           const flex = buildStampAwardFlexMessage({
-            cardTitle: String(claim.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔"),
+            cardTitle: String(claim.cardTitle ?? creds.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE),
             rewardTitle: String(claim.rewardTitle ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
             displayName: String(claim.displayName ?? "ลูกค้า LINE"),
             pointsAdded: Number(claim.pointsAdded ?? points),
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
           await sendLineReplyMessage(channelAccessToken, replyToken, [
             {
               type: "text",
-              text: `ℹ️ ${String(claim.message)}`,
+              text: String(claim.message),
             },
           ]);
         }
@@ -140,7 +141,7 @@ export async function POST(request: Request) {
           const target = Number(cfg.stampsPerReward ?? 10);
           const validTill = formatValidTillDate(member.expiresAt ? String(member.expiresAt) : null);
           const flex = buildStampAwardFlexMessage({
-            cardTitle: String(cfg.cardTitle ?? "GaiTomNamPla 🐔"),
+            cardTitle: String(cfg.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE),
             rewardTitle: String(cfg.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
             displayName: String(member.displayName ?? "ลูกค้า LINE"),
             pointsAdded: 0,
