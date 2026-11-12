@@ -30,6 +30,7 @@ import {
   parseLoyaltyQueryParams,
   redactLoyaltyConfigForClient,
   shouldSendStampPushNotification,
+  stripEmoji,
 } from "@/lib/loyalty";
 import {
   decryptLoyaltySecret,
@@ -143,6 +144,9 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     });
     expect(stampText).toContain("สะสมแต้มสำเร็จ +3 แต้ม");
     expect(stampText).toContain("7 / 10 แต้ม");
+    expect(stampText).not.toContain("🐔");
+    expect(stampText).not.toContain("🎉");
+    expect(stripEmoji("GaiTomNamPla 🐔")).toBe("GaiTomNamPla");
 
     const stampFlex = buildStampAwardFlexMessage({
       cardTitle: "GaiTomNamPla 🐔",
@@ -156,6 +160,9 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
       cardUrl: "https://kaikai.vercel.app/loyalty?s=abc",
     });
     expect(stampFlex.type).toBe("flex");
+    expect(JSON.stringify(stampFlex)).not.toContain("🐔");
+    expect(JSON.stringify(stampFlex)).not.toContain("🎉");
+    expect(JSON.stringify(stampFlex)).toContain("#FCE254");
 
     const redeemText = buildCouponRedeemPlainText({
       cardTitle: "GaiTomNamPla 🐔",

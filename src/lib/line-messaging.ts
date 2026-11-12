@@ -5,6 +5,7 @@ import {
   getLoyaltyServerKeyHash,
 } from "@/lib/loyalty-crypto";
 import {
+  DEFAULT_LOYALTY_CARD_TITLE,
   type LoyaltyNotifyMode,
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
@@ -420,7 +421,7 @@ export async function fetchShopLoyaltyServerCredentials(
     credentialsLocked: false,
     liffId: "",
     notifyMode: "all",
-    cardTitle: "GaiTomNamPla 🐔",
+    cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
     rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
     stampsPerReward: 10,
   };
@@ -458,7 +459,7 @@ export async function fetchShopLoyaltyServerCredentials(
       credentialsLocked: Boolean(raw.credentialsLocked),
       liffId: String(raw.liffId ?? "").trim(),
       notifyMode: rawMode === "reward_only" || rawMode === "off" ? rawMode : "all",
-      cardTitle: String(raw.cardTitle ?? "GaiTomNamPla 🐔"),
+      cardTitle: String(raw.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE),
       rewardTitle: String(raw.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
       stampsPerReward: Number(raw.stampsPerReward ?? 10),
     };
@@ -538,7 +539,7 @@ function resolvePushJobMessages(
   // Hydrate Flex Message from atomic SQL outbox metadata (`autoBuild: true`)
   if (job.messages && typeof job.messages === "object" && !Array.isArray(job.messages)) {
     const meta = job.messages as Record<string, unknown>;
-    const cardTitle = String(meta.cardTitle ?? "GaiTomNamPla 🐔");
+    const cardTitle = String(meta.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE);
     const rewardTitle = String(meta.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
     const displayName = String(meta.displayName ?? "ลูกค้า LINE");
 

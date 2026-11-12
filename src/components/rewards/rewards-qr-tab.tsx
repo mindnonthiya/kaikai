@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { Check, Copy, Download, RefreshCw } from "lucide-react";
-import { LOYALTY_POINT_TIERS, type LoyaltyConfig, buildLoyaltyClaimUrl } from "@/lib/loyalty";
+import {
+  LOYALTY_POINT_TIERS,
+  type LoyaltyConfig,
+  buildLoyaltyClaimUrl,
+  stripEmoji,
+} from "@/lib/loyalty";
 import { generateQrMatrix, qrMatrixToSvgPath } from "@/lib/qr-code";
 
 export function RewardsQrTab({
@@ -53,38 +58,65 @@ export function RewardsQrTab({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    ctx.fillStyle = "#E62134";
+    const cleanShopTitle = stripEmoji(config.cardTitle || shopName) || shopName;
+    const cleanReward = stripEmoji(config.rewardTitle);
+
+    // Outer Rich Menu Coral Background
+    ctx.fillStyle = "#FA5B5A";
     ctx.fillRect(0, 0, width, height);
 
-    ctx.fillStyle = "#FFFFFF";
+    // Inner Card Panel (#FCE254 top + #FFFDF7 body with #2E231E Espresso border)
+    ctx.fillStyle = "#FFFDF7";
+    ctx.strokeStyle = "#2E231E";
+    ctx.lineWidth = 8;
     ctx.beginPath();
-    ctx.roundRect(54, 54, width - 108, height - 108, 36);
+    ctx.roundRect(54, 54, width - 108, height - 108, 40);
     ctx.fill();
+    ctx.stroke();
 
-    ctx.fillStyle = "#E62134";
+    // Butter-Yellow Top Header Band inside Card
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(58, 58, width - 116, 250, [36, 36, 0, 0]);
+    ctx.fillStyle = "#FCE254";
+    ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = "#2E231E";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(56, 308);
+    ctx.lineTo(width - 56, 308);
+    ctx.stroke();
+
+    ctx.fillStyle = "#2E231E";
     ctx.font = "800 44px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(config.cardTitle || shopName, width / 2, 145);
+    ctx.fillText(cleanShopTitle, width / 2, 138);
 
-    ctx.fillStyle = "#111827";
-    ctx.font = "700 34px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
-    ctx.fillText(`คิวอาร์โค้ดสะสมแต้มสำหรับ ${points} กล่อง`, width / 2, 205);
+    ctx.fillStyle = "#5C4738";
+    ctx.font = "700 32px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
+    ctx.fillText(`คิวอาร์โค้ดสะสมแต้มสำหรับ ${points} กล่อง`, width / 2, 194);
 
-    ctx.fillStyle = "#1FC879";
-    ctx.beginPath();
-    ctx.roundRect(width / 2 - 170, 230, 340, 62, 31);
-    ctx.fill();
-
+    // Crisp White Pill Badge with Espresso Border (matches Rich Menu pill labels)
     ctx.fillStyle = "#FFFFFF";
-    ctx.font = "800 32px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
-    ctx.fillText(`สแกนรับทันที +${points} แต้ม`, width / 2, 272);
+    ctx.strokeStyle = "#2E231E";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.roundRect(width / 2 - 175, 220, 350, 62, 31);
+    ctx.fill();
+    ctx.stroke();
 
-    const qrBoxSize = 600;
+    ctx.fillStyle = "#2E231E";
+    ctx.font = "800 30px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
+    ctx.fillText(`สแกนรับ +${points} แต้ม`, width / 2, 261);
+
+    const qrBoxSize = 570;
     const qrStartX = (width - qrBoxSize) / 2;
-    const qrStartY = 330;
+    const qrStartY = 345;
     const modulePx = qrBoxSize / qrSize;
 
-    ctx.fillStyle = "#111111";
+    ctx.fillStyle = "#2E231E";
     for (let r = 0; r < qrSize; r += 1) {
       for (let c = 0; c < qrSize; c += 1) {
         if (matrix[r][c]) {
@@ -98,17 +130,17 @@ export function RewardsQrTab({
       }
     }
 
-    ctx.fillStyle = "#4B5563";
-    ctx.font = "600 26px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
+    ctx.fillStyle = "#2E231E";
+    ctx.font = "700 26px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
     ctx.fillText(
-      `สะสมครบ ${config.stampsPerReward} แต้ม รับสิทธิ์ “${config.rewardTitle}”`,
+      `สะสมครบ ${config.stampsPerReward} แต้ม รับสิทธิ์ “${cleanReward}”`,
       width / 2,
-      985,
+      978,
     );
 
-    ctx.fillStyle = "#9CA3AF";
+    ctx.fillStyle = "#6B574C";
     ctx.font = "500 22px -apple-system, BlinkMacSystemFont, 'Noto Sans Thai', sans-serif";
-    ctx.fillText("สแกนผ่านกล้อง LINE เพื่อรับแต้มและแจ้งเตือนในแชทอัตโนมัติ", width / 2, 1025);
+    ctx.fillText("สแกนผ่านกล้อง LINE เพื่อรับแต้มสะสม", width / 2, 1020);
 
     const dataUrl = canvas.toDataURL("image/png");
     const link = document.createElement("a");

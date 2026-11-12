@@ -4,12 +4,19 @@ export const LINE_LOYALTY_SETTINGS_KEY = LOYALTY_SETTINGS_KEY;
 export const LOYALTY_POINT_TIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 export const LOYALTY_ADMIN_PAGE_SIZE = 20;
 
-export const DEFAULT_LOYALTY_CARD_TITLE = "GaiTomNamPla 🐔";
+export const DEFAULT_LOYALTY_CARD_TITLE = "GaiTomNamPla";
 export const DEFAULT_LOYALTY_CARD_HEADLINE = "สะสม 10 กล่อง ลด 50%";
 export const DEFAULT_LOYALTY_REWARD_TITLE = "ลด 50% เมนูหลัก 1 กล่อง";
 export const DEFAULT_LOYALTY_STAMPS_PER_REWARD = 10;
 export const DEFAULT_LOYALTY_VALIDITY_MONTHS = 3;
 export const DEFAULT_LOYALTY_COOLDOWN_MINUTES = 5;
+
+export function stripEmoji(value: string): string {
+  return String(value ?? "")
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D]/gu, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 export const DEFAULT_LOYALTY_RULES_TEXT = [
   "- ซื้อเมนูหลัก 1 กล่อง รับ 1 แต้ม (ข้าวไก่ / กับข้าว)",
@@ -445,20 +452,23 @@ export function buildStampAwardPlainText(input: {
   rewardsUnlocked: number;
   validTill: string;
 }): string {
+  const cleanTitle = stripEmoji(input.cardTitle) || DEFAULT_LOYALTY_CARD_TITLE;
+  const cleanReward = stripEmoji(input.rewardTitle) || DEFAULT_LOYALTY_REWARD_TITLE;
+  const cleanName = stripEmoji(input.displayName) || "ลูกค้า LINE";
   const remaining = Math.max(0, input.stampsPerReward - input.newStamps);
   const lines = [
-    `🐔 ${input.cardTitle}`,
+    `[${cleanTitle}]`,
     input.pointsAdded > 0
-      ? `✅ สะสมแต้มสำเร็จ +${input.pointsAdded} แต้ม (${input.displayName})`
-      : `📋 ข้อมูลบัตรสะสมแต้ม (${input.displayName})`,
-    `⭐ แต้มปัจจุบัน: ${input.newStamps} / ${input.stampsPerReward} แต้ม`,
+      ? `สะสมแต้มสำเร็จ +${input.pointsAdded} แต้ม (${cleanName})`
+      : `ข้อมูลบัตรสะสมแต้ม (${cleanName})`,
+    `แต้มสะสมปัจจุบัน: ${input.newStamps} / ${input.stampsPerReward} แต้ม`,
   ];
   if (input.rewardsUnlocked > 0) {
-    lines.push(`🎉 ครบ ${input.stampsPerReward} แต้ม! ได้รับคูปอง “${input.rewardTitle}” +${input.rewardsUnlocked} ใบ`);
+    lines.push(`ครบ ${input.stampsPerReward} แต้ม ได้รับคูปอง “${cleanReward}” จำนวน ${input.rewardsUnlocked} ใบ`);
   } else {
-    lines.push(`📌 สะสมอีก ${remaining} แต้ม รับสิทธิ์ “${input.rewardTitle}”`);
+    lines.push(`สะสมอีก ${remaining} แต้ม รับสิทธิ์ “${cleanReward}”`);
   }
-  lines.push(`📅 บัตรหมดอายุ: ${input.validTill}`);
+  lines.push(`แต้มใช้ได้ถึง ${input.validTill}`);
   return lines.join("\n");
 }
 
@@ -473,15 +483,27 @@ export function buildStampAwardFlexMessage(input: {
   validTill: string;
   cardUrl?: string;
 }): Record<string, unknown> {
+  const cleanTitle = stripEmoji(input.cardTitle) || DEFAULT_LOYALTY_CARD_TITLE;
+  const cleanReward = stripEmoji(input.rewardTitle) || DEFAULT_LOYALTY_REWARD_TITLE;
+  const cleanName = stripEmoji(input.displayName) || "ลูกค้า LINE";
   const remaining = Math.max(0, input.stampsPerReward - input.newStamps);
   const progressPercent = Math.min(
     100,
     Math.max(8, Math.round((input.newStamps / Math.max(1, input.stampsPerReward)) * 100)),
   );
 
-  const headerSubtitle =
+  const badgeText =
+    input.pointsAdded > 0 ? `+${input.pointsAdded} แต้ม` : "บัตรสะสมแต้ม";
+  const headerTitle =
+    input.rewardsUnlocked > 0
+      ? "ได้รับคูปองส่วนลดใหม่"
+      : input.pointsAdded > 0
+        ? "สะสมแต้มสำเร็จ"
+        : "บัตรสะสมแต้มของคุณ";
+
+  const altSubtitle =
     input.pointsAdded > 0
-      ? `สะสมแต้มสำเร็จ +${input.pointsAdded} แต้ม!`
+      ? `สะสมแต้มสำเร็จ +${input.pointsAdded} แต้ม`
       : `แต้มสะสมปัจจุบัน ${input.newStamps}/${input.stampsPerReward} แต้ม`;
 
   const contents: Record<string, unknown> = {
@@ -490,80 +512,143 @@ export function buildStampAwardFlexMessage(input: {
     header: {
       type: "box",
       layout: "vertical",
-      backgroundColor: "#E62134",
-      paddingAll: "16px",
+      backgroundColor: "#FCE254",
+      paddingAll: "18px",
       contents: [
         {
-          type: "text",
-          text: input.cardTitle,
-          color: "#FFFFFF",
-          weight: "bold",
-          size: "md",
+          type: "box",
+          layout: "horizontal",
+          alignItems: "center",
+          justifyContent: "space-between",
+          contents: [
+            {
+              type: "text",
+              text: cleanTitle,
+              color: "#5C4738",
+              weight: "bold",
+              size: "xs",
+              flex: 1,
+            },
+            {
+              type: "box",
+              layout: "vertical",
+              backgroundColor: "#FFFFFF",
+              cornerRadius: "20px",
+              paddingStart: "10px",
+              paddingEnd: "10px",
+              paddingTop: "4px",
+              paddingBottom: "4px",
+              flex: 0,
+              contents: [
+                {
+                  type: "text",
+                  text: badgeText,
+                  color: input.pointsAdded > 0 ? "#FA5B5A" : "#2E231E",
+                  weight: "bold",
+                  size: "xs",
+                  align: "center",
+                },
+              ],
+            },
+          ],
         },
         {
           type: "text",
-          text: headerSubtitle,
-          color: "#FFFFFF",
+          text: headerTitle,
+          color: "#2E231E",
           weight: "bold",
           size: "xl",
-          margin: "xs",
+          margin: "sm",
         },
       ],
     },
     body: {
       type: "box",
       layout: "vertical",
+      backgroundColor: "#FFFDF7",
       spacing: "md",
-      paddingAll: "16px",
+      paddingAll: "18px",
       contents: [
         {
           type: "box",
-          layout: "baseline",
+          layout: "vertical",
+          backgroundColor: "#FFF7D6",
+          cornerRadius: "14px",
+          paddingAll: "14px",
+          spacing: "sm",
+          contents: [
+            {
+              type: "box",
+              layout: "baseline",
+              justifyContent: "space-between",
+              contents: [
+                {
+                  type: "text",
+                  text: "แต้มสะสมปัจจุบัน",
+                  size: "xs",
+                  weight: "bold",
+                  color: "#6B574C",
+                },
+                {
+                  type: "text",
+                  text: `${input.newStamps} / ${input.stampsPerReward} แต้ม`,
+                  size: "xl",
+                  weight: "bold",
+                  color: "#2E231E",
+                },
+              ],
+            },
+            {
+              type: "box",
+              layout: "vertical",
+              backgroundColor: "#EADBB3",
+              height: "10px",
+              cornerRadius: "5px",
+              contents: [
+                {
+                  type: "box",
+                  layout: "vertical",
+                  backgroundColor: input.rewardsUnlocked > 0 ? "#10B981" : "#FA5B5A",
+                  height: "10px",
+                  cornerRadius: "5px",
+                  width: `${progressPercent}%`,
+                  contents: [],
+                },
+              ],
+            },
+            {
+              type: "text",
+              text:
+                input.rewardsUnlocked > 0
+                  ? `ได้รับคูปอง “${cleanReward}” จำนวน ${input.rewardsUnlocked} ใบ กดเปิดบัตรเพื่อใช้สิทธิ์`
+                  : `สะสมอีก ${remaining} แต้ม รับสิทธิ์ “${cleanReward}”`,
+              wrap: true,
+              size: "xs",
+              color: input.rewardsUnlocked > 0 ? "#065F46" : "#5C4738",
+              weight: input.rewardsUnlocked > 0 ? "bold" : "regular",
+            },
+          ],
+        },
+        {
+          type: "box",
+          layout: "horizontal",
           justifyContent: "space-between",
           contents: [
             {
               type: "text",
-              text: `ลูกค้า: ${input.displayName}`,
-              size: "sm",
-              color: "#555555",
+              text: `สมาชิก: ${cleanName}`,
+              size: "xs",
+              color: "#8A7569",
+              flex: 1,
             },
             {
               type: "text",
-              text: `${input.newStamps} / ${input.stampsPerReward} แต้ม`,
-              size: "lg",
-              weight: "bold",
-              color: "#E62134",
+              text: `แต้มใช้ได้ถึง ${input.validTill}`,
+              size: "xs",
+              color: "#8A7569",
+              align: "end",
             },
           ],
-        },
-        {
-          type: "box",
-          layout: "vertical",
-          backgroundColor: "#F3D3D6",
-          height: "10px",
-          cornerRadius: "5px",
-          contents: [
-            {
-              type: "box",
-              layout: "vertical",
-              backgroundColor: "#E62134",
-              height: "10px",
-              cornerRadius: "5px",
-              width: `${progressPercent}%`,
-              contents: [],
-            },
-          ],
-        },
-        {
-          type: "text",
-          text:
-            input.rewardsUnlocked > 0
-              ? `🎉 ได้รับคูปอง “${input.rewardTitle}” เพิ่ม +${input.rewardsUnlocked} ใบ! กดเปิดบัตรเพื่อใช้คูปองได้ทันที`
-              : `อีก ${remaining} แต้ม รับสิทธิ์ “${input.rewardTitle}” (Valid till ${input.validTill})`,
-          wrap: true,
-          size: "sm",
-          color: input.rewardsUnlocked > 0 ? "#065f46" : "#444444",
-          weight: input.rewardsUnlocked > 0 ? "bold" : "regular",
         },
       ],
     },
@@ -572,16 +657,18 @@ export function buildStampAwardFlexMessage(input: {
           footer: {
             type: "box",
             layout: "vertical",
-            paddingAll: "12px",
+            backgroundColor: "#FFFDF7",
+            paddingAll: "14px",
+            paddingTop: "0px",
             contents: [
               {
                 type: "button",
                 style: "primary",
-                color: "#E62134",
+                color: "#2E231E",
                 height: "sm",
                 action: {
                   type: "uri",
-                  label: "เปิดดูบัตรสะสมแต้ม / ใช้คูปอง",
+                  label: "เปิดบัตรสะสมแต้ม",
                   uri: input.cardUrl,
                 },
               },
@@ -593,7 +680,7 @@ export function buildStampAwardFlexMessage(input: {
 
   return {
     type: "flex",
-    altText: `${input.cardTitle}: ${headerSubtitle} (ตอนนี้มี ${input.newStamps}/${input.stampsPerReward} แต้ม)`,
+    altText: `${cleanTitle}: ${altSubtitle} (ตอนนี้มี ${input.newStamps}/${input.stampsPerReward} แต้ม)`,
     contents,
   };
 }
@@ -605,11 +692,14 @@ export function buildCouponRedeemPlainText(input: {
   displayName: string;
   claimedAtText: string;
 }): string {
+  const cleanTitle = stripEmoji(input.cardTitle) || DEFAULT_LOYALTY_CARD_TITLE;
+  const cleanReward = stripEmoji(input.rewardTitle) || DEFAULT_LOYALTY_REWARD_TITLE;
+  const cleanName = stripEmoji(input.displayName) || "ลูกค้า LINE";
   return [
-    `🎟️ ${input.cardTitle} — ใช้คูปองส่วนลดสำเร็จ!`,
-    `รายการ: ${input.rewardTitle}`,
+    `[${cleanTitle}] ยืนยันการใช้คูปองส่วนลด`,
+    `รายการ: ${cleanReward}`,
     `รหัสอ้างอิง: #${input.couponCode}`,
-    `ลูกค้า: ${input.displayName}`,
+    `สมาชิก: ${cleanName}`,
     `เวลาที่ใช้สิทธิ์: ${input.claimedAtText}`,
   ].join("\n");
 }
@@ -621,60 +711,118 @@ export function buildCouponRedeemFlexMessage(input: {
   displayName: string;
   claimedAtText: string;
 }): Record<string, unknown> {
+  const cleanTitle = stripEmoji(input.cardTitle) || DEFAULT_LOYALTY_CARD_TITLE;
+  const cleanReward = stripEmoji(input.rewardTitle) || DEFAULT_LOYALTY_REWARD_TITLE;
+  const cleanName = stripEmoji(input.displayName) || "ลูกค้า LINE";
   return {
     type: "flex",
-    altText: `ใช้คูปองส่วนลดสำเร็จ: ${input.rewardTitle} (#${input.couponCode})`,
+    altText: `ยืนยันการใช้คูปองส่วนลด: ${cleanReward} (#${input.couponCode})`,
     contents: {
       type: "bubble",
       size: "mega",
       header: {
         type: "box",
         layout: "vertical",
-        backgroundColor: "#1FC879",
-        paddingAll: "16px",
+        backgroundColor: "#FCE254",
+        paddingAll: "18px",
         contents: [
           {
-            type: "text",
-            text: `${input.cardTitle} · ใช้สิทธิ์คูปองแล้ว`,
-            color: "#FFFFFF",
-            weight: "bold",
-            size: "sm",
+            type: "box",
+            layout: "horizontal",
+            alignItems: "center",
+            justifyContent: "space-between",
+            contents: [
+              {
+                type: "text",
+                text: cleanTitle,
+                color: "#5C4738",
+                weight: "bold",
+                size: "xs",
+                flex: 1,
+              },
+              {
+                type: "box",
+                layout: "vertical",
+                backgroundColor: "#10B981",
+                cornerRadius: "20px",
+                paddingStart: "10px",
+                paddingEnd: "10px",
+                paddingTop: "4px",
+                paddingBottom: "4px",
+                flex: 0,
+                contents: [
+                  {
+                    type: "text",
+                    text: "ใช้คูปองแล้ว",
+                    color: "#FFFFFF",
+                    weight: "bold",
+                    size: "xxs",
+                    align: "center",
+                  },
+                ],
+              },
+            ],
           },
           {
             type: "text",
-            text: input.rewardTitle,
-            color: "#FFFFFF",
+            text: "ยืนยันการใช้สิทธิ์ส่วนลด",
+            color: "#2E231E",
             weight: "bold",
             size: "lg",
-            margin: "xs",
-            wrap: true,
+            margin: "sm",
           },
         ],
       },
       body: {
         type: "box",
         layout: "vertical",
-        spacing: "sm",
-        paddingAll: "16px",
+        backgroundColor: "#FFFDF7",
+        spacing: "md",
+        paddingAll: "18px",
         contents: [
           {
-            type: "text",
-            text: `รหัสคูปอง: #${input.couponCode}`,
-            weight: "bold",
-            size: "md",
-            color: "#E62134",
+            type: "box",
+            layout: "vertical",
+            backgroundColor: "#FFF7D6",
+            cornerRadius: "14px",
+            paddingAll: "14px",
+            spacing: "xs",
+            contents: [
+              {
+                type: "text",
+                text: cleanReward,
+                weight: "bold",
+                size: "md",
+                color: "#2E231E",
+                wrap: true,
+              },
+              {
+                type: "text",
+                text: `รหัสคูปอง #${input.couponCode}`,
+                weight: "bold",
+                size: "sm",
+                color: "#FA5B5A",
+              },
+            ],
           },
           {
-            type: "text",
-            text: `ลูกค้า: ${input.displayName}`,
-            size: "sm",
-            color: "#333333",
-          },
-          {
-            type: "text",
-            text: `กดใช้เมื่อ: ${input.claimedAtText}`,
-            size: "xs",
-            color: "#666666",
+            type: "box",
+            layout: "vertical",
+            spacing: "xs",
+            contents: [
+              {
+                type: "text",
+                text: `สมาชิก: ${cleanName}`,
+                size: "xs",
+                color: "#6B574C",
+              },
+              {
+                type: "text",
+                text: `เวลาที่ใช้สิทธิ์: ${input.claimedAtText}`,
+                size: "xs",
+                color: "#8A7569",
+              },
+            ],
           },
         ],
       },

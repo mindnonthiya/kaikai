@@ -7,6 +7,7 @@ import {
   verifyLineLiffAccessToken,
 } from "@/lib/line-messaging";
 import {
+  DEFAULT_LOYALTY_CARD_TITLE,
   type LoyaltyNotifyMode,
   buildLoyaltyCardUrl,
   buildStampAwardFlexMessage,
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
       const validTill = formatValidTillDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
       const cardUrl = buildLoyaltyCardUrl(trustedOrigin, shopSecret, "");
       const flexMessage = buildStampAwardFlexMessage({
-        cardTitle: "GaiTomNamPla 🐔",
+        cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         displayName: clientDisplayName,
         pointsAdded: points,
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
         cardUrl,
       });
       const plainText = buildStampAwardPlainText({
-        cardTitle: "GaiTomNamPla 🐔",
+        cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
         rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
         displayName: clientDisplayName,
         pointsAdded: points,
@@ -180,7 +181,7 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status });
     }
 
-    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? "GaiTomNamPla 🐔");
+    const cardTitle = String(result.cardTitle ?? creds.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE);
     const rewardTitle = String(result.rewardTitle ?? creds.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง");
     const pointsAdded = Number(result.pointsAdded ?? points);
     const newStamps = Number(result.newStamps ?? 0);

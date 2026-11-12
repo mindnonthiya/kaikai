@@ -4,11 +4,11 @@ import {
   type InitialLoyaltyCardConfig,
 } from "@/app/loyalty/loyalty-stamp-card-client";
 import { hasSupabaseEnv } from "@/lib/env";
-import { DEFAULT_LOYALTY_RULES_TEXT, parseLoyaltyQueryParams } from "@/lib/loyalty";
+import { DEFAULT_LOYALTY_CARD_TITLE, DEFAULT_LOYALTY_RULES_TEXT, parseLoyaltyQueryParams, stripEmoji } from "@/lib/loyalty";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
-  title: "GaiTomNamPla 🐔 — บัตรสะสมแต้ม LINE Stamp Card",
+  title: "บัตรสะสมแต้มสมาชิก",
   description: "สะสมแต้มและแลกรับส่วนลด 50% เมนูหลัก 1 กล่อง",
 };
 
@@ -45,7 +45,7 @@ export default async function LoyaltyPage({ searchParams }: LoyaltyPageProps) {
       if (res.ok && res.config && typeof res.config === "object") {
         const cfg = res.config as Record<string, unknown>;
         initialConfig = {
-          cardTitle: String(cfg.cardTitle ?? "GaiTomNamPla 🐔"),
+          cardTitle: stripEmoji(String(cfg.cardTitle ?? DEFAULT_LOYALTY_CARD_TITLE)) || DEFAULT_LOYALTY_CARD_TITLE,
           cardHeadline: String(cfg.cardHeadline ?? "สะสม 10 กล่อง ลด 50%"),
           rewardTitle: String(cfg.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
           stampsPerReward: Math.max(1, Number(cfg.stampsPerReward ?? 10)),

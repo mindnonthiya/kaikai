@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { verifyLineLiffAccessToken } from "@/lib/line-messaging";
-import { DEFAULT_LOYALTY_RULES_TEXT, formatValidTillDate } from "@/lib/loyalty";
+import {
+  DEFAULT_LOYALTY_CARD_TITLE,
+  DEFAULT_LOYALTY_RULES_TEXT,
+  formatValidTillDate,
+} from "@/lib/loyalty";
 import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -79,7 +83,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         ok: true,
         config: {
-          cardTitle: "GaiTomNamPla 🐔",
+          cardTitle: DEFAULT_LOYALTY_CARD_TITLE,
           cardHeadline: "สะสม 10 กล่อง ลด 50%",
           rewardTitle: "ลด 50% เมนูหลัก 1 กล่อง",
           stampsPerReward: 10,

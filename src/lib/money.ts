@@ -121,6 +121,52 @@ export function customerAmountDue(sale: { productRevenue: number; discount: numb
   return satang(sale.productRevenue - sale.discount + sale.delivery + (sale.tip ?? 0));
 }
 
+/**
+ * Computes a 50% discount on 1 box of the lowest-priced main dish in the cart.
+ * Falls back to the lowest-priced active item if no item is marked as a main dish.
+ */
+export function computeHalfPriceMainDishDiscountSatang(
+  items: Array<{ unitPriceSatang: number; quantity: number; isMainDish?: boolean }>,
+): { discountSatang: Satang; targetUnitPriceSatang: number } {
+  const active = items.filter((item) => item.quantity > 0 && item.unitPriceSatang > 0);
+  if (active.length === 0) {
+    return { discountSatang: satang(0), targetUnitPriceSatang: 0 };
+  }
+  const mainDishes = active.filter((item) => item.isMainDish !== false);
+  const pool = mainDishes.length > 0 ? mainDishes : active;
+  const minUnitPrice = Math.min(...pool.map((item) => item.unitPriceSatang));
+  return {
+    discountSatang: satang(Math.round(minUnitPrice * 0.5)),
+    targetUnitPriceSatang: minUnitPrice,
+  };
+}
+
+/**
+ * Reconciles an attached transfer slip amount against selected menu items + delivery fee.
+ * - When slip >= food + delivery: difference is treated as `tipSatang`.
+ * - When slip < food + delivery (and difference <= food): difference is treated as `discountSatang`.
+ */
+export function reconcileSlipAmountWithOrder(params: {
+  slipAmountSatang: number;
+  foodRevenueSatang: number;
+  deliveryChargedSatang: number;
+}): { discountSatang: Satang; tipSatang: Satang } {
+  const { slipAmountSatang, foodRevenueSatang, deliveryChargedSatang } = params;
+  if (slipAmountSatang <= 0 || foodRevenueSatang <= 0) {
+    return { discountSatang: satang(0), tipSatang: satang(0) };
+  }
+  const fullTotal = foodRevenueSatang + Math.max(0, deliveryChargedSatang);
+  const diff = slipAmountSatang - fullTotal;
+  if (diff >= 0) {
+    return { discountSatang: satang(0), tipSatang: satang(diff) };
+  }
+  const neededDiscount = Math.abs(diff);
+  if (neededDiscount <= foodRevenueSatang) {
+    return { discountSatang: satang(neededDiscount), tipSatang: satang(0) };
+  }
+  return { discountSatang: satang(0), tipSatang: satang(0) };
+}
+
 /** Exact largest-remainder allocation in whole satang, with stable tie breaking. */
 export function allocateSatang(total: number, weights: number[]): number[] {
   assertSafeInteger(total, "ยอดแบ่ง");
