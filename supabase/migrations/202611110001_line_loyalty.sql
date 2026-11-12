@@ -161,10 +161,13 @@ where m.owner_id = s.owner_id
 
 -- Drop any older function signatures before recreating
 drop function if exists public.get_loyalty_card_state(text, text, text, text);
+drop function if exists public.get_loyalty_card_state(text, text, text, text, text, text);
 drop function if exists public.claim_loyalty_stamps(text, text, text, text, text, text);
 drop function if exists public.claim_loyalty_stamps(text, integer, text, text, text, text);
+drop function if exists public.claim_loyalty_stamps(text, integer, text, text, text, text, text, text);
 drop function if exists public.redeem_loyalty_coupon(text, text, uuid);
 drop function if exists public.redeem_loyalty_coupon(text, uuid, text, text);
+drop function if exists public.redeem_loyalty_coupon(text, uuid, text, text, text, text);
 drop function if exists public.get_loyalty_webhook_context(text, text);
 drop function if exists public.get_loyalty_webhook_context(text);
 drop function if exists public.get_loyalty_server_credentials(text, text);
@@ -210,16 +213,19 @@ begin
 end;
 $$;
 
--- 1. Public RPC: Get Loyalty Card State & Member Progress
+-- 1. Server-Authenticated RPC: Get Loyalty Card State & Member Progress
+--    - Requires valid serverKeyHash from Next.js server (blocks direct public PostgREST bypass)
 --    - NEVER returns channelAccessToken or channelSecret
 --    - When p_line_user_id is null/empty (config-only), returns member: null without creating rows or showing fake 0 stamps
 --    - When shop has liffId configured, rejects non-LINE ('web_...') user IDs so junk members are never created
 --    - Avoids unnecessary row UPDATE when existing member's name/picture have not changed
 create or replace function public.get_loyalty_card_state(
   p_shop_secret text,
-  p_line_user_id text default null,
-  p_display_name text default null,
-  p_picture_url text default null
+  p_line_user_id text,
+  p_display_name text,
+  p_picture_url text,
+  p_server_key_hash text,
+  p_legacy_key_hash text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -229,6 +235,7 @@ declare
   v_owner_id uuid;
   v_setting_key text;
   v_config jsonb;
+  v_stored_hash text;
   v_shop_scope_id text;
   v_validity_months integer;
   v_stamps_per_reward integer;
@@ -250,6 +257,14 @@ begin
     );
   end if;
 
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
+    );
+  end if;
+
   select s.owner_id, s.key, s.value
     into v_owner_id, v_setting_key, v_config
   from public.settings s
@@ -262,6 +277,22 @@ begin
       'ok', false,
       'code', 'SHOP_NOT_FOUND',
       'message', 'ยังไม่ได้บันทึกเปิดใช้งานบัตรสะสมแต้มสำหรับร้านนี้ กรุณากดบันทึกในหน้าตั้งค่าก่อน'
+    );
+  end if;
+
+  v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
     );
   end if;
 
@@ -405,15 +436,17 @@ begin
 end;
 $$;
 
--- 2. Public RPC: Atomically Claim Stamps from a Static 1..10 Box QR Code
---    NEVER returns channelAccessToken or channelSecret; returns config + updated member + coupons in single round-trip.
+-- 2. Server-Authenticated RPC: Atomically Claim Stamps from a Static 1..10 Box QR Code
+--    Requires valid serverKeyHash from Next.js server; NEVER returns channelAccessToken or channelSecret.
 create or replace function public.claim_loyalty_stamps(
   p_shop_secret text,
   p_points integer,
   p_token text,
   p_line_user_id text,
-  p_display_name text default null,
-  p_picture_url text default null
+  p_display_name text,
+  p_picture_url text,
+  p_server_key_hash text,
+  p_legacy_key_hash text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -423,6 +456,7 @@ declare
   v_owner_id uuid;
   v_setting_key text;
   v_config jsonb;
+  v_stored_hash text;
   v_shop_scope_id text;
   v_expected_token text;
   v_validity_months integer;
@@ -455,6 +489,14 @@ begin
     );
   end if;
 
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
+    );
+  end if;
+
   select s.owner_id, s.key, s.value
     into v_owner_id, v_setting_key, v_config
   from public.settings s
@@ -467,6 +509,22 @@ begin
       'ok', false,
       'code', 'SHOP_NOT_FOUND',
       'message', 'ไม่พบข้อมูลบัตรสะสมแต้มของร้านนี้'
+    );
+  end if;
+
+  v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
     );
   end if;
 
@@ -669,9 +727,6 @@ begin
     returning id into v_push_job_id;
   end if;
 
-  -- Run housekeeping (14-day push queue & 180-day logs cleanup) regardless of whether push mode is on or off
-  perform public.run_loyalty_housekeeping(v_owner_id);
-
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'id', sub.id,
@@ -746,12 +801,14 @@ begin
 end;
 $$;
 
--- 3. Public RPC: Self-Service Coupon Redemption (NEVER returns channelAccessToken or channelSecret)
+-- 3. Server-Authenticated RPC: Self-Service Coupon Redemption (NEVER returns channelAccessToken or channelSecret)
 create or replace function public.redeem_loyalty_coupon(
   p_shop_secret text,
   p_coupon_id uuid,
   p_line_user_id text,
-  p_display_name text default null
+  p_display_name text,
+  p_server_key_hash text,
+  p_legacy_key_hash text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -761,6 +818,7 @@ declare
   v_owner_id uuid;
   v_setting_key text;
   v_config jsonb;
+  v_stored_hash text;
   v_shop_scope_id text;
   v_coupon public.loyalty_coupons%rowtype;
   v_member public.loyalty_members%rowtype;
@@ -773,6 +831,14 @@ declare
   v_card_title text;
   v_resolved_name text;
 begin
+  if p_server_key_hash is null or length(trim(p_server_key_hash)) < 32 then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
+    );
+  end if;
+
   select s.owner_id, s.key, s.value
     into v_owner_id, v_setting_key, v_config
   from public.settings s
@@ -785,6 +851,22 @@ begin
       'ok', false,
       'code', 'SHOP_NOT_FOUND',
       'message', 'ไม่พบข้อมูลร้านสำหรับคูปองนี้'
+    );
+  end if;
+
+  v_stored_hash := trim(coalesce(v_config->>'serverKeyHash', ''));
+  if v_stored_hash = '' or (
+    v_stored_hash <> trim(p_server_key_hash)
+    and (
+      p_legacy_key_hash is null
+      or length(trim(p_legacy_key_hash)) < 32
+      or v_stored_hash <> trim(p_legacy_key_hash)
+    )
+  ) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'UNAUTHORIZED_SERVER_KEY',
+      'message', 'ไม่อนุญาตให้เรียกฐานข้อมูลโดยตรง'
     );
   end if;
 
@@ -885,8 +967,6 @@ begin
       )
       returning id into v_push_job_id;
     end if;
-
-    perform public.run_loyalty_housekeeping(v_owner_id);
   end if;
 
   select coalesce(jsonb_agg(
@@ -1122,8 +1202,6 @@ begin
     now()
   )
   returning id into v_job_id;
-
-  perform public.run_loyalty_housekeeping(v_owner_id);
 
   return jsonb_build_object('ok', true, 'jobId', v_job_id);
 end;
@@ -1643,14 +1721,14 @@ $$;
 revoke all on function public.admin_retry_failed_loyalty_push_jobs(text, uuid) from public;
 grant execute on function public.admin_retry_failed_loyalty_push_jobs(text, uuid) to authenticated;
 
-revoke all on function public.get_loyalty_card_state(text, text, text, text) from public;
-grant execute on function public.get_loyalty_card_state(text, text, text, text) to anon, authenticated;
+revoke all on function public.get_loyalty_card_state(text, text, text, text, text, text) from public;
+grant execute on function public.get_loyalty_card_state(text, text, text, text, text, text) to anon, authenticated;
 
-revoke all on function public.claim_loyalty_stamps(text, integer, text, text, text, text) from public;
-grant execute on function public.claim_loyalty_stamps(text, integer, text, text, text, text) to anon, authenticated;
+revoke all on function public.claim_loyalty_stamps(text, integer, text, text, text, text, text, text) from public;
+grant execute on function public.claim_loyalty_stamps(text, integer, text, text, text, text, text, text) to anon, authenticated;
 
-revoke all on function public.redeem_loyalty_coupon(text, uuid, text, text) from public;
-grant execute on function public.redeem_loyalty_coupon(text, uuid, text, text) to anon, authenticated;
+revoke all on function public.redeem_loyalty_coupon(text, uuid, text, text, text, text) from public;
+grant execute on function public.redeem_loyalty_coupon(text, uuid, text, text, text, text) to anon, authenticated;
 
 revoke all on function public.get_loyalty_server_credentials(text, text, text) from public;
 grant execute on function public.get_loyalty_server_credentials(text, text, text) to anon, authenticated;

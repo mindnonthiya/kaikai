@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient as createStatelessSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { publicEnv } from "@/lib/env";
 
@@ -21,3 +22,20 @@ export async function createClient() {
 }
 
 export const createSupabaseServerClient = createClient;
+
+/**
+ * Stateless server-only Supabase client for Loyalty API routes, webhooks, and background workers.
+ * Uses SUPABASE_SERVICE_ROLE_KEY when configured so RPCs execute under `service_role`,
+ * and never attaches browser user session cookies.
+ */
+export async function createSupabaseServiceClient() {
+  const { url, key } = publicEnv();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return createStatelessSupabaseClient(url, serviceRoleKey || key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}

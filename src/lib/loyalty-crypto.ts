@@ -108,16 +108,42 @@ function deriveAesKey(rawSecret: string): Buffer {
   return createHash("sha256").update(`kaikai:loyalty:aes:${rawSecret}`, "utf8").digest();
 }
 
-export function getLoyaltyServerKeyHash(): string {
+/**
+ * Derives the server-only RPC authentication token.
+ * When `shopSecret` is provided, derives a shop-bound token `SHA256(baseHash + ":" + shopSecret)`
+ * so each shop's RPC token is unique and isolated.
+ */
+export function getLoyaltyServerKeyHash(shopSecret?: string): string {
   const raw = resolvePrimaryLoyaltySecret();
   if (!raw) return "";
-  return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
+  const baseHash = createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
+  const cleanShop = (shopSecret ?? "").trim();
+  if (!cleanShop) return baseHash;
+  return createHash("sha256").update(`${baseHash}:${cleanShop}`, "utf8").digest("hex");
 }
 
-export function getLegacyLoyaltyServerKeyHash(): string {
+export function getLegacyLoyaltyServerKeyHash(shopSecret?: string): string {
   const raw = resolveLegacyV1Secret();
   if (!raw) return "";
-  return createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
+  const baseHash = createHash("sha256").update(`kaikai:loyalty:auth:${raw}`, "utf8").digest("hex");
+  const cleanShop = (shopSecret ?? "").trim();
+  if (!cleanShop) return baseHash;
+  return createHash("sha256").update(`${baseHash}:${cleanShop}`, "utf8").digest("hex");
+}
+
+/**
+ * Computes the one-way SHA-256 verifier stored in settings (`SHA256(getLoyaltyServerKeyHash(shopSecret))`).
+ * Because this is a one-way hash of a per-shop derived token:
+ * 1. Every shop has a distinct verifier (bound to `shopSecret`).
+ * 2. Even if an authenticated user reads their own `settings` row directly from Supabase,
+ *    the stored verifier cannot be passed as `p_server_key_hash` to call any RPC.
+ */
+export function getLoyaltyServerKeyVerifier(shopSecret: string): string {
+  const cleanShop = (shopSecret ?? "").trim();
+  if (!cleanShop) return "";
+  const perShopToken = getLoyaltyServerKeyHash(cleanShop);
+  if (!perShopToken) return "";
+  return createHash("sha256").update(perShopToken, "utf8").digest("hex");
 }
 
 export function isEncryptedLoyaltySecret(value: string): boolean {

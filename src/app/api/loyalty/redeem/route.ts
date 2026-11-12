@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
   enqueueLoyaltyPushNotification,
+  extractLineChannelIdFromLiffId,
   fetchShopLoyaltyServerCredentials,
   processPendingLoyaltyPushJobs,
   verifyLineLiffAccessToken,
@@ -11,9 +12,14 @@ import {
   buildCouponRedeemFlexMessage,
   buildCouponRedeemPlainText,
   formatThaiDateTime,
+  isMissingRpcError,
 } from "@/lib/loyalty";
+import {
+  getLegacyLoyaltyServerKeyHash,
+  getLoyaltyServerKeyHash,
+} from "@/lib/loyalty-crypto";
 import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
   try {
@@ -83,15 +89,22 @@ export async function POST(request: Request) {
       });
     }
 
-    const supabase = await createSupabaseServerClient();
-    const creds = await fetchShopLoyaltyServerCredentials(supabase, shopSecret);
+    const supabase = await createSupabaseServiceClient();
+    const [creds, verification] = await Promise.all([
+      fetchShopLoyaltyServerCredentials(supabase, shopSecret),
+      liffAccessToken ? verifyLineLiffAccessToken(liffAccessToken) : Promise.resolve(null),
+    ]);
 
     let verifiedLineUserId = "";
     let verifiedDisplayName = clientDisplayName;
 
-    if (liffAccessToken) {
-      const verification = await verifyLineLiffAccessToken(liffAccessToken, creds.liffId);
-      if (!verification.ok) {
+    if (liffAccessToken && verification) {
+      const expectedChannelId = extractLineChannelIdFromLiffId(creds.liffId);
+      if (
+        !verification.ok ||
+        !verification.clientId ||
+        (expectedChannelId && verification.clientId !== expectedChannelId)
+      ) {
         return NextResponse.json(
           {
             ok: false,
@@ -125,14 +138,29 @@ export async function POST(request: Request) {
       );
     }
 
+    const primaryHash = getLoyaltyServerKeyHash(shopSecret);
+    const legacyHash = getLegacyLoyaltyServerKeyHash(shopSecret);
+
     const { data, error } = await supabase.rpc("redeem_loyalty_coupon", {
       p_shop_secret: shopSecret,
       p_coupon_id: couponId,
       p_line_user_id: verifiedLineUserId,
       p_display_name: verifiedDisplayName,
+      p_server_key_hash: primaryHash,
+      p_legacy_key_hash: legacyHash,
     });
 
     if (error) {
+      if (isMissingRpcError(error) || String(error.message ?? "").includes("redeem_loyalty_coupon")) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "MIGRATION_REQUIRED",
+            message: "กรุณานำไฟล์ supabase/migrations/202611120001_loyalty_security_hardening.sql ไปรันใน Supabase SQL Editor ก่อนใช้งาน",
+          },
+          { status: 503 },
+        );
+      }
       return NextResponse.json(
         { ok: false, code: "DB_ERROR", message: error.message },
         { status: 500 },
@@ -178,21 +206,21 @@ export async function POST(request: Request) {
         pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
       } else {
         const atomicallyQueued = Boolean(result.pushQueued || result.pushJobId);
-        if (!atomicallyQueued) {
-          await enqueueLoyaltyPushNotification(supabase, {
-            shopSecret,
-            lineUserId: verifiedLineUserId,
-            eventType: "coupon_redeem",
-            messages: [flexMessage],
-            fallbackPlainText: plainText,
-          });
-        }
         queued = true;
         pushReason = "QUEUED_BACKGROUND";
 
         after(async () => {
           try {
-            const bgSupabase = await createSupabaseServerClient();
+            const bgSupabase = await createSupabaseServiceClient();
+            if (!atomicallyQueued) {
+              await enqueueLoyaltyPushNotification(bgSupabase, {
+                shopSecret,
+                lineUserId: verifiedLineUserId,
+                eventType: "coupon_redeem",
+                messages: [flexMessage],
+                fallbackPlainText: plainText,
+              });
+            }
             await processPendingLoyaltyPushJobs(
               bgSupabase,
               shopSecret,

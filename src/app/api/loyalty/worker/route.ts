@@ -3,7 +3,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { processGlobalDueLoyaltyPushJobs } from "@/lib/line-messaging";
 import { hasLoyaltyServerSecret, verifyCronAuthorization } from "@/lib/loyalty-crypto";
 import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 async function handleWorkerRequest(request: Request) {
   const rate = checkLoyaltyRateLimit({
@@ -62,7 +62,7 @@ async function handleWorkerRequest(request: Request) {
   }
 
   try {
-    const supabase = await createSupabaseServerClient();
+    const supabase = await createSupabaseServiceClient();
     const summary = await processGlobalDueLoyaltyPushJobs(supabase, request.url);
     return NextResponse.json(summary);
   } catch (err) {

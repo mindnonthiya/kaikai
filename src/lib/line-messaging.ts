@@ -22,6 +22,7 @@ export interface VerifiedLineProfile {
   userId: string;
   displayName: string;
   pictureUrl: string | null;
+  clientId: string;
 }
 
 export interface FailedLineVerification {
@@ -35,6 +36,10 @@ const verifiedTokenCache = new Map<
   string,
   { profile: VerifiedLineProfile; expiresAtMs: number }
 >();
+
+export function clearVerifiedLineTokenCache(): void {
+  verifiedTokenCache.clear();
+}
 
 export function extractLineChannelIdFromLiffId(liffId?: string | null): string {
   const clean = (liffId ?? "").trim();
@@ -52,26 +57,28 @@ export async function verifyLineLiffAccessToken(
   }
 
   const expectedChannelId = extractLineChannelIdFromLiffId(expectedLiffId);
-  const cacheKey = createHash("sha256")
-    .update(`${expectedChannelId}:${token}`, "utf8")
-    .digest("hex");
+  const cacheKey = createHash("sha256").update(token, "utf8").digest("hex");
 
   const now = Date.now();
   const cached = verifiedTokenCache.get(cacheKey);
   if (cached && cached.expiresAtMs > now) {
-    return cached.profile;
+    if (!cached.profile.clientId) {
+      verifiedTokenCache.delete(cacheKey);
+    } else if (expectedChannelId && cached.profile.clientId !== expectedChannelId) {
+      return { ok: false, reason: "CHANNEL_ID_MISMATCH" };
+    } else {
+      return cached.profile;
+    }
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
 
   try {
-    const verifyPromise = expectedChannelId
-      ? fetch(
-          `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`,
-          { method: "GET", signal: controller.signal, cache: "no-store" },
-        )
-      : Promise.resolve(null);
+    const verifyPromise = fetch(
+      `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`,
+      { method: "GET", signal: controller.signal, cache: "no-store" },
+    );
 
     const profilePromise = fetch("https://api.line.me/v2/profile", {
       method: "GET",
@@ -84,28 +91,31 @@ export async function verifyLineLiffAccessToken(
 
     const [verifyRes, profileRes] = await Promise.all([verifyPromise, profilePromise]);
 
-    if (verifyRes) {
-      if (!verifyRes.ok) {
-        return { ok: false, reason: `LINE_VERIFY_${verifyRes.status}` };
-      }
-      const verifyData = (await verifyRes.json().catch(() => ({}))) as {
-        client_id?: string;
-        expires_in?: number;
-      };
-      if (
-        expectedChannelId &&
-        verifyData.client_id &&
-        String(verifyData.client_id).trim() !== expectedChannelId
-      ) {
-        return { ok: false, reason: "CHANNEL_ID_MISMATCH" };
-      }
-      if (typeof verifyData.expires_in === "number" && verifyData.expires_in <= 0) {
-        return { ok: false, reason: "TOKEN_EXPIRED" };
-      }
+    if (!verifyRes || !verifyRes.ok) {
+      return { ok: false, reason: `LINE_VERIFY_${verifyRes?.status ?? 0}` };
     }
 
-    if (!profileRes.ok) {
-      return { ok: false, reason: `LINE_PROFILE_${profileRes.status}` };
+    const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+      client_id?: string;
+      expires_in?: number;
+    };
+
+    const verifiedClientId = String(verifyData.client_id ?? "").trim();
+    if (!verifiedClientId) {
+      return { ok: false, reason: "MISSING_CLIENT_ID" };
+    }
+
+    const expiresInSeconds = Number(verifyData.expires_in ?? 0);
+    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+      return { ok: false, reason: "TOKEN_EXPIRED" };
+    }
+
+    if (expectedChannelId && verifiedClientId !== expectedChannelId) {
+      return { ok: false, reason: "CHANNEL_ID_MISMATCH" };
+    }
+
+    if (!profileRes || !profileRes.ok) {
+      return { ok: false, reason: `LINE_PROFILE_${profileRes?.status ?? 0}` };
     }
 
     const profileData = (await profileRes.json().catch(() => ({}))) as {
@@ -124,15 +134,19 @@ export async function verifyLineLiffAccessToken(
       userId,
       displayName: String(profileData.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE",
       pictureUrl: profileData.pictureUrl ? String(profileData.pictureUrl).trim() : null,
+      clientId: verifiedClientId,
     };
 
-    if (verifiedTokenCache.size > 300) {
-      verifiedTokenCache.clear();
+    const ttlMs = Math.min(300_000, Math.max(0, Math.floor(expiresInSeconds * 1000) - 5_000));
+    if (ttlMs >= 5_000) {
+      if (verifiedTokenCache.size > 300) {
+        verifiedTokenCache.clear();
+      }
+      verifiedTokenCache.set(cacheKey, {
+        profile: verified,
+        expiresAtMs: now + ttlMs,
+      });
     }
-    verifiedTokenCache.set(cacheKey, {
-      profile: verified,
-      expiresAtMs: now + 60_000,
-    });
 
     return verified;
   } catch (err) {
@@ -406,6 +420,55 @@ export interface DecryptedShopLoyaltyCredentials {
   stampsPerReward: number;
 }
 
+const shopCredentialsCache = new Map<
+  string,
+  { creds: DecryptedShopLoyaltyCredentials; expiresAtMs: number }
+>();
+
+const ssrPublicConfigCache = new Map<
+  string,
+  { config: Record<string, unknown>; expiresAtMs: number }
+>();
+
+export function getCachedSsrLoyaltyConfig<T extends Record<string, unknown>>(
+  shopSecret: string,
+): T | null {
+  const clean = (shopSecret ?? "").trim();
+  if (!clean) return null;
+  const entry = ssrPublicConfigCache.get(clean);
+  if (entry && entry.expiresAtMs > Date.now()) {
+    return entry.config as T;
+  }
+  return null;
+}
+
+export function setCachedSsrLoyaltyConfig(
+  shopSecret: string,
+  config: Record<string, unknown>,
+  ttlMs = 45_000,
+): void {
+  const clean = (shopSecret ?? "").trim();
+  if (!clean) return;
+  if (ssrPublicConfigCache.size > 200) {
+    ssrPublicConfigCache.clear();
+  }
+  ssrPublicConfigCache.set(clean, {
+    config,
+    expiresAtMs: Date.now() + ttlMs,
+  });
+}
+
+export function invalidateShopLoyaltyCredentialsCache(lookupSecret?: string): void {
+  if (!lookupSecret) {
+    shopCredentialsCache.clear();
+    ssrPublicConfigCache.clear();
+    return;
+  }
+  const clean = lookupSecret.trim();
+  shopCredentialsCache.delete(clean);
+  ssrPublicConfigCache.delete(clean);
+}
+
 export async function fetchShopLoyaltyServerCredentials(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: { rpc: (fn: string, args: Record<string, unknown>) => any },
@@ -428,29 +491,25 @@ export async function fetchShopLoyaltyServerCredentials(
 
   if (!cleanSecret) return empty;
 
-  const primaryHash = getLoyaltyServerKeyHash();
-  const legacyHash = getLegacyLoyaltyServerKeyHash();
+  const now = Date.now();
+  const cached = shopCredentialsCache.get(cleanSecret);
+  if (cached && cached.expiresAtMs > now) {
+    return cached.creds;
+  }
 
-  let { data, error } = await supabase.rpc("get_loyalty_server_credentials", {
+  const primaryHash = getLoyaltyServerKeyHash(cleanSecret);
+  const legacyHash = getLegacyLoyaltyServerKeyHash(cleanSecret);
+
+  const { data, error } = await supabase.rpc("get_loyalty_server_credentials", {
     p_lookup_secret: cleanSecret,
     p_server_key_hash: primaryHash,
     p_legacy_key_hash: legacyHash,
   });
 
-  // Fallback if 2-argument signature is still active in DB
-  if (error && (error.code === "PGRST202" || error.code === "42883")) {
-    const retryTwoArg = await supabase.rpc("get_loyalty_server_credentials", {
-      p_lookup_secret: cleanSecret,
-      p_server_key_hash: primaryHash,
-    });
-    data = retryTwoArg.data;
-    error = retryTwoArg.error;
-  }
-
   if (!error && data && (data as Record<string, unknown>).ok) {
     const raw = data as Record<string, unknown>;
     const rawMode = String(raw.notifyMode ?? "all").trim();
-    return {
+    const resolvedCreds: DecryptedShopLoyaltyCredentials = {
       ok: true,
       enabled: Boolean(raw.enabled ?? true),
       shopSecret: String(raw.shopSecret ?? cleanSecret).trim(),
@@ -463,6 +522,14 @@ export async function fetchShopLoyaltyServerCredentials(
       rewardTitle: String(raw.rewardTitle ?? "ลด 50% เมนูหลัก 1 กล่อง"),
       stampsPerReward: Number(raw.stampsPerReward ?? 10),
     };
+    if (shopCredentialsCache.size > 200) {
+      shopCredentialsCache.clear();
+    }
+    shopCredentialsCache.set(cleanSecret, {
+      creds: resolvedCreds,
+      expiresAtMs: now + 45_000,
+    });
+    return resolvedCreds;
   }
 
   return empty;
@@ -497,8 +564,8 @@ export async function enqueueLoyaltyPushNotification(
     fallbackPlainText?: string;
   },
 ): Promise<{ queued: boolean; jobId?: string }> {
-  const primaryHash = getLoyaltyServerKeyHash();
-  const legacyHash = getLegacyLoyaltyServerKeyHash();
+  const primaryHash = getLoyaltyServerKeyHash(params.shopSecret);
+  const legacyHash = getLegacyLoyaltyServerKeyHash(params.shopSecret);
 
   const { data, error } = await supabase.rpc("enqueue_loyalty_push_job", {
     p_shop_secret: params.shopSecret,
@@ -619,8 +686,8 @@ export async function processPendingLoyaltyPushJobs(
   trustedOrigin?: string,
 ): Promise<void> {
   const token = decryptLoyaltySecret(channelAccessToken).trim();
-  const primaryHash = getLoyaltyServerKeyHash();
-  const legacyHash = getLegacyLoyaltyServerKeyHash();
+  const primaryHash = getLoyaltyServerKeyHash(shopSecret);
+  const legacyHash = getLegacyLoyaltyServerKeyHash(shopSecret);
 
   const { data: jobsData, error: jobsErr } = await supabase.rpc(
     "claim_pending_loyalty_push_jobs",
@@ -786,13 +853,16 @@ export async function processGlobalDueLoyaltyPushJobs(
 
     if (!jobId || !shopSecret) continue;
 
+    const jobPrimaryHash = getLoyaltyServerKeyHash(shopSecret);
+    const jobLegacyHash = getLegacyLoyaltyServerKeyHash(shopSecret);
+
     if (!token) {
       failed += 1;
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
-        p_server_key_hash: primaryHash,
-        p_legacy_key_hash: legacyHash,
+        p_server_key_hash: jobPrimaryHash,
+        p_legacy_key_hash: jobLegacyHash,
         p_status: "failed_auth",
         p_error: "MISSING_CHANNEL_ACCESS_TOKEN",
         p_retry_delay_seconds: 0,
@@ -815,8 +885,8 @@ export async function processGlobalDueLoyaltyPushJobs(
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
-        p_server_key_hash: primaryHash,
-        p_legacy_key_hash: legacyHash,
+        p_server_key_hash: jobPrimaryHash,
+        p_legacy_key_hash: jobLegacyHash,
         p_status: "sent",
         p_error: null,
         p_retry_delay_seconds: 0,
@@ -826,8 +896,8 @@ export async function processGlobalDueLoyaltyPushJobs(
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
-        p_server_key_hash: primaryHash,
-        p_legacy_key_hash: legacyHash,
+        p_server_key_hash: jobPrimaryHash,
+        p_legacy_key_hash: jobLegacyHash,
         p_status: "retry",
         p_error: pushRes.reason ?? "TRANSIENT_ERROR",
         p_retry_delay_seconds: computePushRetryBackoffSeconds(attempts),
@@ -837,8 +907,8 @@ export async function processGlobalDueLoyaltyPushJobs(
       await supabase.rpc("complete_loyalty_push_job", {
         p_job_id: jobId,
         p_shop_secret: shopSecret,
-        p_server_key_hash: primaryHash,
-        p_legacy_key_hash: legacyHash,
+        p_server_key_hash: jobPrimaryHash,
+        p_legacy_key_hash: jobLegacyHash,
         p_status: "failed_auth" === classifyPushFailureStatus(pushRes.reason)
           ? "failed_auth"
           : classifyPushFailureStatus(pushRes.reason),
