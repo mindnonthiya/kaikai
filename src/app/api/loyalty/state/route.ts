@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
-import { verifyLineLiffAccessToken } from "@/lib/line-messaging";
+import {
+  extractLineChannelIdFromLiffId,
+  fetchShopLoyaltyServerCredentials,
+  verifyLineLiffAccessToken,
+} from "@/lib/line-messaging";
 import {
   DEFAULT_LOYALTY_CARD_TITLE,
   DEFAULT_LOYALTY_RULES_TEXT,
   formatValidTillDate,
+  isMissingRpcError,
 } from "@/lib/loyalty";
+import {
+  getLegacyLoyaltyServerKeyHash,
+  getLoyaltyServerKeyHash,
+} from "@/lib/loyalty-crypto";
 import { checkLoyaltyRateLimit, resolveClientIp } from "@/lib/rate-limit";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
   try {
@@ -45,40 +54,40 @@ export async function POST(request: Request) {
     let resolvedUserId = "";
     let resolvedDisplayName = clientDisplayName;
     let resolvedPictureUrl = clientPictureUrl;
+    let verifiedClientId = "";
 
-    if (!configOnly) {
-      if (liffAccessToken) {
-        const verified = await verifyLineLiffAccessToken(liffAccessToken);
-        if (!verified.ok) {
+    if (!hasSupabaseEnv) {
+      if (!configOnly) {
+        if (liffAccessToken) {
+          const verified = await verifyLineLiffAccessToken(liffAccessToken);
+          if (!verified.ok || !verified.clientId) {
+            return NextResponse.json(
+              {
+                ok: false,
+                code: "LINE_AUTH_FAILED",
+                message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
+                reason: verified.ok ? "MISSING_CLIENT_ID" : verified.reason,
+              },
+              { status: 401 },
+            );
+          }
+          resolvedUserId = verified.userId;
+          resolvedDisplayName = verified.displayName;
+          resolvedPictureUrl = verified.pictureUrl;
+        } else if (clientLineUserId.startsWith("U")) {
           return NextResponse.json(
             {
               ok: false,
-              code: "LINE_AUTH_FAILED",
+              code: "LINE_AUTH_REQUIRED",
               message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
-              reason: verified.reason,
             },
             { status: 401 },
           );
+        } else if (clientLineUserId) {
+          resolvedUserId = clientLineUserId;
         }
-        resolvedUserId = verified.userId;
-        resolvedDisplayName = verified.displayName;
-        resolvedPictureUrl = verified.pictureUrl;
-      } else if (clientLineUserId.startsWith("U")) {
-        // Never allow querying a real LINE userId without a verified access token
-        return NextResponse.json(
-          {
-            ok: false,
-            code: "LINE_AUTH_REQUIRED",
-            message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
-          },
-          { status: 401 },
-        );
-      } else if (clientLineUserId) {
-        resolvedUserId = clientLineUserId;
       }
-    }
 
-    if (!hasSupabaseEnv) {
       const now = new Date();
       return NextResponse.json({
         ok: true,
@@ -111,21 +120,77 @@ export async function POST(request: Request) {
       });
     }
 
-    const supabase = await createSupabaseServerClient();
+    const supabase = await createSupabaseServiceClient();
+
+    // Verify LINE token AND shop LINE Channel ID BEFORE calling get_loyalty_card_state
+    // so an invalid or cross-channel token never creates or updates a member row in DB.
+    if (!configOnly) {
+      const [creds, verified] = await Promise.all([
+        fetchShopLoyaltyServerCredentials(supabase, shopSecret),
+        liffAccessToken ? verifyLineLiffAccessToken(liffAccessToken) : Promise.resolve(null),
+      ]);
+
+      const expectedChannelId = extractLineChannelIdFromLiffId(creds.liffId);
+
+      if (liffAccessToken && verified) {
+        if (!verified.ok || !verified.clientId) {
+          return NextResponse.json(
+            {
+              ok: false,
+              code: "LINE_AUTH_FAILED",
+              message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาลองใหม่",
+              reason: verified.ok ? "MISSING_CLIENT_ID" : verified.reason,
+            },
+            { status: 401 },
+          );
+        }
+        if (expectedChannelId && verified.clientId !== expectedChannelId) {
+          return NextResponse.json(
+            {
+              ok: false,
+              code: "LINE_AUTH_REQUIRED",
+              message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดบัตรสะสมแต้มผ่านแอป LINE ของทางร้านแล้วลองใหม่",
+            },
+            { status: 401 },
+          );
+        }
+        resolvedUserId = verified.userId;
+        resolvedDisplayName = verified.displayName;
+        resolvedPictureUrl = verified.pictureUrl;
+        verifiedClientId = verified.clientId;
+      } else if (creds.liffId || clientLineUserId.startsWith("U")) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "LINE_AUTH_REQUIRED",
+            message: "เชื่อมต่อ LINE ไม่สำเร็จ กรุณาเปิดบัตรสะสมแต้มผ่านแอป LINE แล้วลองใหม่",
+          },
+          { status: 401 },
+        );
+      } else if (clientLineUserId) {
+        resolvedUserId = clientLineUserId;
+      }
+    }
+
+    const primaryHash = getLoyaltyServerKeyHash(shopSecret);
+    const legacyHash = getLegacyLoyaltyServerKeyHash(shopSecret);
+
     const { data, error } = await supabase.rpc("get_loyalty_card_state", {
       p_shop_secret: shopSecret,
       p_line_user_id: configOnly ? null : resolvedUserId || null,
       p_display_name: resolvedDisplayName,
       p_picture_url: resolvedPictureUrl,
+      p_server_key_hash: primaryHash,
+      p_legacy_key_hash: legacyHash,
     });
 
     if (error) {
-      if (error.code === "PGRST202" || error.code === "42883" || String(error.message ?? "").includes("get_loyalty_card_state")) {
+      if (isMissingRpcError(error) || String(error.message ?? "").includes("get_loyalty_card_state")) {
         return NextResponse.json(
           {
             ok: false,
             code: "MIGRATION_REQUIRED",
-            message: "กรุณานำไฟล์ supabase/migrations/202611110001_line_loyalty.sql ไปรันใน Supabase SQL Editor และกดบันทึกการตั้งค่าในหน้าตั้งค่าก่อนเริ่มใช้งาน",
+            message: "กรุณานำไฟล์ supabase/migrations/202611120001_loyalty_security_hardening.sql ไปรันใน Supabase SQL Editor และกดบันทึกการตั้งค่าในหน้าตั้งค่าก่อนเริ่มใช้งาน",
           },
           { status: 503 },
         );
@@ -138,16 +203,26 @@ export async function POST(request: Request) {
 
     const result = (data ?? {}) as Record<string, unknown>;
     if (!result.ok) {
-      const status = result.code === "LINE_AUTH_REQUIRED" ? 401 : 404;
+      const status =
+        result.code === "LINE_AUTH_REQUIRED" || result.code === "UNAUTHORIZED_SERVER_KEY"
+          ? 401
+          : 404;
       return NextResponse.json(result, { status });
     }
 
     const cfg = (result.config ?? {}) as Record<string, unknown>;
     const shopLiffId = String(cfg.liffId ?? "").trim();
+    const expectedChannelId = extractLineChannelIdFromLiffId(shopLiffId);
 
-    // Enforce server-side: if shop has liffId configured and this was not a configOnly call,
-    // require a verified LINE 'U...' user ID (even if the older SQL migration hasn't been re-run yet)
-    if (!configOnly && shopLiffId && (!resolvedUserId || !resolvedUserId.startsWith("U"))) {
+    // Defense-in-depth post-check on authoritative config returned by RPC
+    if (
+      !configOnly &&
+      shopLiffId &&
+      (!resolvedUserId ||
+        !resolvedUserId.startsWith("U") ||
+        !verifiedClientId ||
+        (expectedChannelId && verifiedClientId !== expectedChannelId))
+    ) {
       return NextResponse.json(
         {
           ok: false,

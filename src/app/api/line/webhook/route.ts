@@ -12,7 +12,11 @@ import {
   formatValidTillDate,
   resolveTrustedAppOrigin,
 } from "@/lib/loyalty";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  getLegacyLoyaltyServerKeyHash,
+  getLoyaltyServerKeyHash,
+} from "@/lib/loyalty-crypto";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 interface LineWebhookEvent {
   type?: string;
@@ -44,7 +48,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    const supabase = await createSupabaseServerClient();
+    const supabase = await createSupabaseServiceClient();
     const creds = await fetchShopLoyaltyServerCredentials(supabase, webhookSecret);
 
     if (!creds.ok || !creds.enabled) {
@@ -53,11 +57,13 @@ export async function POST(request: Request) {
 
     const { shopSecret, channelSecret, channelAccessToken, liffId } = creds;
 
-    if (channelSecret) {
-      const signature = request.headers.get("x-line-signature");
-      if (!verifyLineWebhookSignature(rawBody, signature, channelSecret)) {
-        return NextResponse.json({ ok: false, message: "Invalid LINE signature" }, { status: 401 });
-      }
+    if (!channelSecret) {
+      return NextResponse.json({ ok: false, message: "Webhook channelSecret not configured" }, { status: 401 });
+    }
+
+    const signature = request.headers.get("x-line-signature");
+    if (!verifyLineWebhookSignature(rawBody, signature, channelSecret)) {
+      return NextResponse.json({ ok: false, message: "Invalid LINE signature" }, { status: 401 });
     }
 
     const payload = JSON.parse(rawBody) as { events?: LineWebhookEvent[] };
@@ -70,6 +76,8 @@ export async function POST(request: Request) {
 
     const trustedOrigin = resolveTrustedAppOrigin(request.url);
     const cardUrl = buildLoyaltyCardUrl(trustedOrigin, shopSecret, liffId);
+    const primaryHash = getLoyaltyServerKeyHash(shopSecret);
+    const legacyHash = getLegacyLoyaltyServerKeyHash(shopSecret);
 
     for (const event of events) {
       if (event.type !== "message" || event.message?.type !== "text") continue;
@@ -90,6 +98,8 @@ export async function POST(request: Request) {
           p_line_user_id: lineUserId,
           p_display_name: "ลูกค้า LINE",
           p_picture_url: null,
+          p_server_key_hash: primaryHash,
+          p_legacy_key_hash: legacyHash,
         });
 
         const claim = (claimData ?? {}) as Record<string, unknown>;
@@ -132,6 +142,8 @@ export async function POST(request: Request) {
           p_line_user_id: lineUserId,
           p_display_name: "ลูกค้า LINE",
           p_picture_url: null,
+          p_server_key_hash: primaryHash,
+          p_legacy_key_hash: legacyHash,
         });
         const state = (stateData ?? {}) as Record<string, unknown>;
         if (state.ok) {

@@ -1,14 +1,16 @@
-import { createHmac } from "crypto";
+import { createHash, createHmac } from "crypto";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it, vi } from "vitest";
 import { getCached, invalidateQueryCache, setCached } from "@/lib/data/queries";
 import {
+  clearVerifiedLineTokenCache,
   computePushRetryBackoffSeconds,
   deriveFallbackRetryKey,
   extractLineChannelIdFromLiffId,
   isValidLineRetryKey,
   sendLinePushMessageDetailed,
+  verifyLineLiffAccessToken,
   verifyLineWebhookSignature,
 } from "@/lib/line-messaging";
 import {
@@ -36,6 +38,7 @@ import {
   decryptLoyaltySecret,
   encryptLoyaltySecret,
   getLoyaltyServerKeyHash,
+  getLoyaltyServerKeyVerifier,
   hasLoyaltyServerSecret,
   isCurrentVersionEncryptedSecret,
   isEncryptedLoyaltySecret,
@@ -160,8 +163,10 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
       cardUrl: "https://kaikai.vercel.app/loyalty?s=abc",
     });
     expect(stampFlex.type).toBe("flex");
+    expect((stampFlex.contents as Record<string, unknown>).size).toBe("kilo");
     expect(JSON.stringify(stampFlex)).not.toContain("🐔");
     expect(JSON.stringify(stampFlex)).not.toContain("🎉");
+    expect(JSON.stringify(stampFlex)).not.toContain("สมาชิก:");
     expect(JSON.stringify(stampFlex)).toContain("#FCE254");
 
     const redeemText = buildCouponRedeemPlainText({
@@ -181,6 +186,8 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
       claimedAtText: "10/11/2026 21:00 น.",
     });
     expect(redeemFlex.type).toBe("flex");
+    expect((redeemFlex.contents as Record<string, unknown>).size).toBe("kilo");
+    expect(JSON.stringify(redeemFlex)).not.toContain("สมาชิก:");
   });
 
   it("generates ISO/IEC 18004 QR matrices with intact finder patterns and SVG paths", () => {
@@ -324,13 +331,16 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     fetchSpy.mockRestore();
   });
 
-  it("redacts LINE Channel Secret and Channel Access Token before returning config to browser clients", () => {
+  it("redacts LINE Channel Secret, Channel Access Token, and serverKeyHash before returning config to browser clients", () => {
     const rawConfig = normalizeLoyaltyConfig(
       {
         enabled: true,
         liffId: "2009769853-BWR6D81k",
         channelSecret: "super_secret_channel_secret_value",
         channelAccessToken: "super_secret_channel_access_token_value",
+        serverKeyHash: getLoyaltyServerKeyVerifier("shop_a_secret"),
+        webhookKeyHash: getLoyaltyServerKeyVerifier("webhook_a_secret"),
+        serverKeyVersion: 2,
       },
       "GaiTomNamPla",
     );
@@ -338,13 +348,29 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     const clientSafe = redactLoyaltyConfigForClient(rawConfig);
     expect(clientSafe.channelSecret).toBe("");
     expect(clientSafe.channelAccessToken).toBe("");
+    expect(clientSafe.serverKeyHash).toBe("");
+    expect(clientSafe.webhookKeyHash).toBeUndefined();
+    expect(clientSafe.serverKeyVersion).toBeUndefined();
     expect(clientSafe.hasChannelSecret).toBe(true);
     expect(clientSafe.hasChannelAccessToken).toBe(true);
     expect(clientSafe.liffId).toBe("2009769853-BWR6D81k");
 
+    // Per-shop derived RPC tokens and one-way SHA-256 verifiers must be distinct per shop and irreversible
+    const shopAToken = getLoyaltyServerKeyHash("shop_a_secret");
+    const shopBToken = getLoyaltyServerKeyHash("shop_b_secret");
+    const shopAVerifier = getLoyaltyServerKeyVerifier("shop_a_secret");
+    const shopBVerifier = getLoyaltyServerKeyVerifier("shop_b_secret");
+    expect(shopAToken).toMatch(/^[a-f0-9]{64}$/);
+    expect(shopBToken).toMatch(/^[a-f0-9]{64}$/);
+    expect(shopAToken).not.toBe(shopBToken);
+    expect(shopAVerifier).not.toBe(shopBVerifier);
+    expect(shopAVerifier).not.toBe(shopAToken);
+    expect(createHash("sha256").update(shopAToken, "utf8").digest("hex")).toBe(shopAVerifier);
+
     const emptySafe = redactLoyaltyConfigForClient(normalizeLoyaltyConfig(null, "GaiTomNamPla"));
     expect(emptySafe.channelSecret).toBe("");
     expect(emptySafe.channelAccessToken).toBe("");
+    expect(emptySafe.serverKeyHash).toBe("");
     expect(emptySafe.hasChannelSecret).toBe(false);
     expect(emptySafe.hasChannelAccessToken).toBe(false);
     expect(LOYALTY_ADMIN_PAGE_SIZE).toBe(20);
@@ -429,5 +455,152 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
       expect(verifyIdx).toBeGreaterThan(0);
       expect(housekeepingIdx).toBeGreaterThan(verifyIdx);
     }
+
+    const mainSql = readFileSync(
+      join(process.cwd(), "supabase/migrations/202611110001_line_loyalty.sql"),
+      "utf8",
+    );
+    // Hot scan/redeem paths must NOT invoke run_loyalty_housekeeping per request
+    expect(mainSql).not.toContain("perform public.run_loyalty_housekeeping(v_owner_id);");
+
+    // Legacy unauthenticated 4-arg/6-arg RPC grants must be replaced with serverKeyHash-authenticated signatures
+    expect(mainSql).not.toContain(
+      "grant execute on function public.get_loyalty_card_state(text, text, text, text)",
+    );
+    expect(mainSql).not.toContain(
+      "grant execute on function public.claim_loyalty_stamps(text, integer, text, text, text, text)",
+    );
+    expect(mainSql).not.toContain(
+      "grant execute on function public.redeem_loyalty_coupon(text, uuid, text, text)",
+    );
+    expect(mainSql).toContain(
+      "grant execute on function public.get_loyalty_card_state(text, text, text, text, text, text) to anon, authenticated;",
+    );
+    expect(mainSql).toContain(
+      "grant execute on function public.claim_loyalty_stamps(text, integer, text, text, text, text, text, text) to anon, authenticated;",
+    );
+    expect(mainSql).toContain(
+      "grant execute on function public.redeem_loyalty_coupon(text, uuid, text, text, text, text) to anon, authenticated;",
+    );
+  });
+
+  it("strictly rejects LINE access tokens when verify fails, client_id is missing/mismatched, or expires_in <= 0", async () => {
+    clearVerifiedLineTokenCache();
+
+    // Case 1: /oauth2/v2.1/verify fails (400) even though /v2/profile succeeds (200) -> MUST REJECT
+    const spy1 = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "invalid_request" }), { status: 400 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ userId: "U1234567890abcdef1234567890abcdef", displayName: "Test" }),
+          { status: 200 },
+        ),
+      );
+    const res1 = await verifyLineLiffAccessToken("token_verify_fail_123456");
+    expect(res1).toEqual({ ok: false, reason: "LINE_VERIFY_400" });
+    spy1.mockRestore();
+
+    // Case 2: /oauth2/v2.1/verify succeeds (200) but has expires_in <= 0 -> MUST REJECT
+    const spy2 = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ client_id: "2009769853", expires_in: 0 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ userId: "U1234567890abcdef1234567890abcdef", displayName: "Test" }),
+          { status: 200 },
+        ),
+      );
+    const res2 = await verifyLineLiffAccessToken("token_expired_123456");
+    expect(res2).toEqual({ ok: false, reason: "TOKEN_EXPIRED" });
+    spy2.mockRestore();
+
+    // Case 3: /oauth2/v2.1/verify succeeds (200) with valid client_id & expires_in > 0 -> ACCEPTS & caches clientId
+    const spy3 = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ client_id: "2009769853", expires_in: 1200 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ userId: "U1234567890abcdef1234567890abcdef", displayName: "คุณนนท์" }),
+          { status: 200 },
+        ),
+      );
+    const res3 = await verifyLineLiffAccessToken("token_valid_123456", "2009769853-BWR6D81k");
+    expect(res3).toEqual({
+      ok: true,
+      userId: "U1234567890abcdef1234567890abcdef",
+      displayName: "คุณนนท์",
+      pictureUrl: null,
+      clientId: "2009769853",
+    });
+
+    // Cached token checked against a DIFFERENT shop LIFF ID -> MUST REJECT with CHANNEL_ID_MISMATCH
+    const resMismatch = await verifyLineLiffAccessToken("token_valid_123456", "9999999999-OtherApp");
+    expect(resMismatch).toEqual({ ok: false, reason: "CHANNEL_ID_MISMATCH" });
+    spy3.mockRestore();
+  });
+
+  it("enforces migration 202611120001 security hardening, removes legacy RPC fallbacks, and checks LINE Channel ID before DB writes in state route", () => {
+    const adminMigration = readFileSync(
+      join(process.cwd(), "supabase/migrations/202611110002_loyalty_admin_rpcs.sql"),
+      "utf8",
+    );
+    // 202611110002 must be safe when run standalone (must not drop RPCs without recreating them)
+    expect(adminMigration).not.toContain(
+      "drop function if exists public.get_loyalty_card_state(text, text, text, text);",
+    );
+
+    const hardeningMigration = readFileSync(
+      join(process.cwd(), "supabase/migrations/202611120001_loyalty_security_hardening.sql"),
+      "utf8",
+    );
+    expect(hardeningMigration).toContain(
+      "create or replace function public.verify_loyalty_server_key(",
+    );
+    expect(hardeningMigration).toContain(
+      "drop function if exists public.get_loyalty_card_state(text, text, text, text);",
+    );
+    expect(hardeningMigration).toContain(
+      "drop function if exists public.claim_loyalty_stamps(text, integer, text, text, text, text);",
+    );
+    expect(hardeningMigration).toContain(
+      "drop function if exists public.redeem_loyalty_coupon(text, uuid, text, text);",
+    );
+    expect(hardeningMigration).toContain(
+      "create or replace function public.get_loyalty_card_state(",
+    );
+    expect(hardeningMigration).toContain(
+      "create or replace function public.claim_loyalty_stamps(",
+    );
+    expect(hardeningMigration).toContain(
+      "create or replace function public.redeem_loyalty_coupon(",
+    );
+
+    // API routes must NOT fall back to unauthenticated 4-arg/6-arg RPCs
+    const claimRoute = readFileSync(
+      join(process.cwd(), "src/app/api/loyalty/claim/route.ts"),
+      "utf8",
+    );
+    const redeemRoute = readFileSync(
+      join(process.cwd(), "src/app/api/loyalty/redeem/route.ts"),
+      "utf8",
+    );
+    const stateRoute = readFileSync(
+      join(process.cwd(), "src/app/api/loyalty/state/route.ts"),
+      "utf8",
+    );
+    expect(claimRoute).not.toContain("fallbackRes");
+    expect(redeemRoute).not.toContain("fallbackRes");
+    expect(stateRoute).not.toContain("fallbackRes");
+
+    // /api/loyalty/state must verify LINE Channel ID BEFORE calling get_loyalty_card_state RPC
+    const channelCheckIdx = stateRoute.indexOf("verified.clientId !== expectedChannelId");
+    const rpcCallIdx = stateRoute.indexOf('supabase.rpc("get_loyalty_card_state"');
+    expect(channelCheckIdx).toBeGreaterThan(0);
+    expect(rpcCallIdx).toBeGreaterThan(channelCheckIdx);
   });
 });

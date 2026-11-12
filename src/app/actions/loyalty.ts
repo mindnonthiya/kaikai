@@ -6,7 +6,10 @@ import type { ActionState } from "@/lib/action-state";
 import { readCostRows } from "@/lib/cost-rows";
 import { getCached, invalidateQueryCache, setCached } from "@/lib/data/queries";
 import { hasSupabaseEnv } from "@/lib/env";
-import { processPendingLoyaltyPushJobs } from "@/lib/line-messaging";
+import {
+  invalidateShopLoyaltyCredentialsCache,
+  processPendingLoyaltyPushJobs,
+} from "@/lib/line-messaging";
 import {
   LOYALTY_ADMIN_PAGE_SIZE,
   LOYALTY_SETTINGS_KEY,
@@ -28,12 +31,12 @@ import {
 import {
   decryptLoyaltySecret,
   encryptLoyaltySecret,
-  getLoyaltyServerKeyHash,
+  getLoyaltyServerKeyVerifier,
   isCurrentVersionEncryptedSecret,
 } from "@/lib/loyalty-crypto";
 import { InputError, dbError, optionalText, runAction, text } from "@/lib/server-action";
 import { DEFAULT_SHOP_ID, normalizeShopId, scopedSettingsKey } from "@/lib/shop-scope";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export interface LoyaltyPushQueueSummary {
   id: string;
@@ -641,10 +644,7 @@ export async function fetchLoyaltySettingsSummary(
   const decryptedAccessToken = decryptLoyaltySecret(normalized.channelAccessToken);
 
   const config = redactLoyaltyConfigForClient(
-    {
-      ...normalized,
-      serverKeyHash: getLoyaltyServerKeyHash(),
-    },
+    normalized,
     decryptedSecret,
     decryptedAccessToken,
   );
@@ -772,11 +772,14 @@ export async function fetchLoyaltyAdminData(
   const decryptedSecret = decryptLoyaltySecret(normalized.channelSecret);
   const decryptedAccessToken = decryptLoyaltySecret(normalized.channelAccessToken);
 
-  // Automatically upgrade legacy unencrypted or v1-encrypted settings rows to v2 AES-256-GCM + current serverKeyHash
-  const currentServerKeyHash = getLoyaltyServerKeyHash();
+  // Automatically upgrade legacy unencrypted or v1-encrypted settings rows to v2 AES-256-GCM + per-shop SHA-256 verifier
+  const currentServerKeyVerifier = getLoyaltyServerKeyVerifier(normalized.shopSecret);
+  const currentWebhookKeyVerifier = getLoyaltyServerKeyVerifier(normalized.webhookSecret);
   if (
     persisted &&
-    (normalized.serverKeyHash !== currentServerKeyHash ||
+    (normalized.serverKeyHash !== currentServerKeyVerifier ||
+      normalized.webhookKeyHash !== currentWebhookKeyVerifier ||
+      normalized.serverKeyVersion !== 2 ||
       (normalized.channelAccessToken && !isCurrentVersionEncryptedSecret(normalized.channelAccessToken)) ||
       (normalized.channelSecret && !isCurrentVersionEncryptedSecret(normalized.channelSecret)))
   ) {
@@ -784,7 +787,9 @@ export async function fetchLoyaltyAdminData(
       ...normalized,
       channelSecret: decryptedSecret ? encryptLoyaltySecret(decryptedSecret) : "",
       channelAccessToken: decryptedAccessToken ? encryptLoyaltySecret(decryptedAccessToken) : "",
-      serverKeyHash: currentServerKeyHash,
+      serverKeyHash: currentServerKeyVerifier,
+      webhookKeyHash: currentWebhookKeyVerifier,
+      serverKeyVersion: 2,
     };
     await supabase.from("settings").upsert(
       {
@@ -797,12 +802,9 @@ export async function fetchLoyaltyAdminData(
     );
   }
 
-  // Never send decrypted secrets to Client Components
+  // Never send decrypted secrets or server key hashes to Client Components
   const config = redactLoyaltyConfigForClient(
-    {
-      ...normalized,
-      serverKeyHash: currentServerKeyHash,
-    },
+    normalized,
     decryptedSecret,
     decryptedAccessToken,
   );
@@ -1006,7 +1008,7 @@ export async function fetchLoyaltyAdminData(
   if (exactPendingPush > 0 && decryptedAccessToken) {
     after(async () => {
       try {
-        const bgSupabase = await createSupabaseServerClient();
+        const bgSupabase = await createSupabaseServiceClient();
         await processPendingLoyaltyPushJobs(bgSupabase, config.shopSecret, decryptedAccessToken);
       } catch {
         // Ignore background errors
@@ -1363,11 +1365,14 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
       }
     }
 
+    const effectiveShopSecret = existingRow?.value ? current.shopSecret : formShopSecret || current.shopSecret;
+    const effectiveWebhookSecret = existingRow?.value ? current.webhookSecret : formWebhookSecret || current.webhookSecret;
+
     const nextConfig: LoyaltyConfig = {
       ...current,
       enabled,
-      shopSecret: existingRow?.value ? current.shopSecret : formShopSecret || current.shopSecret,
-      webhookSecret: existingRow?.value ? current.webhookSecret : formWebhookSecret || current.webhookSecret,
+      shopSecret: effectiveShopSecret,
+      webhookSecret: effectiveWebhookSecret,
       cardTitle,
       cardHeadline,
       rewardTitle,
@@ -1380,7 +1385,9 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
       notifyMode,
       channelSecret: resolvedSecretPlain ? encryptLoyaltySecret(resolvedSecretPlain) : "",
       channelAccessToken: resolvedTokenPlain ? encryptLoyaltySecret(resolvedTokenPlain) : "",
-      serverKeyHash: getLoyaltyServerKeyHash(),
+      serverKeyHash: getLoyaltyServerKeyVerifier(effectiveShopSecret),
+      webhookKeyHash: getLoyaltyServerKeyVerifier(effectiveWebhookSecret),
+      serverKeyVersion: 2,
       qrTokens: parsedQrTokens,
     };
 
@@ -1396,6 +1403,7 @@ export async function saveLoyaltyConfigAction(form: FormData): Promise<ActionSta
     if (upsertErr) dbError(upsertErr);
 
     invalidateQueryCache();
+    invalidateShopLoyaltyCredentialsCache();
     revalidatePath("/rewards");
     revalidatePath("/settings");
     revalidatePath("/loyalty");
@@ -1486,7 +1494,9 @@ export async function regenerateLoyaltyQrTokensAction(): Promise<ActionState> {
       channelAccessToken: current.channelAccessToken
         ? encryptLoyaltySecret(decryptLoyaltySecret(current.channelAccessToken))
         : "",
-      serverKeyHash: getLoyaltyServerKeyHash(),
+      serverKeyHash: getLoyaltyServerKeyVerifier(current.shopSecret),
+      webhookKeyHash: getLoyaltyServerKeyVerifier(current.webhookSecret),
+      serverKeyVersion: 2,
       qrTokens: createDefaultQrTokens(),
     };
 
@@ -1502,6 +1512,7 @@ export async function regenerateLoyaltyQrTokensAction(): Promise<ActionState> {
     if (upsertErr) dbError(upsertErr);
 
     invalidateQueryCache();
+    invalidateShopLoyaltyCredentialsCache();
     revalidatePath("/rewards");
     revalidatePath("/settings");
     revalidatePath("/loyalty");

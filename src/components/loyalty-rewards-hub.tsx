@@ -250,8 +250,9 @@ export function LoyaltyRewardsHub({
             <div>
               <strong>ยังไม่ได้สร้างตารางแต้มสะสมในฐานข้อมูล</strong>
               <p>
-                รันไฟล์ <code>202611110001_line_loyalty.sql</code> และ{" "}
-                <code>202611110002_loyalty_admin_rpcs.sql</code> ใน Supabase SQL Editor ก่อนใช้งาน
+                รันไฟล์ <code>202611110001_line_loyalty.sql</code>,{" "}
+                <code>202611110002_loyalty_admin_rpcs.sql</code> และ{" "}
+                <code>202611120001_loyalty_security_hardening.sql</code> ใน Supabase SQL Editor ก่อนใช้งาน
               </p>
             </div>
           </div>

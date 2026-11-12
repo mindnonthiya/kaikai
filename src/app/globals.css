@@ -5578,12 +5578,12 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
 }
 
 .line-stamp-top-banner {
-  margin: 12px 16px 10px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  font-size: 13.5px;
-  line-height: 1.45;
-  box-shadow: 0 4px 14px rgba(46, 35, 30, 0.06);
+  margin: 10px 14px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 3px 10px rgba(46, 35, 30, 0.05);
 }
 
 .line-stamp-top-banner.info {
@@ -6033,75 +6033,72 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   box-shadow: 0 6px 20px rgba(46, 35, 30, 0.28);
 }
 
-/* Coupon Presentation & Receipt Modal Profile Row */
+/* Coupon Presentation & Receipt Modal (Compact & Proportional) */
 .line-modal-sheet {
   background: #FFFDF7;
   border: 2.5px solid #2E231E;
-  border-radius: 20px;
+  border-radius: 18px;
+}
+
+.line-modal-sheet.compact {
+  max-width: 316px;
+  padding: 15px 15px 14px;
+  border-radius: 16px;
+  box-shadow: 0 4px 0 #2E231E, 0 14px 32px rgba(46, 35, 30, 0.22);
 }
 
 .line-modal-badge {
   background: #FCE254;
   color: #2E231E;
   border: 1.5px solid #2E231E;
+  font-size: 11px;
+  padding: 2px 9px;
+  margin-bottom: 6px;
 }
 
 .line-modal-sheet h3 {
   color: #2E231E;
 }
 
-.line-modal-profile-row,
-.line-receipt-profile-row {
+.line-modal-sheet.compact h3 {
+  font-size: 16px;
+  margin: 0 0 10px;
+  line-height: 1.3;
+}
+
+.line-modal-code-box.compact {
+  padding: 8px 11px;
+  margin-bottom: 9px;
+  background: #FFF7D6;
+  border: 1.5px dashed #2E231E;
+  border-radius: 10px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 12px;
-  background: #FAF5E8;
-  border: 1px solid #E5DFD0;
-  margin-bottom: 12px;
-  text-align: left;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.line-modal-profile-text,
-.line-receipt-profile-row > div {
+.line-modal-code-inline {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
-}
-
-.line-modal-profile-text strong,
-.line-receipt-profile-row strong {
-  font-size: 13.5px;
-  font-weight: 800;
-  color: #2E231E;
-}
-
-.line-modal-profile-text span,
-.line-receipt-profile-row span {
-  font-size: 11.5px;
-  color: #6B574C;
-}
-
-.line-modal-code-box.large {
-  padding: 12px 14px;
-  background: #FFF7D6;
-  border: 2px dashed #2E231E;
 }
 
 .line-modal-code-label {
   display: block;
-  font-size: 11px;
+  font-size: 10.5px;
   color: #6B574C;
   text-align: left;
+  line-height: 1.1;
 }
 
-.line-modal-code-box.large strong {
-  font-size: 20px;
-  letter-spacing: 0.03em;
+.line-modal-code-box.compact strong {
+  font-size: 16px;
+  letter-spacing: 0.02em;
   display: block;
   text-align: left;
-  margin-top: 2px;
+  margin-top: 1px;
   color: #FA5B5A;
 }
 
@@ -6110,11 +6107,25 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   color: #2E231E;
   border: 1.5px solid #2E231E;
   border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 4px 10px;
+  font-size: 11.5px;
   font-weight: 700;
   cursor: pointer;
   font-family: inherit;
+  flex-shrink: 0;
+}
+
+.line-modal-desc.compact {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6B574C;
+}
+
+.line-modal-actions-inline {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 8px;
 }
 
 .line-modal-primary-btn {
@@ -6122,35 +6133,72 @@ a.avatar.small:hover { box-shadow: 0 0 0 3px #ffe1cc; }
   color: #FCE254;
 }
 
+.line-modal-primary-btn.compact {
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
 .line-modal-secondary-btn {
   background: #F3EFE4;
   color: #5C4738;
 }
 
-.line-receipt-ticket {
-  background: #FFF7D6;
-  border: 2px dashed #2E231E;
-}
-
-.line-receipt-reward-title {
-  color: #2E231E;
-  border-bottom: 1px solid #E6D8B5;
-}
-
-.line-receipt-live-clock {
-  border-top: 1px dashed #D6C59E;
-}
-
-.line-modal-warn-note {
+.line-modal-secondary-btn.compact {
   padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+.line-receipt-header-compact {
+  margin-bottom: 10px;
+}
+
+.line-receipt-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+}
+
+.line-receipt-status-pill.fresh {
+  background: #ECFDF5;
+  color: #065F46;
+  border: 1.5px solid #10B981;
+}
+
+.line-receipt-status-pill.history {
+  background: #F3EFE4;
+  color: #5C4738;
+  border: 1.5px solid #D6C59E;
+}
+
+.line-receipt-ticket.compact {
+  background: #FFF7D6;
+  border: 1.5px dashed #2E231E;
   border-radius: 10px;
-  background: #FFFBEB;
-  border: 1px solid #FDE68A;
-  color: #92400E;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+}
+
+.line-receipt-ticket.compact .line-receipt-row {
+  font-size: 12.5px;
+  padding: 3px 0;
+  color: #2E231E;
+}
+
+.line-receipt-code {
+  color: #FA5B5A;
+  font-size: 13.5px;
+}
+
+.line-receipt-instruction.compact {
   font-size: 12px;
-  line-height: 1.45;
-  margin-bottom: 14px;
-  text-align: left;
+  color: #6B574C;
+  margin: 0 0 11px;
+  line-height: 1.35;
 }
 
 .line-scanner-fallback-toggle {
