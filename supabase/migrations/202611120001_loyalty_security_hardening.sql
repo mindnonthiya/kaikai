@@ -61,6 +61,14 @@ create unique index if not exists settings_line_loyalty_webhook_secret_uidx
   where (key = 'line_loyalty' or key like 's:%:line_loyalty')
     and trim(coalesce(value->>'webhookSecret', '')) <> '';
 
+-- Expire any stale pending/processing push queue backlog older than 10 minutes so old test scans never blast out
+update public.loyalty_push_queue
+set status = 'failed_network',
+    last_error = 'EXPIRED_STALE_QUEUE_JOB',
+    updated_at = now()
+where status in ('pending', 'processing')
+  and created_at < now() - interval '10 minutes';
+
 -- Step 1: Idempotently upgrade existing settings rows from global hash (v1) to per-shop one-way SHA-256 verifiers (v2)
 update public.settings s
 set value = jsonb_set(
@@ -641,6 +649,17 @@ begin
   if v_has_encrypted_token
      and left(v_clean_user_id, 1) = 'U'
      and (v_notify_mode = 'all' or (v_notify_mode = 'reward_only' and v_rewards_unlocked > 0)) then
+    -- Deduplicate: supersede any older unsent stamp_claim jobs for this customer so only the latest stamp balance is sent
+    update public.loyalty_push_queue
+    set status = 'sent',
+        last_error = 'SUPERSEDED_BY_NEWER_SCAN',
+        updated_at = v_now
+    where owner_id = v_owner_id
+      and shop_scope_id = v_shop_scope_id
+      and line_user_id = v_member.line_user_id
+      and event_type = 'stamp_claim'
+      and status = 'pending';
+
     insert into public.loyalty_push_queue (
       owner_id,
       shop_scope_id,
@@ -1122,6 +1141,18 @@ begin
     and line_user_id = trim(coalesce(p_line_user_id, ''))
   limit 1;
 
+  if p_event_type <> 'coupon_redeem' then
+    update public.loyalty_push_queue
+    set status = 'sent',
+        last_error = 'SUPERSEDED_BY_NEWER_SCAN',
+        updated_at = now()
+    where owner_id = v_owner_id
+      and shop_scope_id = v_shop_scope_id
+      and line_user_id = trim(coalesce(p_line_user_id, ''))
+      and event_type = 'stamp_claim'
+      and status = 'pending';
+  end if;
+
   insert into public.loyalty_push_queue (
     owner_id,
     shop_scope_id,
@@ -1193,10 +1224,20 @@ begin
     return '[]'::jsonb;
   end if;
 
+  -- Expire stale pending/processing jobs older than 10 minutes so old backlog never blasts out and wastes LINE monthly quota
+  update public.loyalty_push_queue
+  set status = 'failed_network',
+      last_error = 'EXPIRED_STALE_QUEUE_JOB',
+      updated_at = now()
+  where shop_secret = trim(p_shop_secret)
+    and status in ('pending', 'processing')
+    and created_at < now() - interval '10 minutes';
+
   with due as (
     select q.id
     from public.loyalty_push_queue q
     where q.shop_secret = trim(p_shop_secret)
+      and q.created_at >= now() - interval '10 minutes'
       and (
         (q.status = 'pending' and q.next_retry_at <= now())
         or (q.status = 'processing' and q.updated_at < now() - interval '30 seconds')
@@ -1334,6 +1375,14 @@ begin
 
   v_housekeeping := public.run_loyalty_housekeeping(null);
 
+  -- Expire stale pending/processing jobs older than 10 minutes so old backlog never blasts out and wastes LINE monthly quota
+  update public.loyalty_push_queue
+  set status = 'failed_network',
+      last_error = 'EXPIRED_STALE_QUEUE_JOB',
+      updated_at = now()
+  where status in ('pending', 'processing')
+    and created_at < now() - interval '10 minutes';
+
   with authorized_shops as (
     select
       s.owner_id,
@@ -1360,7 +1409,8 @@ begin
     join authorized_shops a
       on a.owner_id = q.owner_id
      and a.shop_secret = q.shop_secret
-    where (
+    where q.created_at >= now() - interval '10 minutes'
+      and (
         (q.status = 'pending' and q.next_retry_at <= now())
         or (q.status = 'processing' and q.updated_at < now() - interval '30 seconds')
       )

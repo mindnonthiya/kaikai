@@ -4,10 +4,13 @@ import { join } from "path";
 import { describe, expect, it, vi } from "vitest";
 import { getCached, invalidateQueryCache, setCached } from "@/lib/data/queries";
 import {
+  LOYALTY_QUOTA_RESERVE_THRESHOLD,
+  clearLineMonthlyQuotaCache,
   clearVerifiedLineTokenCache,
   computePushRetryBackoffSeconds,
   deriveFallbackRetryKey,
   extractLineChannelIdFromLiffId,
+  fetchLineMonthlyQuotaStatus,
   isValidLineRetryKey,
   sendLinePushMessageDetailed,
   verifyLineLiffAccessToken,
@@ -602,5 +605,52 @@ describe("LINE Loyalty Stamp Card & QR System", () => {
     const rpcCallIdx = stateRoute.indexOf('supabase.rpc("get_loyalty_card_state"');
     expect(channelCheckIdx).toBeGreaterThan(0);
     expect(rpcCallIdx).toBeGreaterThan(channelCheckIdx);
+
+    // Queue protection & 0-quota chat delivery checks
+    expect(hardeningMigration).toContain("SUPERSEDED_BY_NEWER_SCAN");
+    expect(hardeningMigration).toContain("EXPIRED_STALE_QUEUE_JOB");
+    expect(claimRoute).toContain("CLIENT_LIFF_CHAT_FREE");
+    expect(redeemRoute).toContain("CLIENT_LIFF_CHAT_FREE");
+  });
+
+  it("enforces Smart Quota Guard when remaining LINE monthly messages drop to or below reserve threshold (50)", async () => {
+    clearLineMonthlyQuotaCache();
+    expect(LOYALTY_QUOTA_RESERVE_THRESHOLD).toBe(50);
+
+    // 1) 14 used out of 300 -> 286 remaining -> lowQuotaReserveActive = false
+    const spyHigh = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ type: "limited", value: 300 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ totalUsage: 14 }), { status: 200 }),
+      );
+    const statusHigh = await fetchLineMonthlyQuotaStatus("token_quota_high");
+    expect(statusHigh).toEqual({
+      limit: 300,
+      used: 14,
+      remaining: 286,
+      lowQuotaReserveActive: false,
+    });
+    spyHigh.mockRestore();
+
+    // 2) 255 used out of 300 -> 45 remaining (<= 50) -> lowQuotaReserveActive = true
+    const spyLow = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ type: "limited", value: 300 }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ totalUsage: 255 }), { status: 200 }),
+      );
+    const statusLow = await fetchLineMonthlyQuotaStatus("token_quota_low");
+    expect(statusLow).toEqual({
+      limit: 300,
+      used: 255,
+      remaining: 45,
+      lowQuotaReserveActive: true,
+    });
+    spyLow.mockRestore();
   });
 });
