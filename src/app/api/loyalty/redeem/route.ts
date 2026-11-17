@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
+  cancelLoyaltyPushJob,
   enqueueLoyaltyPushNotification,
   extractLineChannelIdFromLiffId,
   fetchShopLoyaltyServerCredentials,
@@ -29,6 +30,55 @@ export async function POST(request: Request) {
     const liffAccessToken = String(body.liffAccessToken ?? "").trim();
     const clientLineUserId = String(body.lineUserId ?? "").trim();
     const clientDisplayName = String(body.displayName ?? "ลูกค้า LINE").trim() || "ลูกค้า LINE";
+    const canClientSendChat = Boolean(body.canClientSendChat);
+    const pushFallbackOnly = Boolean(body.pushFallbackOnly);
+
+    if (pushFallbackOnly && shopSecret && liffAccessToken && hasSupabaseEnv) {
+      const supabase = await createSupabaseServiceClient();
+      const [creds, verification] = await Promise.all([
+        fetchShopLoyaltyServerCredentials(supabase, shopSecret),
+        verifyLineLiffAccessToken(liffAccessToken),
+      ]);
+      const expectedChannelId = extractLineChannelIdFromLiffId(creds.liffId);
+      if (
+        verification.ok &&
+        verification.clientId &&
+        (!expectedChannelId || verification.clientId === expectedChannelId) &&
+        creds.channelAccessToken &&
+        body.flexMessage &&
+        typeof body.flexMessage === "object"
+      ) {
+        const flexMsg = body.flexMessage as Record<string, unknown>;
+        const plainTxt = String(body.plainText ?? "");
+        after(async () => {
+          try {
+            const bgSupabase = await createSupabaseServiceClient();
+            await enqueueLoyaltyPushNotification(bgSupabase, {
+              shopSecret,
+              lineUserId: verification.userId,
+              eventType: "coupon_redeem",
+              messages: [flexMsg],
+              fallbackPlainText: plainTxt,
+            });
+            await processPendingLoyaltyPushJobs(
+              bgSupabase,
+              shopSecret,
+              creds.channelAccessToken,
+              {
+                lineUserId: verification.userId,
+                messages: [flexMsg],
+                fallbackPlainText: plainTxt,
+              },
+              request.url,
+            );
+          } catch {
+            // Ignore fallback error
+          }
+        });
+        return NextResponse.json({ ok: true, fallbackQueued: true });
+      }
+      return NextResponse.json({ ok: false }, { status: 400 });
+    }
 
     if (!shopSecret || !couponId) {
       return NextResponse.json(
@@ -196,12 +246,28 @@ export async function POST(request: Request) {
     });
 
     let queued = false;
+    let clientShouldSend = false;
     let pushReason = "ALREADY_CLAIMED";
     if (!result.alreadyClaimed) {
       if (creds.notifyMode === "off") {
         pushReason = "NOTIFY_MODE_OFF";
       } else if (!verifiedLineUserId.startsWith("U")) {
         pushReason = "NOT_LINE_USER_ID";
+      } else if (canClientSendChat) {
+        queued = true;
+        clientShouldSend = true;
+        pushReason = "CLIENT_LIFF_CHAT_FREE";
+        const outboxJobId = result.pushJobId ? String(result.pushJobId) : "";
+        if (outboxJobId) {
+          after(async () => {
+            try {
+              const bgSupabase = await createSupabaseServiceClient();
+              await cancelLoyaltyPushJob(bgSupabase, shopSecret, outboxJobId, "DELIVERED_VIA_CLIENT_LIFF");
+            } catch {
+              // Ignore cancellation error
+            }
+          });
+        }
       } else if (!creds.channelAccessToken) {
         pushReason = creds.credentialsLocked ? "CREDENTIALS_NEED_RESAVE" : "MISSING_CHANNEL_ACCESS_TOKEN";
       } else {
@@ -250,6 +316,7 @@ export async function POST(request: Request) {
         flexMessage,
         pushed: queued,
         queued,
+        clientShouldSend,
         pushReason,
       },
     });

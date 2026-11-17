@@ -42,6 +42,8 @@ interface LiffWindowObject {
   login: (config?: { redirectUri?: string }) => void;
   getAccessToken?: () => string | null;
   getDecodedIDToken?: () => LiffDecodedIdToken | null;
+  getContext?: () => { type?: string } | null;
+  sendMessages?: (messages: Array<Record<string, unknown>>) => Promise<void>;
   getProfile: () => Promise<{
     userId: string;
     displayName: string;
@@ -248,6 +250,53 @@ function getActiveLiffAccessToken(): string {
     // Ignore LIFF token error
   }
   return "";
+}
+
+function canSendFreeLiffChatMessage(): boolean {
+  if (typeof window === "undefined" || !window.liff) return false;
+  try {
+    if (!window.liff.isInClient() || typeof window.liff.sendMessages !== "function") {
+      return false;
+    }
+    const ctx = typeof window.liff.getContext === "function" ? window.liff.getContext() : null;
+    return ctx?.type === "utou";
+  } catch {
+    return false;
+  }
+}
+
+async function deliverNotificationViaLiffOrFallback(params: {
+  endpoint: "/api/loyalty/claim" | "/api/loyalty/redeem";
+  shopSecret: string;
+  liffAccessToken: string;
+  flexMessage?: Record<string, unknown>;
+  plainText?: string;
+}): Promise<void> {
+  if (!params.flexMessage) return;
+  try {
+    if (typeof window !== "undefined" && window.liff && typeof window.liff.sendMessages === "function") {
+      await window.liff.sendMessages([params.flexMessage]);
+      return;
+    }
+  } catch {
+    // If chat_message.write scope is not yet enabled in LINE Developers Console, fall back to server Push
+  }
+
+  try {
+    await fetch(params.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shopSecret: params.shopSecret,
+        liffAccessToken: params.liffAccessToken,
+        pushFallbackOnly: true,
+        flexMessage: params.flexMessage,
+        plainText: params.plainText ?? "",
+      }),
+    });
+  } catch {
+    // Ignore fallback network error
+  }
 }
 
 function CustomerLineAvatar({
@@ -478,6 +527,7 @@ export function LoyaltyStampCardClient({
       setClaiming(true);
       try {
         const liffAccessToken = getActiveLiffAccessToken();
+        const canClientSendChat = canSendFreeLiffChatMessage();
         const response = await fetch("/api/loyalty/claim", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -486,6 +536,7 @@ export function LoyaltyStampCardClient({
             points,
             token,
             liffAccessToken,
+            canClientSendChat,
             lineUserId: userProfile.userId,
             displayName: userProfile.displayName,
             pictureUrl: userProfile.pictureUrl,
@@ -533,9 +584,25 @@ export function LoyaltyStampCardClient({
         const rewardsUnlocked = Number(data.rewardsUnlocked ?? 0);
 
         const notification = data.notification as
-          | { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean; pushReason?: string }
+          | {
+              plainText?: string;
+              flexMessage?: Record<string, unknown>;
+              pushed?: boolean;
+              clientShouldSend?: boolean;
+              pushReason?: string;
+            }
           | undefined;
         const chatNotified = Boolean(notification?.pushed);
+
+        if (notification?.clientShouldSend && notification.flexMessage) {
+          void deliverNotificationViaLiffOrFallback({
+            endpoint: "/api/loyalty/claim",
+            shopSecret: targetShopSecret,
+            liffAccessToken,
+            flexMessage: notification.flexMessage,
+            plainText: notification.plainText,
+          });
+        }
 
         setClaimBanner({
           type: "success",
@@ -915,6 +982,7 @@ export function LoyaltyStampCardClient({
 
     try {
       const liffAccessToken = getActiveLiffAccessToken();
+      const canClientSendChat = canSendFreeLiffChatMessage();
       const response = await fetch("/api/loyalty/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -922,6 +990,7 @@ export function LoyaltyStampCardClient({
           shopSecret,
           couponId: coupon.id,
           liffAccessToken,
+          canClientSendChat,
           lineUserId: member.lineUserId || getOrCreateBrowserUserId(),
           displayName: member.displayName || getSavedDisplayName(),
         }),
@@ -938,9 +1007,24 @@ export function LoyaltyStampCardClient({
       }
 
       const notification = data.notification as
-        | { plainText?: string; flexMessage?: Record<string, unknown>; pushed?: boolean }
+        | {
+            plainText?: string;
+            flexMessage?: Record<string, unknown>;
+            pushed?: boolean;
+            clientShouldSend?: boolean;
+          }
         | undefined;
       const chatNotified = Boolean(notification?.pushed);
+
+      if (notification?.clientShouldSend && notification.flexMessage) {
+        void deliverNotificationViaLiffOrFallback({
+          endpoint: "/api/loyalty/redeem",
+          shopSecret,
+          liffAccessToken,
+          flexMessage: notification.flexMessage,
+          plainText: notification.plainText,
+        });
+      }
 
       if (Array.isArray(data.coupons)) {
         const rawCoupons = data.coupons as Array<Record<string, unknown>>;

@@ -215,6 +215,124 @@ export interface LinePushResult {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export const LOYALTY_QUOTA_RESERVE_THRESHOLD = 50;
+
+export interface LineMonthlyQuotaStatus {
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  lowQuotaReserveActive: boolean;
+}
+
+const lineQuotaCache = new Map<
+  string,
+  { status: LineMonthlyQuotaStatus; expiresAtMs: number }
+>();
+
+export function clearLineMonthlyQuotaCache(): void {
+  lineQuotaCache.clear();
+}
+
+function recordLineQuotaConsumptionInCache(rawToken: string): void {
+  if (!rawToken) return;
+  const key = createHash("sha256").update(rawToken, "utf8").digest("hex");
+  const entry = lineQuotaCache.get(key);
+  if (!entry) return;
+  const nextUsed = entry.status.used + 1;
+  const nextRemaining =
+    entry.status.limit !== null ? Math.max(0, entry.status.limit - nextUsed) : null;
+  entry.status = {
+    limit: entry.status.limit,
+    used: nextUsed,
+    remaining: nextRemaining,
+    lowQuotaReserveActive:
+      nextRemaining !== null && nextRemaining <= LOYALTY_QUOTA_RESERVE_THRESHOLD,
+  };
+}
+
+/**
+ * Checks the LINE Official Account's monthly message quota (`GET /v2/bot/message/quota`
+ * and `GET /v2/bot/message/quota/consumption`), cached for 3 minutes in memory.
+ * When `remaining <= LOYALTY_QUOTA_RESERVE_THRESHOLD` (50 messages), activates
+ * `lowQuotaReserveActive` so the last 50 messages of the month are reserved exclusively
+ * for reward coupon unlocks (`rewardsUnlocked > 0`) and coupon redemptions (`coupon_redeem`).
+ */
+export async function fetchLineMonthlyQuotaStatus(
+  channelAccessToken: string,
+): Promise<LineMonthlyQuotaStatus> {
+  const token = decryptLoyaltySecret(channelAccessToken).trim();
+  const fallbackOpen: LineMonthlyQuotaStatus = {
+    limit: null,
+    used: 0,
+    remaining: null,
+    lowQuotaReserveActive: false,
+  };
+  if (!token) return fallbackOpen;
+
+  const cacheKey = createHash("sha256").update(token, "utf8").digest("hex");
+  const now = Date.now();
+  const cached = lineQuotaCache.get(cacheKey);
+  if (cached && cached.expiresAtMs > now) {
+    return cached.status;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const [quotaRes, consumptionRes] = await Promise.all([
+      fetch("https://api.line.me/v2/bot/message/quota", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      }),
+      fetch("https://api.line.me/v2/bot/message/quota/consumption", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      }),
+    ]);
+
+    if (!quotaRes.ok || !consumptionRes.ok) {
+      return fallbackOpen;
+    }
+
+    const quotaJson = (await quotaRes.json().catch(() => ({}))) as {
+      type?: string;
+      value?: number;
+    };
+    const consumptionJson = (await consumptionRes.json().catch(() => ({}))) as {
+      totalUsage?: number;
+    };
+
+    const limit =
+      quotaJson.type === "limited" && typeof quotaJson.value === "number" && quotaJson.value > 0
+        ? quotaJson.value
+        : null;
+    const used = Math.max(0, Number(consumptionJson.totalUsage ?? 0));
+    const remaining = limit !== null ? Math.max(0, limit - used) : null;
+    const status: LineMonthlyQuotaStatus = {
+      limit,
+      used,
+      remaining,
+      lowQuotaReserveActive:
+        remaining !== null && remaining <= LOYALTY_QUOTA_RESERVE_THRESHOLD,
+    };
+
+    if (lineQuotaCache.size > 100) {
+      lineQuotaCache.clear();
+    }
+    lineQuotaCache.set(cacheKey, {
+      status,
+      expiresAtMs: now + 3 * 60 * 1000,
+    });
+    return status;
+  } catch {
+    return fallbackOpen;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function isValidLineRetryKey(value?: string | null): boolean {
   return UUID_REGEX.test(String(value ?? "").trim());
 }
@@ -299,6 +417,9 @@ export async function sendLinePushMessageDetailed(
 
     // HTTP 200 OK or HTTP 409 Conflict (already accepted with the same X-Line-Retry-Key) both count as delivered!
     if (response.ok || response.status === 409) {
+      if (response.ok) {
+        recordLineQuotaConsumptionInCache(token);
+      }
       return {
         ok: true,
         status: response.status,
@@ -339,6 +460,9 @@ export async function sendLinePushMessageDetailed(
         signal: controller.signal,
       });
       if (retryResponse.ok || retryResponse.status === 409) {
+        if (retryResponse.ok) {
+          recordLineQuotaConsumptionInCache(token);
+        }
         return {
           ok: true,
           status: retryResponse.status,
@@ -586,6 +710,41 @@ export async function enqueueLoyaltyPushNotification(
   return { queued: false };
 }
 
+export async function cancelLoyaltyPushJob(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: { rpc: (fn: string, args: Record<string, unknown>) => any },
+  shopSecret: string,
+  jobId: string,
+  reason = "DELIVERED_VIA_CLIENT_LIFF",
+): Promise<void> {
+  const cleanJobId = (jobId ?? "").trim();
+  const cleanShop = (shopSecret ?? "").trim();
+  if (!cleanJobId || !cleanShop) return;
+  const primaryHash = getLoyaltyServerKeyHash(cleanShop);
+  const legacyHash = getLegacyLoyaltyServerKeyHash(cleanShop);
+  await supabase.rpc("complete_loyalty_push_job", {
+    p_job_id: cleanJobId,
+    p_shop_secret: cleanShop,
+    p_server_key_hash: primaryHash,
+    p_legacy_key_hash: legacyHash,
+    p_status: "sent",
+    p_error: reason,
+    p_retry_delay_seconds: 0,
+  });
+}
+
+function isIntermediateStampJobWithoutReward(job: {
+  eventType?: string;
+  messages?: unknown;
+}): boolean {
+  if (job.eventType && job.eventType !== "stamp_claim") return false;
+  if (job.messages && typeof job.messages === "object" && !Array.isArray(job.messages)) {
+    const meta = job.messages as Record<string, unknown>;
+    return Number(meta.rewardsUnlocked ?? 0) <= 0;
+  }
+  return false;
+}
+
 function resolvePushJobMessages(
   job: {
     eventType?: string;
@@ -747,6 +906,24 @@ export async function processPendingLoyaltyPushJobs(
       continue;
     }
 
+    // Smart Quota Guard: if monthly quota is in the last 50-message reserve zone,
+    // skip intermediate stamp scans (rewardsUnlocked === 0) so the remaining quota is preserved for coupon unlocks & redemptions
+    if (isIntermediateStampJobWithoutReward(job)) {
+      const quota = await fetchLineMonthlyQuotaStatus(token);
+      if (quota.lowQuotaReserveActive) {
+        await supabase.rpc("complete_loyalty_push_job", {
+          p_job_id: jobId,
+          p_shop_secret: shopSecret,
+          p_server_key_hash: primaryHash,
+          p_legacy_key_hash: legacyHash,
+          p_status: "sent",
+          p_error: "SKIPPED_LOW_QUOTA_RESERVE",
+          p_retry_delay_seconds: 0,
+        });
+        continue;
+      }
+    }
+
     const hydrated = resolvePushJobMessages(job, shopSecret, trustedOrigin);
 
     const pushRes = await sendLinePushMessageWithRetry(
@@ -868,6 +1045,23 @@ export async function processGlobalDueLoyaltyPushJobs(
         p_retry_delay_seconds: 0,
       });
       continue;
+    }
+
+    if (isIntermediateStampJobWithoutReward(job)) {
+      const quota = await fetchLineMonthlyQuotaStatus(token);
+      if (quota.lowQuotaReserveActive) {
+        sent += 1;
+        await supabase.rpc("complete_loyalty_push_job", {
+          p_job_id: jobId,
+          p_shop_secret: shopSecret,
+          p_server_key_hash: jobPrimaryHash,
+          p_legacy_key_hash: jobLegacyHash,
+          p_status: "sent",
+          p_error: "SKIPPED_LOW_QUOTA_RESERVE",
+          p_retry_delay_seconds: 0,
+        });
+        continue;
+      }
     }
 
     const hydrated = resolvePushJobMessages(job, shopSecret, trustedOrigin);
